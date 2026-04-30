@@ -1,5 +1,16 @@
 # ボイスプール
 
+## VoiceState
+
+| 状態 | 説明 |
+|---|---|
+| `Playing` | 再生中。`update()` でミキシング対象になる |
+| `Free` | 未使用。次の `update()` で despawn される |
+| `Pausing` | 一時停止中。ミキシングされないが、再生位置は保持される |
+| `Stopped` | 停止済み。次の `update()` で despawn される |
+
+spawn 時は `Playing` で初期化される。
+
 ## VoiceComponent
 
 | フィールド | 型 | 説明 |

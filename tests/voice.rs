@@ -1,4 +1,4 @@
-use nezia::voice::{MAX_VOICES, VoiceComponent, VoicePoolSystem};
+use nezia::voice::{MAX_VOICES, VoiceComponent, VoicePoolSystem, VoiceState};
 
 #[test]
 fn spawn_and_access() {
@@ -16,6 +16,7 @@ fn spawn_and_access() {
     assert_eq!(pool.vol(id), Some(0.8));
     assert_eq!(pool.pitch(id), Some(1.5));
     assert_eq!(pool.sample_offset(id), Some(100.0));
+    assert_eq!(pool.state(id), Some(VoiceState::Playing));
 }
 
 #[test]
@@ -130,6 +131,27 @@ fn bulk_access() {
     }
 
     assert_eq!(pool.vols(), &[0.25, 0.4]);
+}
+
+#[test]
+fn state_transitions() {
+    let mut pool = VoicePoolSystem::new();
+    let id = pool.spawn(VoiceComponent::default()).unwrap();
+
+    // spawn 直後は Playing
+    assert_eq!(pool.state(id), Some(VoiceState::Playing));
+
+    // Pausing に遷移
+    assert!(pool.set_state(id, VoiceState::Pausing));
+    assert_eq!(pool.state(id), Some(VoiceState::Pausing));
+
+    // Playing に戻す
+    assert!(pool.set_state(id, VoiceState::Playing));
+    assert_eq!(pool.state(id), Some(VoiceState::Playing));
+
+    // Stopped に遷移
+    assert!(pool.set_state(id, VoiceState::Stopped));
+    assert_eq!(pool.state(id), Some(VoiceState::Stopped));
 }
 
 #[test]

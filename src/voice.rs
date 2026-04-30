@@ -6,6 +6,19 @@ use crate::entity::EntityId;
 /// 最大同時発音数。
 pub const MAX_VOICES: usize = 256;
 
+/// ボイスの再生状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceState {
+    /// 再生中。
+    Playing,
+    /// 未使用（スロットは確保されているが再生していない）。
+    Free,
+    /// 一時停止中。再開可能。
+    Pausing,
+    /// 停止済み。次の update で despawn される。
+    Stopped,
+}
+
 /// ボイスプール。
 ///
 /// スパースセット方式の SoA（Structure of Arrays）レイアウトで
@@ -28,6 +41,8 @@ pub struct VoicePoolSystem {
     sample_offset: Vec<f32>,
     /// 再生する AudioBuffer のインデックス。
     audio_buffer_index: Vec<u32>,
+    /// 再生状態。
+    state: Vec<VoiceState>,
 
     // ── スロット管理 ──
     free_list: Vec<u32>,
@@ -75,6 +90,7 @@ impl VoicePoolSystem {
             pitch: Vec::with_capacity(MAX_VOICES),
             sample_offset: Vec::with_capacity(MAX_VOICES),
             audio_buffer_index: Vec::with_capacity(MAX_VOICES),
+            state: Vec::with_capacity(MAX_VOICES),
             free_list: Vec::with_capacity(MAX_VOICES),
             next_index: 0,
         }
@@ -116,6 +132,7 @@ impl VoicePoolSystem {
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
         self.audio_buffer_index.push(params.audio_buffer_index);
+        self.state.push(VoiceState::Playing);
 
         Some(EntityId { index, generation })
     }
@@ -162,6 +179,7 @@ impl VoicePoolSystem {
         self.pitch.swap_remove(dense_index);
         self.sample_offset.swap_remove(dense_index);
         self.audio_buffer_index.swap_remove(dense_index);
+        self.state.swap_remove(dense_index);
 
         true
     }
@@ -225,6 +243,19 @@ impl VoicePoolSystem {
         self.resolve(id).map(|i| self.audio_buffer_index[i])
     }
 
+    pub fn state(&self, id: EntityId) -> Option<VoiceState> {
+        self.resolve(id).map(|i| self.state[i])
+    }
+
+    pub fn set_state(&mut self, id: EntityId, value: VoiceState) -> bool {
+        if let Some(i) = self.resolve(id) {
+            self.state[i] = value;
+            true
+        } else {
+            false
+        }
+    }
+
     /// ミキシングに必要な全スライスを同時に返す。
     ///
     /// `sample_offset` のみ `&mut` で返し、他は `&` で返す。
@@ -269,6 +300,14 @@ impl VoicePoolSystem {
         &self.audio_buffer_index
     }
 
+    pub fn states(&self) -> &[VoiceState] {
+        &self.state
+    }
+
+    pub fn states_mut(&mut self) -> &mut [VoiceState] {
+        &mut self.state
+    }
+
     /// 毎オーディオコールバックで呼び出す update 処理。
     ///
     /// 全アクティブボイスの AudioBuffer からサンプルを読み出し、
@@ -289,15 +328,20 @@ impl VoicePoolSystem {
             return;
         }
 
-        let (vols, pitches, offsets, buf_indices) = (
+        let (vols, pitches, offsets, buf_indices, states) = (
             &self.vol,
             &self.pitch,
             &mut self.sample_offset,
             &self.audio_buffer_index,
+            &self.state,
         );
 
         // 各ボイスからサンプルを読み出し、出力バッファに加算ミキシングする。
+        // Playing 状態のボイスのみミキシング対象。
         for voice_i in 0..voice_count {
+            if states[voice_i] != VoiceState::Playing {
+                continue;
+            }
             let buf_idx = buf_indices[voice_i] as usize;
             let Some(audio_buf) = buffers.get(buf_idx) else {
                 continue;
@@ -339,12 +383,20 @@ impl VoicePoolSystem {
             offsets[voice_i] = offset;
         }
 
-        // 再生が終了したボイスを逆順で despawn（swap-remove のため後ろから）。
+        // 再生が終了した / 停止済み / Free のボイスを逆順で despawn
+        // （swap-remove のため後ろから）。
         for voice_i in (0..self.vol.len()).rev() {
-            let buf_idx = self.audio_buffer_index[voice_i] as usize;
-            if let Some(audio_buf) = buffers.get(buf_idx)
-                && self.sample_offset[voice_i] as usize >= audio_buf.frame_count()
-            {
+            let should_despawn = match self.state[voice_i] {
+                VoiceState::Stopped | VoiceState::Free => true,
+                VoiceState::Playing => {
+                    let buf_idx = self.audio_buffer_index[voice_i] as usize;
+                    buffers
+                        .get(buf_idx)
+                        .is_some_and(|ab| self.sample_offset[voice_i] as usize >= ab.frame_count())
+                }
+                VoiceState::Pausing => false,
+            };
+            if should_despawn {
                 self.despawn_by_dense_index(voice_i);
             }
         }
@@ -382,5 +434,6 @@ impl VoicePoolSystem {
         self.pitch.swap_remove(dense_index);
         self.sample_offset.swap_remove(dense_index);
         self.audio_buffer_index.swap_remove(dense_index);
+        self.state.swap_remove(dense_index);
     }
 }
