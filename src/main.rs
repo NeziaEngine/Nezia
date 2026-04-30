@@ -1,4 +1,4 @@
-use resia::engine::SoundEngine;
+use nezia::engine::SoundEngine;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

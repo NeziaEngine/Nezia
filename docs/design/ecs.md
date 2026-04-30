@@ -1,6 +1,6 @@
 # ECS アーキテクチャ
 
-resia はゲームエンジンの ECS（Entity-Component-System）パターンを参考にしたデータ指向設計を採用する。
+NEZIA ENGINE はゲームエンジンの ECS（Entity-Component-System）パターンを参考にしたデータ指向設計を採用する。
 ただし汎用 ECS フレームワークではなく、サウンドミドルウェアに特化した構成をとる。
 
 ## 三つの役割

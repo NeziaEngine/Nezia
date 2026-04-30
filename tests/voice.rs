@@ -1,4 +1,4 @@
-use resia::voice::{MAX_VOICES, VoiceComponent, VoicePoolSystem};
+use nezia::voice::{MAX_VOICES, VoiceComponent, VoicePoolSystem};
 
 #[test]
 fn spawn_and_access() {
