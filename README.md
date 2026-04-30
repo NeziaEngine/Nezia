@@ -1,4 +1,6 @@
-# resia
+# RESIA
+
+![img.png](logi_resia.png)
 
 データ指向設計によるサウンドミドルウェアライブラリ（Rust）。
 

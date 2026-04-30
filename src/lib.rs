@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod command;
 pub mod engine;
 pub mod entity;

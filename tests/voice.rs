@@ -1,13 +1,14 @@
-use resia::voice::{VoiceParams, VoicePool, MAX_VOICES};
+use resia::voice::{MAX_VOICES, VoiceComponent, VoicePoolSystem};
 
 #[test]
 fn spawn_and_access() {
-    let mut pool = VoicePool::new();
+    let mut pool = VoicePoolSystem::new();
     let id = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.8,
             pitch: 1.5,
             sample_offset: 100.0,
+            ..VoiceComponent::default()
         })
         .unwrap();
 
@@ -19,8 +20,8 @@ fn spawn_and_access() {
 
 #[test]
 fn despawn_invalidates_handle() {
-    let mut pool = VoicePool::new();
-    let id = pool.spawn(VoiceParams::default()).unwrap();
+    let mut pool = VoicePoolSystem::new();
+    let id = pool.spawn(VoiceComponent::default()).unwrap();
 
     assert!(pool.despawn(id));
     assert!(!pool.contains(id));
@@ -30,19 +31,19 @@ fn despawn_invalidates_handle() {
 
 #[test]
 fn generation_prevents_stale_access() {
-    let mut pool = VoicePool::new();
+    let mut pool = VoicePoolSystem::new();
     let old = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.5,
-            ..VoiceParams::default()
+            ..VoiceComponent::default()
         })
         .unwrap();
     pool.despawn(old);
 
     let new = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.9,
-            ..VoiceParams::default()
+            ..VoiceComponent::default()
         })
         .unwrap();
 
@@ -58,26 +59,29 @@ fn generation_prevents_stale_access() {
 
 #[test]
 fn swap_remove_keeps_dense_contiguous() {
-    let mut pool = VoicePool::new();
+    let mut pool = VoicePoolSystem::new();
     let a = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.1,
             pitch: 1.0,
             sample_offset: 0.0,
+            ..VoiceComponent::default()
         })
         .unwrap();
     let b = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.2,
             pitch: 2.0,
             sample_offset: 10.0,
+            ..VoiceComponent::default()
         })
         .unwrap();
     let c = pool
-        .spawn(VoiceParams {
+        .spawn(VoiceComponent {
             vol: 0.3,
             pitch: 3.0,
             sample_offset: 20.0,
+            ..VoiceComponent::default()
         })
         .unwrap();
 
@@ -94,8 +98,8 @@ fn swap_remove_keeps_dense_contiguous() {
 
 #[test]
 fn set_parameters() {
-    let mut pool = VoicePool::new();
-    let id = pool.spawn(VoiceParams::default()).unwrap();
+    let mut pool = VoicePoolSystem::new();
+    let id = pool.spawn(VoiceComponent::default()).unwrap();
 
     assert!(pool.set_vol(id, 0.42));
     assert!(pool.set_pitch(id, 2.0));
@@ -108,15 +112,15 @@ fn set_parameters() {
 
 #[test]
 fn bulk_access() {
-    let mut pool = VoicePool::new();
-    pool.spawn(VoiceParams {
+    let mut pool = VoicePoolSystem::new();
+    pool.spawn(VoiceComponent {
         vol: 0.5,
-        ..VoiceParams::default()
+        ..VoiceComponent::default()
     })
     .unwrap();
-    pool.spawn(VoiceParams {
+    pool.spawn(VoiceComponent {
         vol: 0.8,
-        ..VoiceParams::default()
+        ..VoiceComponent::default()
     })
     .unwrap();
 
@@ -130,11 +134,11 @@ fn bulk_access() {
 
 #[test]
 fn spawn_returns_none_at_capacity() {
-    let mut pool = VoicePool::new();
+    let mut pool = VoicePoolSystem::new();
     for _ in 0..MAX_VOICES {
-        assert!(pool.spawn(VoiceParams::default()).is_some());
+        assert!(pool.spawn(VoiceComponent::default()).is_some());
     }
     // 257 個目は None
-    assert!(pool.spawn(VoiceParams::default()).is_none());
+    assert!(pool.spawn(VoiceComponent::default()).is_none());
     assert_eq!(pool.len(), MAX_VOICES);
 }

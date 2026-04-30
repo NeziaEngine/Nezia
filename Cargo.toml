@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 cpal = "0.17.3"
 ringbuf = "0.4.8"
+symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "vorbis"] }

@@ -1,12 +1,18 @@
 # ボイスプール
 
-## コンポーネント
+## VoiceComponent
 
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `vol` | `f32` | 音量（0.0〜1.0） |
 | `pitch` | `f32` | ピッチ倍率（1.0 = 原音） |
 | `sample_offset` | `f32` | サンプル単位の再生位置 |
+| `audio_buffer_index` | `u32` | 再生する AudioBuffer のインデックス |
+
+## VoicePoolSystem
+
+`VoiceComponent` を SoA レイアウトで管理し、`update()` でミキシングを行う System。
+ECS における役割の詳細は [ECS アーキテクチャ](ecs.md) を参照。
 
 ## ピッチの内部表現
 
