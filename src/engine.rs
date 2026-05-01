@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cpal::Stream;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::{
@@ -8,7 +9,8 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 
-use crate::audio::{self, AudioBuffer};
+use crate::audio::AudioBuffer;
+use crate::buffer_pool::{AudioBufferPool, BufferId};
 use crate::command::Command;
 use crate::voice::{VoiceComponent, VoicePoolSystem};
 
@@ -22,10 +24,8 @@ pub struct SoundEngine {
     command_producer: ringbuf::HeapProd<Command>,
     /// cpal のストリームハンドル。Drop 時に再生が停止される。
     _stream: Stream,
-    /// ロード済みの AudioBuffer 一覧。Arc でサウンドスレッドと共有。
-    buffers: Vec<Arc<AudioBuffer>>,
-    /// サウンドスレッドと共有するバッファリスト。
-    shared_buffers: Arc<std::sync::RwLock<Vec<Arc<AudioBuffer>>>>,
+    /// AudioBuffer のスロット管理。
+    buffer_pool: AudioBufferPool,
 }
 
 impl SoundEngine {
@@ -51,8 +51,8 @@ impl SoundEngine {
         let ring = HeapRb::<Command>::new(COMMAND_RING_CAPACITY);
         let (command_producer, mut command_consumer) = ring.split();
 
-        let shared_buffers: Arc<std::sync::RwLock<Vec<Arc<AudioBuffer>>>> =
-            Arc::new(std::sync::RwLock::new(Vec::new()));
+        let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
+            Arc::new(ArcSwap::from_pointee(Vec::new()));
         let shared_buffers_clone = Arc::clone(&shared_buffers);
 
         let mut master_volume = 1.0_f32;
@@ -90,14 +90,8 @@ impl SoundEngine {
                     *sample = 0.0;
                 }
 
-                // RwLock の読み取りロックを取得。
-                // サウンドスレッドでのロック取得は本来避けるべきだが、
-                // 書き込みはバッファ追加時のみで競合は稀。
-                // 将来的にはロックフリーな仕組みに置き換える。
-                let buffers = match shared_buffers_clone.read() {
-                    Ok(b) => b,
-                    Err(_) => return,
-                };
+                // ロックフリーでバッファリストのスナップショットを取得。
+                let buffers = shared_buffers_clone.load();
 
                 pool.update(
                     data,
@@ -116,36 +110,39 @@ impl SoundEngine {
         Ok(Self {
             command_producer,
             _stream: stream,
-            buffers: Vec::new(),
-            shared_buffers,
+            buffer_pool: AudioBufferPool::new(shared_buffers),
         })
     }
 
-    /// オーディオファイルをロードし、バッファインデックスを返す。
+    /// オーディオファイルをロードし、ハンドルを返す。
     ///
-    /// 返されたインデックスを `play()` に渡して再生する。
-    pub fn load<P: AsRef<Path>>(&mut self, path: P) -> Result<u32, Box<dyn std::error::Error>> {
-        let buffer = Arc::new(audio::load(path)?);
-        let index = self.buffers.len() as u32;
-        self.buffers.push(Arc::clone(&buffer));
+    /// 返されたハンドルを `play()` や `unload()` に渡す。
+    pub fn load<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<BufferId, Box<dyn std::error::Error>> {
+        self.buffer_pool.load(path)
+    }
 
-        let mut shared = self
-            .shared_buffers
-            .write()
-            .map_err(|e| format!("lock poisoned: {e}"))?;
-        shared.push(buffer);
-
-        Ok(index)
+    /// バッファをアンロードする。
+    ///
+    /// 再生中のボイスがこのバッファを参照していた場合、
+    /// 次の update で自動的に despawn される。
+    pub fn unload(&mut self, id: BufferId) -> bool {
+        self.buffer_pool.unload(id)
     }
 
     /// ボイスを再生する。
     ///
-    /// `audio_buffer_index` は `load()` で返されたインデックス。
+    /// `buffer` は `load()` で返されたハンドル。
     #[must_use]
-    pub fn play(&mut self, audio_buffer_index: u32, vol: f32, pitch: f32) -> bool {
+    pub fn play(&mut self, buffer: BufferId, vol: f32, pitch: f32) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
         self.command_producer
             .try_push(Command::Play {
-                audio_buffer_index,
+                audio_buffer_index: index,
                 vol,
                 pitch,
             })

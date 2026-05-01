@@ -321,7 +321,7 @@ impl VoicePoolSystem {
         device_channels: usize,
         device_sample_rate: f32,
         master_volume: f32,
-        buffers: &[Arc<AudioBuffer>],
+        buffers: &[Option<Arc<AudioBuffer>>],
     ) {
         let voice_count = self.vol.len();
         if voice_count == 0 {
@@ -343,7 +343,7 @@ impl VoicePoolSystem {
                 continue;
             }
             let buf_idx = buf_indices[voice_i] as usize;
-            let Some(audio_buf) = buffers.get(buf_idx) else {
+            let Some(audio_buf) = buffers.get(buf_idx).and_then(|b| b.as_ref()) else {
                 continue;
             };
 
@@ -390,9 +390,10 @@ impl VoicePoolSystem {
                 VoiceState::Stopped | VoiceState::Free => true,
                 VoiceState::Playing => {
                     let buf_idx = self.audio_buffer_index[voice_i] as usize;
-                    buffers
-                        .get(buf_idx)
-                        .is_some_and(|ab| self.sample_offset[voice_i] as usize >= ab.frame_count())
+                    match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
+                        Some(ab) => self.sample_offset[voice_i] as usize >= ab.frame_count(),
+                        None => true,
+                    }
                 }
                 VoiceState::Pausing => false,
             };

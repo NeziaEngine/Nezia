@@ -1,22 +1,19 @@
 use nezia::engine::SoundEngine;
+use nezia::buffer_pool::BufferId;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <audio_file> [audio_file...]", args[0]);
-        eprintln!("Supported formats: MP3, WAV, FLAC, OGG Vorbis");
-        std::process::exit(1);
-    }
 
     let mut engine = SoundEngine::new().expect("failed to initialize sound engine");
 
     // コマンドライン引数で指定されたファイルをロードする。
-    let mut buffer_indices = Vec::new();
+    let mut buffers: Vec<BufferId> = Vec::new();
     for path in &args[1..] {
         match engine.load(path) {
-            Ok(index) => {
-                println!("Loaded: {path} (buffer index: {index})");
-                buffer_indices.push(index);
+            Ok(id) => {
+                let idx = buffers.len();
+                println!("Loaded: {path} (buffer #{idx})");
+                buffers.push(id);
             }
             Err(e) => {
                 eprintln!("Failed to load {path}: {e}");
@@ -24,16 +21,14 @@ fn main() {
         }
     }
 
-    if buffer_indices.is_empty() {
-        eprintln!("No audio files loaded.");
-        std::process::exit(1);
+    if !buffers.is_empty() {
+        let _ = engine.play(buffers[0], 1.0, 1.0);
+        println!("Playing buffer #0. Volume: 1.00, Pitch: 1.00");
     }
 
-    // 最初のファイルを再生する。
-    let _ = engine.play(buffer_indices[0], 1.0, 1.0);
-    println!("Playing buffer 0. Volume: 1.00, Pitch: 1.00");
-
     println!("Commands:");
+    println!("  l <path>                — load audio file");
+    println!("  u <index>               — unload buffer");
     println!("  p <index> [vol] [pitch] — play buffer (e.g. 'p 0 0.8 1.5')");
     println!("  v <volume>              — set master volume");
     println!("  s                       — stop all");
@@ -54,12 +49,50 @@ fn main() {
         }
 
         match parts[0] {
+            "l" => {
+                let Some(path) = parts.get(1) else {
+                    println!("Usage: l <path>");
+                    continue;
+                };
+                match engine.load(path) {
+                    Ok(id) => {
+                        let idx = buffers.len();
+                        println!("Loaded: {path} (buffer #{idx})");
+                        buffers.push(id);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load {path}: {e}");
+                    }
+                }
+            }
+            "u" => {
+                let Some(idx) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) else {
+                    println!("Usage: u <index>");
+                    continue;
+                };
+                let Some(&id) = buffers.get(idx) else {
+                    println!("Invalid buffer index: {idx}");
+                    continue;
+                };
+                if engine.unload(id) {
+                    println!("Unloaded buffer #{idx}");
+                } else {
+                    println!("Buffer #{idx} is already unloaded.");
+                }
+            }
             "p" => {
-                let idx: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let idx: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 let vol: f32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
                 let pitch: f32 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(1.0);
-                let _ = engine.play(idx, vol, pitch);
-                println!("Playing buffer {idx}. Volume: {vol:.2}, Pitch: {pitch:.2}");
+                let Some(&id) = buffers.get(idx) else {
+                    println!("Invalid buffer index: {idx}");
+                    continue;
+                };
+                if engine.play(id, vol, pitch) {
+                    println!("Playing buffer #{idx}. Volume: {vol:.2}, Pitch: {pitch:.2}");
+                } else {
+                    println!("Failed to play buffer #{idx} (unloaded or queue full).");
+                }
             }
             "v" => {
                 let vol: f32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1.0);
@@ -72,7 +105,7 @@ fn main() {
             }
             "q" => break,
             _ => {
-                println!("Unknown command. Use p/v/s/q.");
+                println!("Unknown command. Use l/u/p/v/s/q.");
             }
         }
     }
