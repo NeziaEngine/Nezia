@@ -43,6 +43,8 @@ pub struct VoicePoolSystem {
     audio_buffer_index: Vec<u32>,
     /// 再生状態。
     state: Vec<VoiceState>,
+    /// 出力先バスの密配列インデックス。
+    output_bus: Vec<u32>,
 
     // ── スロット管理 ──
     free_list: Vec<u32>,
@@ -62,6 +64,8 @@ pub struct VoiceComponent {
     pub sample_offset: f32,
     /// 再生する AudioBuffer のインデックス。
     pub audio_buffer_index: u32,
+    /// 出力先バスの密配列インデックス。0 = マスターバス。
+    pub output_bus: u32,
 }
 
 impl Default for VoiceComponent {
@@ -71,6 +75,7 @@ impl Default for VoiceComponent {
             pitch: 1.0,
             sample_offset: 0.0,
             audio_buffer_index: 0,
+            output_bus: 0,
         }
     }
 }
@@ -91,6 +96,7 @@ impl VoicePoolSystem {
             sample_offset: Vec::with_capacity(MAX_VOICES),
             audio_buffer_index: Vec::with_capacity(MAX_VOICES),
             state: Vec::with_capacity(MAX_VOICES),
+            output_bus: Vec::with_capacity(MAX_VOICES),
             free_list: Vec::with_capacity(MAX_VOICES),
             next_index: 0,
         }
@@ -133,6 +139,7 @@ impl VoicePoolSystem {
         self.sample_offset.push(params.sample_offset);
         self.audio_buffer_index.push(params.audio_buffer_index);
         self.state.push(VoiceState::Playing);
+        self.output_bus.push(params.output_bus);
 
         Some(EntityId { index, generation })
     }
@@ -180,6 +187,7 @@ impl VoicePoolSystem {
         self.sample_offset.swap_remove(dense_index);
         self.audio_buffer_index.swap_remove(dense_index);
         self.state.swap_remove(dense_index);
+        self.output_bus.swap_remove(dense_index);
 
         true
     }
@@ -311,16 +319,16 @@ impl VoicePoolSystem {
     /// 毎オーディオコールバックで呼び出す update 処理。
     ///
     /// 全アクティブボイスの AudioBuffer からサンプルを読み出し、
-    /// `output_buffer` に加算ミキシングする。
+    /// `bus_mix_buffer[output_bus * bus_stride ..]` に加算ミキシングする。
     /// 再生が完了したボイスは自動的に despawn される。
     ///
-    /// `output_buffer` は呼び出し前にゼロクリアされている前提。
+    /// `bus_mix_buffer` は呼び出し前にゼロクリアされている前提。
     pub fn update(
         &mut self,
-        output_buffer: &mut [f32],
+        bus_mix_buffer: &mut [f32],
+        bus_stride: usize,
         device_channels: usize,
         device_sample_rate: f32,
-        master_volume: f32,
         buffers: &[Option<Arc<AudioBuffer>>],
     ) {
         let voice_count = self.vol.len();
@@ -328,15 +336,16 @@ impl VoicePoolSystem {
             return;
         }
 
-        let (vols, pitches, offsets, buf_indices, states) = (
+        let (vols, pitches, offsets, buf_indices, states, output_buses) = (
             &self.vol,
             &self.pitch,
             &mut self.sample_offset,
             &self.audio_buffer_index,
             &self.state,
+            &self.output_bus,
         );
 
-        // 各ボイスからサンプルを読み出し、出力バッファに加算ミキシングする。
+        // 各ボイスからサンプルを読み出し、出力先バスの mix_buffer に加算ミキシングする。
         // Playing 状態のボイスのみミキシング対象。
         for voice_i in 0..voice_count {
             if states[voice_i] != VoiceState::Playing {
@@ -347,7 +356,7 @@ impl VoicePoolSystem {
                 continue;
             };
 
-            let vol = vols[voice_i] * master_volume;
+            let vol = vols[voice_i];
             let pitch = pitches[voice_i];
             // サンプルレート変換比率。
             // ソースのサンプルレートがデバイスと異なる場合に補正する。
@@ -356,9 +365,12 @@ impl VoicePoolSystem {
             let src_channels = audio_buf.channels as usize;
             let src_frame_count = audio_buf.frame_count();
 
+            let bus_offset = output_buses[voice_i] as usize * bus_stride;
+            let bus_buf = &mut bus_mix_buffer[bus_offset..bus_offset + bus_stride];
+
             let mut offset = offsets[voice_i];
 
-            for frame in output_buffer.chunks_mut(device_channels) {
+            for frame in bus_buf.chunks_mut(device_channels) {
                 let frame_idx = offset as usize;
                 if frame_idx >= src_frame_count {
                     break;
@@ -436,5 +448,6 @@ impl VoicePoolSystem {
         self.sample_offset.swap_remove(dense_index);
         self.audio_buffer_index.swap_remove(dense_index);
         self.state.swap_remove(dense_index);
+        self.output_bus.swap_remove(dense_index);
     }
 }

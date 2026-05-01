@@ -1,5 +1,5 @@
-use nezia::engine::SoundEngine;
 use nezia::buffer_pool::BufferId;
+use nezia::engine::SoundEngine;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
