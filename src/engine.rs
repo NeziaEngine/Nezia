@@ -169,6 +169,7 @@ impl SoundEngine {
                     pool.update(
                         mix_buf,
                         crate::bus::MAX_MIX_BUFFER_SIZE,
+                        sample_count,
                         device_channels,
                         device_sample_rate,
                         &buffers,

@@ -327,6 +327,7 @@ impl VoicePoolSystem {
         &mut self,
         bus_mix_buffer: &mut [f32],
         bus_stride: usize,
+        sample_count: usize,
         device_channels: usize,
         device_sample_rate: f32,
         buffers: &[Option<Arc<AudioBuffer>>],
@@ -366,7 +367,10 @@ impl VoicePoolSystem {
             let src_frame_count = audio_buf.frame_count();
 
             let bus_offset = output_buses[voice_i] as usize * bus_stride;
-            let bus_buf = &mut bus_mix_buffer[bus_offset..bus_offset + bus_stride];
+            // sample_count サンプル分のみ処理し、bus_stride 全体を処理しないようにする。
+            // bus_stride は配列インデックス計算にのみ使い、実際の処理長は sample_count で制限する。
+            let process_len = sample_count.min(bus_stride);
+            let bus_buf = &mut bus_mix_buffer[bus_offset..bus_offset + process_len];
 
             let mut offset = offsets[voice_i];
 
