@@ -6,3 +6,4 @@ pub mod core;
 pub use core::engine;
 pub mod entity;
 pub mod source;
+pub mod spatial;

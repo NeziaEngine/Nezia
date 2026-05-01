@@ -98,7 +98,7 @@ impl SourceWorld {
         }
     }
 
-    /// Source を追加し、EntityId を返す。
+    /// Source を追加し、EntityId を返す（fire-and-forget 用）。
     ///
     /// `MAX_SOURCES` に達している場合は `None` を返す。
     pub fn spawn(&mut self, params: SourceComponent) -> Option<EntityId> {
@@ -140,8 +140,44 @@ impl SourceWorld {
         Some(EntityId { index, generation })
     }
 
+    /// 事前割り当てされた EntityId を使って Source をスポーンする（3D ソース用）。
+    ///
+    /// 同じ index が既に使用中の場合は `false` を返す。
+    /// メインスレッドが EntityId を事前発行し、`SpawnSource` コマンドで渡す想定。
+    pub fn spawn_with_id(&mut self, id: EntityId, params: SourceComponent) -> bool {
+        if self.vol.len() >= MAX_SOURCES {
+            return false;
+        }
+        if id.index as usize >= self.sparse.len() {
+            self.sparse.resize(id.index as usize + 1, None);
+        }
+        if self.sparse[id.index as usize].is_some() {
+            return false;
+        }
+
+        let dense_index = self.vol.len() as u32;
+        self.sparse[id.index as usize] = Some(SparseEntry {
+            dense_index,
+            generation: id.generation,
+        });
+        self.dense_to_sparse.push(id.index);
+        self.vol.push(params.vol);
+        self.pitch.push(params.pitch);
+        self.sample_offset.push(params.sample_offset);
+        self.audio_buffer_index.push(params.audio_buffer_index);
+        self.state.push(SourceState::Playing);
+        self.output_bus.push(params.output_bus);
+
+        // 内部 spawn() との index 衝突を防ぐ。
+        if id.index >= self.next_index {
+            self.next_index = id.index + 1;
+        }
+
+        true
+    }
+
     /// EntityId を検証し、有効なら密配列インデックスを返す。
-    pub(super) fn resolve(&self, id: EntityId) -> Option<usize> {
+    pub fn resolve(&self, id: EntityId) -> Option<usize> {
         let entry = self.sparse.get(id.index as usize)?.as_ref()?;
         if entry.generation != id.generation {
             return None;
@@ -305,7 +341,7 @@ impl SourceWorld {
 
     /// 密配列インデックスを指定して Source を削除する（swap-remove）。
     ///
-    /// `SourceSystem::update()` が再生終了した Source を直接削除するために使用する。
+    /// `SourceMixingSystem::update()` が再生終了した Source を直接削除するために使用する。
     /// 逆順で呼び出すこと（swap-remove のため後ろから消さないとインデックスがずれる）。
     pub(super) fn despawn_by_dense_index(&mut self, dense_index: usize) {
         if dense_index >= self.vol.len() {

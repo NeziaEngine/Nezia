@@ -1,7 +1,9 @@
+mod lifecycle;
 mod system;
 mod world;
 
-pub use system::SourceSystem;
+pub use lifecycle::SourceLifecycleSystem;
+pub use system::SourceMixingSystem;
 pub use world::{SourceComponent, SourceState, SourceWorld};
 
 /// 最大同時発音数。

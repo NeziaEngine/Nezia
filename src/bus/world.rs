@@ -275,7 +275,7 @@ impl BusWorld {
         MAX_MIX_BUFFER_SIZE
     }
 
-    /// フラット mix_buffer への可変参照。SourceSystem::update() に渡す用。
+    /// フラット mix_buffer への可変参照。SourceMixingSystem::update() に渡す用。
     pub fn mix_buffer_mut(&mut self) -> &mut [f32] {
         &mut self.mix_buffer
     }

@@ -12,10 +12,11 @@ use ringbuf::{
 use crate::audio::AudioBuffer;
 use crate::buffer_pool::{AudioBufferPool, BufferId};
 use crate::bus::{BusComponent, BusSystem, BusWorld, MAX_BUSES};
-use crate::command::Command;
+use crate::command::{Command, SPATIAL_BATCH_SIZE};
 use crate::core::bus_routing::BusRoutingMirror;
 use crate::entity::EntityId;
-use crate::source::{SourceComponent, SourceSystem, SourceWorld};
+use crate::source::{SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
+use crate::spatial::{AttenuationModel, SpatialWorld};
 
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
@@ -30,6 +31,8 @@ pub struct SoundEngine {
     buffer_pool: AudioBufferPool,
     /// バスルーティングのメインスレッドミラー（ループ検出・トポロジカルソート用）。
     bus_routing: BusRoutingMirror,
+    /// 3D ソース用 EntityId の単調増加カウンタ。
+    next_source_index: u32,
 }
 
 impl SoundEngine {
@@ -59,12 +62,11 @@ impl SoundEngine {
             Arc::new(ArcSwap::from_pointee(Vec::new()));
         let shared_buffers_clone = Arc::clone(&shared_buffers);
 
-        // BusSystem をオーディオコールバック前に初期化する。
-        // マスターバスは BusWorld::new() で自動生成される（entity_index = 0, dense = 0）。
         let mut bus_world = BusWorld::new();
         let master_bus_id = bus_world.master_entity();
 
         let mut source_world = SourceWorld::new();
+        let mut spatial_world = SpatialWorld::new();
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -89,6 +91,7 @@ impl SoundEngine {
                                 audio_buffer_index,
                                 output_bus: 0,
                             });
+                            spatial_world.push_defaults();
                         }
                         Command::PlayToBus {
                             audio_buffer_index,
@@ -103,9 +106,30 @@ impl SoundEngine {
                                 audio_buffer_index,
                                 output_bus: output_bus_dense,
                             });
+                            spatial_world.push_defaults();
+                        }
+                        Command::SpawnSource {
+                            id,
+                            audio_buffer_index,
+                            vol,
+                            pitch,
+                            output_bus_dense,
+                        } => {
+                            source_world.spawn_with_id(
+                                id,
+                                SourceComponent {
+                                    vol,
+                                    pitch,
+                                    sample_offset: 0.0,
+                                    audio_buffer_index,
+                                    output_bus: output_bus_dense,
+                                },
+                            );
+                            spatial_world.push_defaults();
                         }
                         Command::StopAll => {
                             source_world = SourceWorld::new();
+                            spatial_world = SpatialWorld::new();
                         }
                         Command::SpawnBus {
                             id,
@@ -138,6 +162,37 @@ impl SoundEngine {
                         Command::UpdateProcessOrder { order, len } => {
                             bus_world.set_process_order(&order[..len as usize]);
                         }
+                        // ── 3D 空間コマンド ──
+                        Command::SetSourceSpatialParams {
+                            id,
+                            model,
+                            min_distance,
+                            max_distance,
+                            rolloff,
+                        } => {
+                            if let Some(dense) = source_world.resolve(id) {
+                                spatial_world.set_params(dense, model, min_distance, max_distance, rolloff);
+                            }
+                        }
+                        Command::SetSourceSpatialEnabled { id, enabled } => {
+                            if let Some(dense) = source_world.resolve(id) {
+                                spatial_world.set_enabled(dense, enabled);
+                            }
+                        }
+                        Command::BatchSetSourcePositions { count, updates } => {
+                            for (id, pos) in &updates[..count as usize] {
+                                if let Some(dense) = source_world.resolve(*id) {
+                                    spatial_world.set_position(dense, *pos);
+                                }
+                            }
+                        }
+                        Command::SetListener {
+                            position,
+                            forward,
+                            up,
+                        } => {
+                            spatial_world.listener.update(position, forward, up);
+                        }
                     }
                 }
 
@@ -148,11 +203,11 @@ impl SoundEngine {
                 let buffers = shared_buffers_clone.load();
 
                 // Source ミキシング → BusWorld の mix_buffer に加算。
-                // bus_stride() は定数なので先に取得して借用を切る。
                 {
                     let mix_buf = bus_world.mix_buffer_mut();
-                    SourceSystem::update(
+                    SourceMixingSystem::update(
                         &mut source_world,
+                        &mut spatial_world,
                         mix_buf,
                         crate::bus::MAX_MIX_BUFFER_SIZE,
                         sample_count,
@@ -161,6 +216,9 @@ impl SoundEngine {
                         &buffers,
                     );
                 }
+
+                // 再生終了 Source の despawn。
+                SourceLifecycleSystem::update(&mut source_world, &mut spatial_world, &buffers);
 
                 // バス処理 → output_buffer へ書き出し。
                 BusSystem::update(&mut bus_world, data, device_channels, sample_count);
@@ -176,6 +234,7 @@ impl SoundEngine {
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
             bus_routing: BusRoutingMirror::new(master_bus_id),
+            next_source_index: 0,
         })
     }
 
@@ -192,7 +251,7 @@ impl SoundEngine {
         self.buffer_pool.unload(id)
     }
 
-    /// ボイスをマスターバスに再生する。
+    /// ボイスをマスターバスに再生する（fire-and-forget）。
     #[must_use]
     pub fn play(&mut self, buffer: BufferId, vol: f32, pitch: f32) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
@@ -207,7 +266,7 @@ impl SoundEngine {
             .is_ok()
     }
 
-    /// ボイスを指定バスに再生する。
+    /// ボイスを指定バスに再生する（fire-and-forget）。
     #[must_use]
     pub fn play_to_bus(&mut self, buffer: BufferId, vol: f32, pitch: f32, bus: EntityId) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
@@ -226,6 +285,34 @@ impl SoundEngine {
             .is_ok()
     }
 
+    /// 3D ソースをスポーンし、EntityId を返す。
+    ///
+    /// 返った EntityId を使って `set_source_spatial_params()` / `set_source_spatial_enabled()` /
+    /// `batch_set_source_positions()` で空間パラメータを更新する。
+    #[must_use]
+    pub fn spawn_source(&mut self, buffer: BufferId, vol: f32, pitch: f32, bus: EntityId) -> Option<EntityId> {
+        let index = self.buffer_pool.resolve(buffer)?;
+        let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
+
+        let id = EntityId {
+            index: self.next_source_index,
+            generation: 0,
+        };
+
+        self.command_producer
+            .try_push(Command::SpawnSource {
+                id,
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+            })
+            .ok()?;
+
+        self.next_source_index += 1;
+        Some(id)
+    }
+
     /// マスター音量を設定する（0.0〜1.0）。マスターバスの gain を変更する。
     #[must_use]
     pub fn set_volume(&mut self, volume: f32) -> bool {
@@ -240,33 +327,85 @@ impl SoundEngine {
         self.command_producer.try_push(Command::StopAll).is_ok()
     }
 
+    /// リスナーの位置・向きを更新する（毎フレーム呼び出す）。
+    #[must_use]
+    pub fn set_listener(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) -> bool {
+        self.command_producer
+            .try_push(Command::SetListener { position, forward, up })
+            .is_ok()
+    }
+
+    /// ソースの距離減衰パラメータを設定する（初期化・変更時のみ）。
+    #[must_use]
+    pub fn set_source_spatial_params(
+        &mut self,
+        id: EntityId,
+        model: AttenuationModel,
+        min_distance: f32,
+        max_distance: f32,
+        rolloff: f32,
+    ) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourceSpatialParams {
+                id,
+                model,
+                min_distance,
+                max_distance,
+                rolloff,
+            })
+            .is_ok()
+    }
+
+    /// ソースの空間演算を有効化・無効化する。
+    #[must_use]
+    pub fn set_source_spatial_enabled(&mut self, id: EntityId, enabled: bool) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourceSpatialEnabled { id, enabled })
+            .is_ok()
+    }
+
+    /// 複数ソースの位置を一括更新する（毎フレーム用）。
+    ///
+    /// `updates` が `SPATIAL_BATCH_SIZE` を超える場合は複数コマンドに分割して送信する。
+    #[must_use]
+    pub fn batch_set_source_positions(&mut self, updates: &[(EntityId, [f32; 3])]) -> bool {
+        let dummy = (EntityId { index: 0, generation: 0 }, [0.0f32; 3]);
+        for chunk in updates.chunks(SPATIAL_BATCH_SIZE) {
+            let count = chunk.len() as u8;
+            let mut buf = [dummy; SPATIAL_BATCH_SIZE];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            if self
+                .command_producer
+                .try_push(Command::BatchSetSourcePositions { count, updates: buf })
+                .is_err()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// マスターバスの EntityId を返す。
     pub fn master_bus(&self) -> EntityId {
         self.bus_routing.master_bus_id
     }
 
     /// マスターバスに接続されたバスを生成する。
-    ///
-    /// `MAX_BUSES` に達している場合は `None` を返す。
     pub fn create_bus(&mut self, gain: f32) -> Option<EntityId> {
         let master = self.bus_routing.master_bus_id;
         self.create_bus_routed(gain, master)
     }
 
     /// 指定した親バスに接続されたバスを生成する。
-    ///
-    /// ループが検出された場合または `MAX_BUSES` に達した場合は `None` を返す。
     pub fn create_bus_routed(&mut self, gain: f32, parent: EntityId) -> Option<EntityId> {
         if self.bus_routing.len() >= MAX_BUSES {
             return None;
         }
         let parent_dense = self.bus_routing.resolve_dense(parent)?;
 
-        // メインスレッド側で entity_index を発行（単調増加、再利用なし）。
         let new_index = self.bus_routing.next_index;
         self.bus_routing.next_index += 1;
 
-        // dense インデックスは生成順（len() が現在の bus 数 = 次の dense インデックス）。
         let new_dense = self.bus_routing.len() as u32;
         self.bus_routing.insert(new_index, parent.index, new_dense);
 
@@ -286,7 +425,6 @@ impl SoundEngine {
             })
             .is_err()
         {
-            // コマンド送信失敗時はミラーを元に戻す。
             self.bus_routing.remove(new_index);
             self.bus_routing.next_index -= 1;
             return None;
@@ -370,7 +508,6 @@ impl SoundEngine {
         true
     }
 
-    /// process_order を UpdateProcessOrder コマンドとして送信する。
     fn push_process_order(&mut self, order: &[u32]) {
         let mut arr = [0u32; MAX_BUSES];
         let len = order.len().min(MAX_BUSES);
