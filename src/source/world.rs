@@ -11,6 +11,8 @@ pub struct SourceComponent {
     pub audio_buffer_index: u32,
     /// 出力先バスの密配列インデックス。0 = マスターバス。
     pub output_bus: u32,
+    /// コールバックトークン。0 = コールバックなし。
+    pub token: u32,
 }
 
 impl Default for SourceComponent {
@@ -21,6 +23,7 @@ impl Default for SourceComponent {
             sample_offset: 0.0,
             audio_buffer_index: 0,
             output_bus: 0,
+            token: 0,
         }
     }
 }
@@ -64,6 +67,8 @@ pub struct SourceWorld {
     pub(super) state: Vec<SourceState>,
     /// 出力先バスの密配列インデックス。
     pub(super) output_bus: Vec<u32>,
+    /// コールバックトークン。0 = コールバックなし。
+    pub(super) token: Vec<u32>,
 
     // ── スロット管理 ──
     free_list: Vec<u32>,
@@ -93,6 +98,7 @@ impl SourceWorld {
             audio_buffer_index: Vec::with_capacity(MAX_SOURCES),
             state: Vec::with_capacity(MAX_SOURCES),
             output_bus: Vec::with_capacity(MAX_SOURCES),
+            token: Vec::with_capacity(MAX_SOURCES),
             free_list: Vec::with_capacity(MAX_SOURCES),
             next_index: 0,
         }
@@ -136,6 +142,7 @@ impl SourceWorld {
         self.audio_buffer_index.push(params.audio_buffer_index);
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
+        self.token.push(params.token);
 
         Some(EntityId { index, generation })
     }
@@ -167,6 +174,7 @@ impl SourceWorld {
         self.audio_buffer_index.push(params.audio_buffer_index);
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
+        self.token.push(params.token);
 
         // 内部 spawn() との index 衝突を防ぐ。
         if id.index >= self.next_index {
@@ -215,6 +223,7 @@ impl SourceWorld {
         self.audio_buffer_index.swap_remove(dense_index);
         self.state.swap_remove(dense_index);
         self.output_bus.swap_remove(dense_index);
+        self.token.swap_remove(dense_index);
 
         true
     }
@@ -373,5 +382,6 @@ impl SourceWorld {
         self.audio_buffer_index.swap_remove(dense_index);
         self.state.swap_remove(dense_index);
         self.output_bus.swap_remove(dense_index);
+        self.token.swap_remove(dense_index);
     }
 }

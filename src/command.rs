@@ -24,6 +24,8 @@ pub enum Command {
         audio_buffer_index: u32,
         vol: f32,
         pitch: f32,
+        /// コールバックトークン。0 = コールバックなし。
+        token: u32,
     },
     /// ボイスを指定バス（密配列インデックス）に再生する（fire-and-forget）。
     PlayToBus {
@@ -32,6 +34,8 @@ pub enum Command {
         pitch: f32,
         /// 出力先バスの密配列インデックス（メインスレッドで解決済み）。
         output_bus_dense: u32,
+        /// コールバックトークン。0 = コールバックなし。
+        token: u32,
     },
     /// EntityId 付きでソースをスポーンする（3D ソース用）。
     ///
@@ -44,6 +48,8 @@ pub enum Command {
         pitch: f32,
         /// 出力先バスの密配列インデックス（メインスレッドで解決済み）。
         output_bus_dense: u32,
+        /// コールバックトークン。0 = コールバックなし。
+        token: u32,
     },
     /// すべてのボイスを停止する。
     StopAll,

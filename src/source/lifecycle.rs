@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
+use crate::event::Event;
 use crate::spatial::SpatialWorld;
 
 use super::world::{SourceState, SourceWorld};
@@ -16,14 +17,16 @@ impl SourceLifecycleSystem {
     /// 毎オーディオコールバックで `SourceMixingSystem::update()` の直後に呼び出す。
     ///
     /// 逆順で走査することで swap-remove によるインデックスずれを防ぐ。
+    /// `emit_event` は `SourceFinished` イベントをリングバッファに push するクロージャ。
     pub fn update(
         world: &mut SourceWorld,
         spatial: &mut SpatialWorld,
         buffers: &[Option<Arc<AudioBuffer>>],
+        emit_event: &mut dyn FnMut(Event),
     ) {
         for source_i in (0..world.vol.len()).rev() {
-            let should_despawn = match world.state[source_i] {
-                SourceState::Stopped | SourceState::Free => true,
+            let natural_finish = match world.state[source_i] {
+                SourceState::Stopped | SourceState::Free => false,
                 SourceState::Playing => {
                     let buf_idx = world.audio_buffer_index[source_i] as usize;
                     match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
@@ -33,7 +36,19 @@ impl SourceLifecycleSystem {
                 }
                 SourceState::Pausing => false,
             };
+            let should_despawn = natural_finish
+                || matches!(
+                    world.state[source_i],
+                    SourceState::Stopped | SourceState::Free
+                );
+
             if should_despawn {
+                if natural_finish {
+                    let token = world.token[source_i];
+                    if token != 0 {
+                        emit_event(Event::SourceFinished { token });
+                    }
+                }
                 world.despawn_by_dense_index(source_i);
                 spatial.swap_remove(source_i);
             }

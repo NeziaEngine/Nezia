@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -15,16 +16,22 @@ use crate::bus::{BusComponent, BusSystem, BusWorld, MAX_BUSES};
 use crate::command::{Command, SPATIAL_BATCH_SIZE};
 use crate::core::bus_routing::BusRoutingMirror;
 use crate::entity::EntityId;
+use crate::event::Event;
 use crate::source::{SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
 use crate::spatial::{AttenuationModel, SpatialWorld};
 
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
 
+/// イベントリングバッファの容量。
+const EVENT_RING_CAPACITY: usize = 64;
+
 /// サウンドエンジン。メインスレッド側で保持し、コマンドを発行する。
 pub struct SoundEngine {
     /// コマンドリングバッファのプロデューサ側（メインスレッドが所有）。
     command_producer: ringbuf::HeapProd<Command>,
+    /// イベントリングバッファのコンシューマ側（メインスレッドが所有）。
+    event_consumer: ringbuf::HeapCons<Event>,
     /// cpal のストリームハンドル。Drop 時に再生が停止される。
     _stream: Stream,
     /// AudioBuffer のスロット管理。
@@ -33,6 +40,10 @@ pub struct SoundEngine {
     bus_routing: BusRoutingMirror,
     /// 3D ソース用 EntityId の単調増加カウンタ。
     next_source_index: u32,
+    /// コールバック登録テーブル。token → on_finish クロージャ。
+    callbacks: HashMap<u32, Box<dyn FnOnce() + Send>>,
+    /// 次に発行するコールバックトークン（0 はコールバックなしの予約値）。
+    next_token: u32,
 }
 
 impl SoundEngine {
@@ -57,6 +68,9 @@ impl SoundEngine {
 
         let ring = HeapRb::<Command>::new(COMMAND_RING_CAPACITY);
         let (command_producer, mut command_consumer) = ring.split();
+
+        let event_ring = HeapRb::<Event>::new(EVENT_RING_CAPACITY);
+        let (mut event_producer, event_consumer) = event_ring.split();
 
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
             Arc::new(ArcSwap::from_pointee(Vec::new()));
@@ -83,30 +97,42 @@ impl SoundEngine {
                             audio_buffer_index,
                             vol,
                             pitch,
+                            token,
                         } => {
-                            source_world.spawn(SourceComponent {
+                            let spawned = source_world.spawn(SourceComponent {
                                 vol,
                                 pitch,
                                 sample_offset: 0.0,
                                 audio_buffer_index,
                                 output_bus: 0,
+                                token,
                             });
-                            spatial_world.push_defaults();
+                            if spawned.is_some() {
+                                spatial_world.push_defaults();
+                            } else if token != 0 {
+                                let _ = event_producer.try_push(Event::PlayFailed { token });
+                            }
                         }
                         Command::PlayToBus {
                             audio_buffer_index,
                             vol,
                             pitch,
                             output_bus_dense,
+                            token,
                         } => {
-                            source_world.spawn(SourceComponent {
+                            let spawned = source_world.spawn(SourceComponent {
                                 vol,
                                 pitch,
                                 sample_offset: 0.0,
                                 audio_buffer_index,
                                 output_bus: output_bus_dense,
+                                token,
                             });
-                            spatial_world.push_defaults();
+                            if spawned.is_some() {
+                                spatial_world.push_defaults();
+                            } else if token != 0 {
+                                let _ = event_producer.try_push(Event::PlayFailed { token });
+                            }
                         }
                         Command::SpawnSource {
                             id,
@@ -114,8 +140,9 @@ impl SoundEngine {
                             vol,
                             pitch,
                             output_bus_dense,
+                            token,
                         } => {
-                            source_world.spawn_with_id(
+                            let spawned = source_world.spawn_with_id(
                                 id,
                                 SourceComponent {
                                     vol,
@@ -123,9 +150,14 @@ impl SoundEngine {
                                     sample_offset: 0.0,
                                     audio_buffer_index,
                                     output_bus: output_bus_dense,
+                                    token,
                                 },
                             );
-                            spatial_world.push_defaults();
+                            if spawned {
+                                spatial_world.push_defaults();
+                            } else if token != 0 {
+                                let _ = event_producer.try_push(Event::PlayFailed { token });
+                            }
                         }
                         Command::StopAll => {
                             source_world = SourceWorld::new();
@@ -217,8 +249,15 @@ impl SoundEngine {
                     );
                 }
 
-                // 再生終了 Source の despawn。
-                SourceLifecycleSystem::update(&mut source_world, &mut spatial_world, &buffers);
+                // 再生終了 Source の despawn。SourceFinished イベントを push する。
+                SourceLifecycleSystem::update(
+                    &mut source_world,
+                    &mut spatial_world,
+                    &buffers,
+                    &mut |ev| {
+                        let _ = event_producer.try_push(ev);
+                    },
+                );
 
                 // バス処理 → output_buffer へ書き出し。
                 BusSystem::update(&mut bus_world, data, device_channels, sample_count);
@@ -231,10 +270,13 @@ impl SoundEngine {
 
         Ok(Self {
             command_producer,
+            event_consumer,
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
             bus_routing: BusRoutingMirror::new(master_bus_id),
             next_source_index: 0,
+            callbacks: HashMap::new(),
+            next_token: 1,
         })
     }
 
@@ -262,8 +304,42 @@ impl SoundEngine {
                 audio_buffer_index: index,
                 vol,
                 pitch,
+                token: 0,
             })
             .is_ok()
+    }
+
+    /// ボイスをマスターバスにコールバック付きで再生する。
+    ///
+    /// 再生が自然終了したとき、次の `poll_events()` で `callback` が呼ばれる。
+    /// `MAX_SOURCES` 上限に達していた場合はコールバックは呼ばれない。
+    #[must_use]
+    pub fn play_with_callback(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        callback: impl FnOnce() + Send + 'static,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        let token = self.next_token;
+        self.next_token = self.next_token.wrapping_add(1).max(1);
+        self.callbacks.insert(token, Box::new(callback));
+        let ok = self
+            .command_producer
+            .try_push(Command::Play {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                token,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.remove(&token);
+        }
+        ok
     }
 
     /// ボイスを指定バスに再生する（fire-and-forget）。
@@ -281,8 +357,47 @@ impl SoundEngine {
                 vol,
                 pitch,
                 output_bus_dense,
+                token: 0,
             })
             .is_ok()
+    }
+
+    /// ボイスを指定バスにコールバック付きで再生する。
+    ///
+    /// 再生が自然終了したとき、次の `poll_events()` で `callback` が呼ばれる。
+    /// `MAX_SOURCES` 上限に達していた場合はコールバックは呼ばれない。
+    #[must_use]
+    pub fn play_to_bus_with_callback(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        callback: impl FnOnce() + Send + 'static,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
+            return false;
+        };
+        let token = self.next_token;
+        self.next_token = self.next_token.wrapping_add(1).max(1);
+        self.callbacks.insert(token, Box::new(callback));
+        let ok = self
+            .command_producer
+            .try_push(Command::PlayToBus {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+                token,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.remove(&token);
+        }
+        ok
     }
 
     /// 3D ソースをスポーンし、EntityId を返す。
@@ -306,6 +421,7 @@ impl SoundEngine {
                 vol,
                 pitch,
                 output_bus_dense,
+                token: 0,
             })
             .ok()?;
 
@@ -322,9 +438,31 @@ impl SoundEngine {
     }
 
     /// すべてのボイスを停止する。
+    ///
+    /// 登録済みのコールバックは解放されるが呼び出されない。
     #[must_use]
     pub fn stop_all(&mut self) -> bool {
+        self.callbacks.clear();
         self.command_producer.try_push(Command::StopAll).is_ok()
+    }
+
+    /// ゲームループの毎フレーム末尾で呼ぶ。
+    ///
+    /// サウンドスレッドからのイベントをドレインし、登録済みの `on_finish` コールバックを呼び出す。
+    pub fn poll_events(&mut self) {
+        while let Some(ev) = self.event_consumer.try_pop() {
+            match ev {
+                Event::SourceFinished { token } => {
+                    if let Some(cb) = self.callbacks.remove(&token) {
+                        cb();
+                    }
+                }
+                Event::PlayFailed { token } => {
+                    // コールバックを解放するのみ（呼び出しは行わない）。
+                    self.callbacks.remove(&token);
+                }
+            }
+        }
     }
 
     /// リスナーの位置・向きを更新する（毎フレーム呼び出す）。
