@@ -11,10 +11,10 @@ use ringbuf::{
 
 use crate::audio::AudioBuffer;
 use crate::buffer_pool::{AudioBufferPool, BufferId};
-use crate::bus::{BusComponent, BusSystem, MAX_BUSES};
+use crate::bus::{BusComponent, BusSystem, BusWorld, MAX_BUSES};
 use crate::command::Command;
 use crate::entity::EntityId;
-use crate::voice::{VoiceComponent, VoicePoolSystem};
+use crate::source::{SourceComponent, SourceSystem, SourceWorld};
 
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
@@ -75,11 +75,11 @@ impl SoundEngine {
         let shared_buffers_clone = Arc::clone(&shared_buffers);
 
         // BusSystem をオーディオコールバック前に初期化する。
-        // マスターバスは BusSystem::new() で自動生成される（entity_index = 0, dense = 0）。
-        let mut buses = BusSystem::new();
-        let master_bus_id = buses.master_entity();
+        // マスターバスは BusWorld::new() で自動生成される（entity_index = 0, dense = 0）。
+        let mut bus_world = BusWorld::new();
+        let master_bus_id = bus_world.master_entity();
 
-        let mut pool = VoicePoolSystem::new();
+        let mut source_world = SourceWorld::new();
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -90,14 +90,14 @@ impl SoundEngine {
                 while let Some(cmd) = command_consumer.try_pop() {
                     match cmd {
                         Command::SetVolume(v) => {
-                            buses.set_gain(master_bus_id, v.clamp(0.0, 1.0));
+                            bus_world.set_gain(master_bus_id, v.clamp(0.0, 1.0));
                         }
                         Command::Play {
                             audio_buffer_index,
                             vol,
                             pitch,
                         } => {
-                            pool.spawn(VoiceComponent {
+                            source_world.spawn(SourceComponent {
                                 vol,
                                 pitch,
                                 sample_offset: 0.0,
@@ -111,7 +111,7 @@ impl SoundEngine {
                             pitch,
                             output_bus_dense,
                         } => {
-                            pool.spawn(VoiceComponent {
+                            source_world.spawn(SourceComponent {
                                 vol,
                                 pitch,
                                 sample_offset: 0.0,
@@ -120,14 +120,14 @@ impl SoundEngine {
                             });
                         }
                         Command::StopAll => {
-                            pool = VoicePoolSystem::new();
+                            source_world = SourceWorld::new();
                         }
                         Command::SpawnBus {
                             id,
                             gain,
                             output_bus_dense,
                         } => {
-                            buses.spawn_with_id(
+                            bus_world.spawn_with_id(
                                 id,
                                 BusComponent {
                                     gain,
@@ -136,37 +136,38 @@ impl SoundEngine {
                             );
                         }
                         Command::DespawnBus { id } => {
-                            buses.despawn(id);
+                            bus_world.despawn(id);
                         }
                         Command::SetBusGain { id, gain } => {
-                            buses.set_gain(id, gain);
+                            bus_world.set_gain(id, gain);
                         }
                         Command::SetBusMuted { id, muted } => {
-                            buses.set_muted(id, muted);
+                            bus_world.set_muted(id, muted);
                         }
                         Command::SetBusOutput {
                             id,
                             output_bus_dense,
                         } => {
-                            buses.set_output_bus_dense(id, output_bus_dense);
+                            bus_world.set_output_bus_dense(id, output_bus_dense);
                         }
                         Command::UpdateProcessOrder { order, len } => {
-                            buses.set_process_order(&order[..len as usize]);
+                            bus_world.set_process_order(&order[..len as usize]);
                         }
                     }
                 }
 
                 // mix_buffer をゼロクリア。
-                buses.clear_mix_buffers(sample_count);
+                bus_world.clear_mix_buffers(sample_count);
 
                 // ロックフリーでバッファリストのスナップショットを取得。
                 let buffers = shared_buffers_clone.load();
 
-                // ボイスミキシング → BusSystem の mix_buffer に加算。
+                // Source ミキシング → BusWorld の mix_buffer に加算。
                 // bus_stride() は定数なので先に取得して借用を切る。
                 {
-                    let mix_buf = buses.mix_buffer_mut();
-                    pool.update(
+                    let mix_buf = bus_world.mix_buffer_mut();
+                    SourceSystem::update(
+                        &mut source_world,
                         mix_buf,
                         crate::bus::MAX_MIX_BUFFER_SIZE,
                         sample_count,
@@ -177,7 +178,7 @@ impl SoundEngine {
                 }
 
                 // バス処理 → output_buffer へ書き出し。
-                buses.update(data, device_channels, sample_count);
+                BusSystem::update(&mut bus_world, data, device_channels, sample_count);
             },
             |err| eprintln!("stream error: {err}"),
             None,

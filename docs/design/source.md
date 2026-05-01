@@ -1,6 +1,6 @@
-# ボイスプール
+# Source ワールド
 
-## VoiceState
+## SourceState
 
 | 状態 | 説明 |
 |---|---|
@@ -11,7 +11,7 @@
 
 spawn 時は `Playing` で初期化される。
 
-## VoiceComponent
+## SourceComponent
 
 | フィールド | 型 | 説明 |
 |---|---|---|
@@ -20,9 +20,10 @@ spawn 時は `Playing` で初期化される。
 | `sample_offset` | `f32` | サンプル単位の再生位置 |
 | `audio_buffer_index` | `u32` | 再生する AudioBuffer のインデックス |
 
-## VoicePoolSystem
+## SourceWorld / SourceSystem
 
-`VoiceComponent` を SoA レイアウトで管理し、`update()` でミキシングを行う System。
+`SourceWorld` が `SourceComponent` を SoA レイアウトで管理し、
+`SourceSystem::update()` がミキシング処理を担当する。
 ECS における役割の詳細は [ECS アーキテクチャ](ecs.md) を参照。
 
 ## ピッチの内部表現

@@ -1,14 +1,33 @@
-use std::sync::Arc;
-
-use crate::audio::AudioBuffer;
 use crate::entity::EntityId;
 
-/// 最大同時発音数。
-pub const MAX_VOICES: usize = 256;
+use super::MAX_SOURCES;
 
-/// ボイスの再生状態。
+/// Source 生成時の初期パラメータ。
+pub struct SourceComponent {
+    pub vol: f32,
+    pub pitch: f32,
+    pub sample_offset: f32,
+    /// 再生する AudioBuffer のインデックス。
+    pub audio_buffer_index: u32,
+    /// 出力先バスの密配列インデックス。0 = マスターバス。
+    pub output_bus: u32,
+}
+
+impl Default for SourceComponent {
+    fn default() -> Self {
+        Self {
+            vol: 1.0,
+            pitch: 1.0,
+            sample_offset: 0.0,
+            audio_buffer_index: 0,
+            output_bus: 0,
+        }
+    }
+}
+
+/// Source の再生状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoiceState {
+pub enum SourceState {
     /// 再生中。
     Playing,
     /// 未使用（スロットは確保されているが再生していない）。
@@ -19,13 +38,13 @@ pub enum VoiceState {
     Stopped,
 }
 
-/// ボイスプール。
+/// Source ワールド。
 ///
 /// スパースセット方式の SoA（Structure of Arrays）レイアウトで
-/// ボイスごとのコンポーネントを管理する。
+/// Source ごとのコンポーネントを管理する。
 /// 各コンポーネント（vol, pitch, sample_offset）は独立した密配列に格納され、
 /// キャッシュ効率の高い一括処理が可能。
-pub struct VoicePoolSystem {
+pub struct SourceWorld {
     // ── 疎配列（sparse array） ──
     /// EntityId.index → 密配列インデックスへのマッピング。
     sparse: Vec<Option<SparseEntry>>,
@@ -34,17 +53,17 @@ pub struct VoicePoolSystem {
 
     // ── 密配列（dense arrays / コンポーネント） ──
     /// 音量（0.0〜1.0）。
-    vol: Vec<f32>,
+    pub(super) vol: Vec<f32>,
     /// ピッチ倍率（1.0 = 原音、2.0 = 1オクターブ上）。
-    pitch: Vec<f32>,
+    pub(super) pitch: Vec<f32>,
     /// サンプルオフセット（再生位置）。
-    sample_offset: Vec<f32>,
+    pub(super) sample_offset: Vec<f32>,
     /// 再生する AudioBuffer のインデックス。
-    audio_buffer_index: Vec<u32>,
+    pub(super) audio_buffer_index: Vec<u32>,
     /// 再生状態。
-    state: Vec<VoiceState>,
+    pub(super) state: Vec<SourceState>,
     /// 出力先バスの密配列インデックス。
-    output_bus: Vec<u32>,
+    pub(super) output_bus: Vec<u32>,
 
     // ── スロット管理 ──
     free_list: Vec<u32>,
@@ -57,56 +76,33 @@ struct SparseEntry {
     generation: u32,
 }
 
-/// ボイス生成時の初期パラメータ。
-pub struct VoiceComponent {
-    pub vol: f32,
-    pub pitch: f32,
-    pub sample_offset: f32,
-    /// 再生する AudioBuffer のインデックス。
-    pub audio_buffer_index: u32,
-    /// 出力先バスの密配列インデックス。0 = マスターバス。
-    pub output_bus: u32,
-}
-
-impl Default for VoiceComponent {
-    fn default() -> Self {
-        Self {
-            vol: 1.0,
-            pitch: 1.0,
-            sample_offset: 0.0,
-            audio_buffer_index: 0,
-            output_bus: 0,
-        }
-    }
-}
-
-impl Default for VoicePoolSystem {
+impl Default for SourceWorld {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VoicePoolSystem {
+impl SourceWorld {
     pub fn new() -> Self {
         Self {
-            sparse: Vec::with_capacity(MAX_VOICES),
-            dense_to_sparse: Vec::with_capacity(MAX_VOICES),
-            vol: Vec::with_capacity(MAX_VOICES),
-            pitch: Vec::with_capacity(MAX_VOICES),
-            sample_offset: Vec::with_capacity(MAX_VOICES),
-            audio_buffer_index: Vec::with_capacity(MAX_VOICES),
-            state: Vec::with_capacity(MAX_VOICES),
-            output_bus: Vec::with_capacity(MAX_VOICES),
-            free_list: Vec::with_capacity(MAX_VOICES),
+            sparse: Vec::with_capacity(MAX_SOURCES),
+            dense_to_sparse: Vec::with_capacity(MAX_SOURCES),
+            vol: Vec::with_capacity(MAX_SOURCES),
+            pitch: Vec::with_capacity(MAX_SOURCES),
+            sample_offset: Vec::with_capacity(MAX_SOURCES),
+            audio_buffer_index: Vec::with_capacity(MAX_SOURCES),
+            state: Vec::with_capacity(MAX_SOURCES),
+            output_bus: Vec::with_capacity(MAX_SOURCES),
+            free_list: Vec::with_capacity(MAX_SOURCES),
             next_index: 0,
         }
     }
 
-    /// ボイスを追加し、EntityId を返す。
+    /// Source を追加し、EntityId を返す。
     ///
-    /// `MAX_VOICES` に達している場合は `None` を返す。
-    pub fn spawn(&mut self, params: VoiceComponent) -> Option<EntityId> {
-        if self.vol.len() >= MAX_VOICES {
+    /// `MAX_SOURCES` に達している場合は `None` を返す。
+    pub fn spawn(&mut self, params: SourceComponent) -> Option<EntityId> {
+        if self.vol.len() >= MAX_SOURCES {
             return None;
         }
         let dense_index = self.vol.len() as u32;
@@ -138,14 +134,14 @@ impl VoicePoolSystem {
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
         self.audio_buffer_index.push(params.audio_buffer_index);
-        self.state.push(VoiceState::Playing);
+        self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
 
         Some(EntityId { index, generation })
     }
 
     /// EntityId を検証し、有効なら密配列インデックスを返す。
-    fn resolve(&self, id: EntityId) -> Option<usize> {
+    pub(super) fn resolve(&self, id: EntityId) -> Option<usize> {
         let entry = self.sparse.get(id.index as usize)?.as_ref()?;
         if entry.generation != id.generation {
             return None;
@@ -153,16 +149,13 @@ impl VoicePoolSystem {
         Some(entry.dense_index as usize)
     }
 
-    /// ボイスを削除する（swap-remove）。
+    /// Source を削除する（swap-remove）。
     pub fn despawn(&mut self, id: EntityId) -> bool {
         let Some(dense_index) = self.resolve(id) else {
             return false;
         };
         let last_dense = self.vol.len() - 1;
 
-        // 疎エントリを無効化し generation をインクリメント。
-        // 次に同じ index が再利用されたとき、古い EntityId は
-        // generation が合わないので resolve() で弾かれる。
         if let Some(entry) = &mut self.sparse[id.index as usize] {
             *entry = SparseEntry {
                 dense_index: 0,
@@ -171,8 +164,6 @@ impl VoicePoolSystem {
         }
         self.free_list.push(id.index);
 
-        // swap-remove: 末尾要素を削除位置に移動し、
-        // 移動した要素の疎配列エントリも更新する。
         if dense_index != last_dense {
             let moved_sparse_index = self.dense_to_sparse[last_dense];
             if let Some(entry) = &mut self.sparse[moved_sparse_index as usize] {
@@ -197,7 +188,7 @@ impl VoicePoolSystem {
         self.resolve(id).is_some()
     }
 
-    /// 現在のボイス数。
+    /// 現在の Source 数。
     pub fn len(&self) -> usize {
         self.vol.len()
     }
@@ -251,11 +242,11 @@ impl VoicePoolSystem {
         self.resolve(id).map(|i| self.audio_buffer_index[i])
     }
 
-    pub fn state(&self, id: EntityId) -> Option<VoiceState> {
+    pub fn state(&self, id: EntityId) -> Option<SourceState> {
         self.resolve(id).map(|i| self.state[i])
     }
 
-    pub fn set_state(&mut self, id: EntityId, value: VoiceState) -> bool {
+    pub fn set_state(&mut self, id: EntityId, value: SourceState) -> bool {
         if let Some(i) = self.resolve(id) {
             self.state[i] = value;
             true
@@ -265,10 +256,6 @@ impl VoicePoolSystem {
     }
 
     /// ミキシングに必要な全スライスを同時に返す。
-    ///
-    /// `sample_offset` のみ `&mut` で返し、他は `&` で返す。
-    /// Rust の借用ルールにより、個別のアクセサでは同時に取得できないため、
-    /// 構造体のフィールドを直接分割借用してタプルで返す。
     pub fn mixing_slices(&mut self) -> (&[f32], &[f32], &mut [f32], &[u32]) {
         (
             &self.vol,
@@ -308,122 +295,19 @@ impl VoicePoolSystem {
         &self.audio_buffer_index
     }
 
-    pub fn states(&self) -> &[VoiceState] {
+    pub fn states(&self) -> &[SourceState] {
         &self.state
     }
 
-    pub fn states_mut(&mut self) -> &mut [VoiceState] {
+    pub fn states_mut(&mut self) -> &mut [SourceState] {
         &mut self.state
     }
 
-    /// 毎オーディオコールバックで呼び出す update 処理。
+    /// 密配列インデックスを指定して Source を削除する（swap-remove）。
     ///
-    /// 全アクティブボイスの AudioBuffer からサンプルを読み出し、
-    /// `bus_mix_buffer[output_bus * bus_stride ..]` に加算ミキシングする。
-    /// 再生が完了したボイスは自動的に despawn される。
-    ///
-    /// `bus_mix_buffer` は呼び出し前にゼロクリアされている前提。
-    pub fn update(
-        &mut self,
-        bus_mix_buffer: &mut [f32],
-        bus_stride: usize,
-        sample_count: usize,
-        device_channels: usize,
-        device_sample_rate: f32,
-        buffers: &[Option<Arc<AudioBuffer>>],
-    ) {
-        let voice_count = self.vol.len();
-        if voice_count == 0 {
-            return;
-        }
-
-        let (vols, pitches, offsets, buf_indices, states, output_buses) = (
-            &self.vol,
-            &self.pitch,
-            &mut self.sample_offset,
-            &self.audio_buffer_index,
-            &self.state,
-            &self.output_bus,
-        );
-
-        // 各ボイスからサンプルを読み出し、出力先バスの mix_buffer に加算ミキシングする。
-        // Playing 状態のボイスのみミキシング対象。
-        for voice_i in 0..voice_count {
-            if states[voice_i] != VoiceState::Playing {
-                continue;
-            }
-            let buf_idx = buf_indices[voice_i] as usize;
-            let Some(audio_buf) = buffers.get(buf_idx).and_then(|b| b.as_ref()) else {
-                continue;
-            };
-
-            let vol = vols[voice_i];
-            let pitch = pitches[voice_i];
-            // サンプルレート変換比率。
-            // ソースのサンプルレートがデバイスと異なる場合に補正する。
-            let rate_ratio = audio_buf.sample_rate as f32 / device_sample_rate;
-            let advance = pitch * rate_ratio;
-            let src_channels = audio_buf.channels as usize;
-            let src_frame_count = audio_buf.frame_count();
-
-            let bus_offset = output_buses[voice_i] as usize * bus_stride;
-            // sample_count サンプル分のみ処理し、bus_stride 全体を処理しないようにする。
-            // bus_stride は配列インデックス計算にのみ使い、実際の処理長は sample_count で制限する。
-            let process_len = sample_count.min(bus_stride);
-            let bus_buf = &mut bus_mix_buffer[bus_offset..bus_offset + process_len];
-
-            let mut offset = offsets[voice_i];
-
-            for frame in bus_buf.chunks_mut(device_channels) {
-                let frame_idx = offset as usize;
-                if frame_idx >= src_frame_count {
-                    break;
-                }
-
-                // 線形補間でサブサンプル精度の再生位置をサポート。
-                let frac = offset - offset.floor();
-                let idx0 = frame_idx;
-                let idx1 = (idx0 + 1).min(src_frame_count - 1);
-
-                for (ch, out) in frame.iter_mut().enumerate() {
-                    let src_ch = ch % src_channels;
-                    let s0 = audio_buf.samples[idx0 * src_channels + src_ch];
-                    let s1 = audio_buf.samples[idx1 * src_channels + src_ch];
-                    let sample = s0 + (s1 - s0) * frac;
-                    *out += sample * vol;
-                }
-
-                offset += advance;
-            }
-
-            offsets[voice_i] = offset;
-        }
-
-        // 再生が終了した / 停止済み / Free のボイスを逆順で despawn
-        // （swap-remove のため後ろから）。
-        for voice_i in (0..self.vol.len()).rev() {
-            let should_despawn = match self.state[voice_i] {
-                VoiceState::Stopped | VoiceState::Free => true,
-                VoiceState::Playing => {
-                    let buf_idx = self.audio_buffer_index[voice_i] as usize;
-                    match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
-                        Some(ab) => self.sample_offset[voice_i] as usize >= ab.frame_count(),
-                        None => true,
-                    }
-                }
-                VoiceState::Pausing => false,
-            };
-            if should_despawn {
-                self.despawn_by_dense_index(voice_i);
-            }
-        }
-    }
-
-    /// 密配列インデックスを指定してボイスを削除する（swap-remove）。
-    ///
-    /// サウンドスレッド内で再生終了したボイスを直接削除するために使用する。
+    /// `SourceSystem::update()` が再生終了した Source を直接削除するために使用する。
     /// 逆順で呼び出すこと（swap-remove のため後ろから消さないとインデックスがずれる）。
-    pub fn despawn_by_dense_index(&mut self, dense_index: usize) {
+    pub(super) fn despawn_by_dense_index(&mut self, dense_index: usize) {
         if dense_index >= self.vol.len() {
             return;
         }
