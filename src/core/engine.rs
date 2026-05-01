@@ -13,6 +13,7 @@ use crate::audio::AudioBuffer;
 use crate::buffer_pool::{AudioBufferPool, BufferId};
 use crate::bus::{BusComponent, BusSystem, BusWorld, MAX_BUSES};
 use crate::command::Command;
+use crate::core::bus_routing::BusRoutingMirror;
 use crate::entity::EntityId;
 use crate::source::{SourceComponent, SourceSystem, SourceWorld};
 
@@ -27,24 +28,8 @@ pub struct SoundEngine {
     _stream: Stream,
     /// AudioBuffer のスロット管理。
     buffer_pool: AudioBufferPool,
-
-    /// マスターバスの EntityId。
-    master_bus_id: EntityId,
-
-    /// メインスレッドが管理するバス EntityId の次のインデックス。
-    /// BusSystem と同様に単調増加で発行する（free_list による再利用なし）。
-    bus_next_index: u32,
-
     /// バスルーティングのメインスレッドミラー（ループ検出・トポロジカルソート用）。
-    /// bus entity_index → 親バスの entity_index。マスターバスは自己参照。
-    bus_routing: Vec<Option<u32>>,
-
-    /// bus entity_index → 密配列インデックス。
-    /// バスの spawn/despawn 時に更新される。
-    bus_entity_to_dense: Vec<Option<u32>>,
-
-    /// 現在有効なバスの entity_index リスト。
-    bus_entity_indices: Vec<u32>,
+    bus_routing: BusRoutingMirror,
 }
 
 impl SoundEngine {
@@ -186,23 +171,11 @@ impl SoundEngine {
 
         stream.play()?;
 
-        // メインスレッドのバスルーティングミラーを初期化。
-        // マスターバスは entity_index=0, dense=0。
-        let master_idx = master_bus_id.index as usize;
-        let mut bus_routing = vec![None; master_idx + 1];
-        let mut bus_entity_to_dense = vec![None; master_idx + 1];
-        bus_routing[master_idx] = Some(master_idx as u32); // 自己参照
-        bus_entity_to_dense[master_idx] = Some(0u32);
-
         Ok(Self {
             command_producer,
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
-            master_bus_id,
-            bus_next_index: master_bus_id.index + 1, // マスターバスの次から
-            bus_routing,
-            bus_entity_to_dense,
-            bus_entity_indices: vec![master_bus_id.index],
+            bus_routing: BusRoutingMirror::new(master_bus_id),
         })
     }
 
@@ -240,7 +213,7 @@ impl SoundEngine {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
             return false;
         };
-        let Some(output_bus_dense) = self.resolve_bus_dense(bus) else {
+        let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
             return false;
         };
         self.command_producer
@@ -269,37 +242,35 @@ impl SoundEngine {
 
     /// マスターバスの EntityId を返す。
     pub fn master_bus(&self) -> EntityId {
-        self.master_bus_id
+        self.bus_routing.master_bus_id
     }
 
     /// マスターバスに接続されたバスを生成する。
     ///
     /// `MAX_BUSES` に達している場合は `None` を返す。
     pub fn create_bus(&mut self, gain: f32) -> Option<EntityId> {
-        self.create_bus_routed(gain, self.master_bus_id)
+        let master = self.bus_routing.master_bus_id;
+        self.create_bus_routed(gain, master)
     }
 
     /// 指定した親バスに接続されたバスを生成する。
     ///
     /// ループが検出された場合または `MAX_BUSES` に達した場合は `None` を返す。
     pub fn create_bus_routed(&mut self, gain: f32, parent: EntityId) -> Option<EntityId> {
-        if self.bus_entity_indices.len() >= MAX_BUSES {
+        if self.bus_routing.len() >= MAX_BUSES {
             return None;
         }
-        let parent_dense = self.resolve_bus_dense(parent)?;
+        let parent_dense = self.bus_routing.resolve_dense(parent)?;
 
         // メインスレッド側で entity_index を発行（単調増加、再利用なし）。
-        let new_index = self.bus_next_index;
-        self.bus_next_index += 1;
+        let new_index = self.bus_routing.next_index;
+        self.bus_routing.next_index += 1;
 
-        self.ensure_bus_routing_capacity(new_index as usize);
-        self.bus_routing[new_index as usize] = Some(parent.index);
-        // dense インデックスは生成順（bus_entity_indices.len() が現在の bus 数 = 次の dense インデックス）。
-        let new_dense = self.bus_entity_indices.len() as u32;
-        self.bus_entity_to_dense[new_index as usize] = Some(new_dense);
-        self.bus_entity_indices.push(new_index);
+        // dense インデックスは生成順（len() が現在の bus 数 = 次の dense インデックス）。
+        let new_dense = self.bus_routing.len() as u32;
+        self.bus_routing.insert(new_index, parent.index, new_dense);
 
-        let order = self.compute_process_order();
+        let order = self.bus_routing.compute_process_order();
 
         let new_id = EntityId {
             index: new_index,
@@ -316,10 +287,8 @@ impl SoundEngine {
             .is_err()
         {
             // コマンド送信失敗時はミラーを元に戻す。
-            self.bus_routing[new_index as usize] = None;
-            self.bus_entity_to_dense[new_index as usize] = None;
-            self.bus_entity_indices.pop();
-            self.bus_next_index -= 1;
+            self.bus_routing.remove(new_index);
+            self.bus_routing.next_index -= 1;
             return None;
         }
 
@@ -330,26 +299,16 @@ impl SoundEngine {
 
     /// バスを削除する。マスターバスは削除できない（`false` を返す）。
     pub fn destroy_bus(&mut self, id: EntityId) -> bool {
-        if id == self.master_bus_id {
+        if id == self.bus_routing.master_bus_id {
             return false;
         }
-        let idx = id.index as usize;
-        if idx >= self.bus_routing.len() || self.bus_routing[idx].is_none() {
+        if self.bus_routing.resolve_dense(id).is_none() {
             return false;
         }
 
-        // ミラーを更新。このバスを親とする他バスはマスターバスにフォールバック。
-        self.bus_routing[idx] = None;
-        self.bus_entity_to_dense[idx] = None;
-        self.bus_entity_indices.retain(|&i| i != id.index);
+        self.bus_routing.remove(id.index);
 
-        // 削除によって密配列インデックスがずれる（swap-remove）ため、
-        // 他エントリの bus_entity_to_dense を再計算する。
-        // 簡略化: bus_entity_indices を dense 順にそのまま割り当てる。
-        // ただしこれは spawn 時の割り当てと整合するよう注意が必要。
-        // ここでは完全な再マッピングは行わず、process_order のみ更新する。
-
-        let order = self.compute_process_order();
+        let order = self.bus_routing.compute_process_order();
 
         if self
             .command_producer
@@ -381,23 +340,21 @@ impl SoundEngine {
     /// バスの出力先を変更する。ループが検出された場合は `false` を返す。
     #[must_use]
     pub fn set_bus_output(&mut self, id: EntityId, parent: EntityId) -> bool {
-        if id == self.master_bus_id {
+        if id == self.bus_routing.master_bus_id {
             return false;
         }
-        if self.has_loop(id.index, parent.index) {
+        if self.bus_routing.has_loop(id.index, parent.index) {
             return false;
         }
-        let Some(output_bus_dense) = self.resolve_bus_dense(parent) else {
+        let Some(output_bus_dense) = self.bus_routing.resolve_dense(parent) else {
             return false;
         };
-
-        let idx = id.index as usize;
-        if idx >= self.bus_routing.len() || self.bus_routing[idx].is_none() {
+        if self.bus_routing.resolve_dense(id).is_none() {
             return false;
         }
-        self.bus_routing[idx] = Some(parent.index);
 
-        let order = self.compute_process_order();
+        self.bus_routing.set_parent(id.index, parent.index);
+        let order = self.bus_routing.compute_process_order();
 
         if self
             .command_producer
@@ -411,105 +368,6 @@ impl SoundEngine {
         }
         self.push_process_order(&order);
         true
-    }
-
-    // ── 内部ヘルパー ──
-
-    /// バスの EntityId を密配列インデックスに解決する。
-    fn resolve_bus_dense(&self, id: EntityId) -> Option<u32> {
-        self.bus_entity_to_dense
-            .get(id.index as usize)?
-            .as_ref()
-            .copied()
-    }
-
-    fn ensure_bus_routing_capacity(&mut self, index: usize) {
-        if index >= self.bus_routing.len() {
-            self.bus_routing.resize(index + 1, None);
-            self.bus_entity_to_dense.resize(index + 1, None);
-        }
-    }
-
-    /// `start` から辿って `target` に到達するか確認する（ループ検出）。
-    fn has_loop(&self, start: u32, target: u32) -> bool {
-        let mut current = target;
-        let master_idx = self.master_bus_id.index;
-        for _ in 0..MAX_BUSES {
-            if current == start {
-                return true;
-            }
-            if current == master_idx {
-                return false;
-            }
-            match self.bus_routing.get(current as usize).and_then(|r| *r) {
-                Some(parent) => current = parent,
-                None => return false,
-            }
-        }
-        false
-    }
-
-    /// メインスレッドのバスルーティングミラーからトポロジカルソート（リーフ→ルート）を計算する。
-    /// 結果は密配列インデックスの列で返す。
-    fn compute_process_order(&self) -> Vec<u32> {
-        use std::collections::{HashMap, VecDeque};
-
-        let master_idx = self.master_bus_id.index;
-
-        // in_degree: 何個の子バスがこのバスを親として参照しているか。
-        let mut in_degree: HashMap<u32, usize> = HashMap::new();
-        for &entity_idx in &self.bus_entity_indices {
-            in_degree.entry(entity_idx).or_insert(0);
-        }
-        for &entity_idx in &self.bus_entity_indices {
-            if entity_idx == master_idx {
-                continue;
-            }
-            let parent = self
-                .bus_routing
-                .get(entity_idx as usize)
-                .and_then(|r| *r)
-                .unwrap_or(master_idx);
-            *in_degree.entry(parent).or_insert(0) += 1;
-        }
-
-        // リーフ（in_degree == 0）からキューに入れる。
-        let mut queue: VecDeque<u32> = self
-            .bus_entity_indices
-            .iter()
-            .copied()
-            .filter(|&i| in_degree.get(&i).copied().unwrap_or(0) == 0)
-            .collect();
-
-        let mut order = Vec::with_capacity(self.bus_entity_indices.len());
-
-        while let Some(entity_idx) = queue.pop_front() {
-            // entity_index → 密配列インデックスに変換。
-            if let Some(dense) = self
-                .bus_entity_to_dense
-                .get(entity_idx as usize)
-                .and_then(|d| *d)
-            {
-                order.push(dense);
-            }
-
-            if entity_idx == master_idx {
-                continue;
-            }
-            let parent = self
-                .bus_routing
-                .get(entity_idx as usize)
-                .and_then(|r| *r)
-                .unwrap_or(master_idx);
-            if let Some(deg) = in_degree.get_mut(&parent) {
-                *deg -= 1;
-                if *deg == 0 {
-                    queue.push_back(parent);
-                }
-            }
-        }
-
-        order
     }
 
     /// process_order を UpdateProcessOrder コマンドとして送信する。
