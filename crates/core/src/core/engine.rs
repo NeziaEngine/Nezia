@@ -18,7 +18,8 @@ use crate::core::bus_routing::BusRoutingMirror;
 use crate::entity::EntityId;
 use crate::event::Event;
 use crate::source::{
-    MAX_SOURCES, SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceWorld,
+    MAX_SOURCES, SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceState,
+    SourceWorld,
 };
 use crate::spatial::{AttenuationModel, ListenerState, SpatialWorld};
 
@@ -27,6 +28,64 @@ const COMMAND_RING_CAPACITY: usize = 128;
 
 /// イベントリングバッファの容量。
 const EVENT_RING_CAPACITY: usize = 64;
+
+/// audio thread が保持する、スケジュール待ちの再生エントリ。
+struct PendingScheduled {
+    target_tick: u64,
+    audio_buffer_index: u32,
+    vol: f32,
+    pitch: f32,
+    output_bus_dense: u32,
+    token: u32,
+}
+
+/// 任意スレッドから読める PCM 読み取りハンドル。
+///
+/// `SoundEngine::open_buffer_reader` で生成し、ハンドル経由で `Arc<AudioBuffer>` を
+/// 保持する。これにより:
+/// - 任意スレッドから `read_frames()` を呼べる（lock-free）
+/// - ハンドル生存中は `unload()` してもメモリが解放されない（reader 側で安全に読み続けられる）
+pub struct BufferReader {
+    buffer: Arc<AudioBuffer>,
+}
+
+impl BufferReader {
+    /// チャンネル数。
+    pub fn channels(&self) -> u16 {
+        self.buffer.channels
+    }
+
+    /// サンプルレート（Hz）。
+    pub fn sample_rate(&self) -> u32 {
+        self.buffer.sample_rate
+    }
+
+    /// 総フレーム数（チャンネルあたりのサンプル数）。
+    pub fn total_frames(&self) -> usize {
+        self.buffer.frame_count()
+    }
+
+    /// `frame_offset` 位置から `dst` を埋めるだけのインターリーブ PCM を書き込む。
+    ///
+    /// 戻り値は実際に書き込んだフレーム数（`dst.len() / channels` 以下）。EOF に達した
+    /// 場合は要求より少ないフレーム数を返す。`dst.len()` は `channels` の倍数である必要が
+    /// ある（そうでない場合は端数を切り捨てる）。
+    pub fn read_frames(&self, frame_offset: usize, dst: &mut [f32]) -> usize {
+        let channels = self.buffer.channels as usize;
+        if channels == 0 {
+            return 0;
+        }
+        let requested_frames = dst.len() / channels;
+        let total_frames = self.buffer.frame_count();
+        let available = total_frames.saturating_sub(frame_offset);
+        let frames = requested_frames.min(available);
+        let sample_offset = frame_offset * channels;
+        let sample_count = frames * channels;
+        dst[..sample_count]
+            .copy_from_slice(&self.buffer.samples[sample_offset..sample_offset + sample_count]);
+        frames
+    }
+}
 
 /// サウンドエンジン。メインスレッド側で保持し、コマンドを発行する。
 pub struct SoundEngine {
@@ -116,6 +175,15 @@ impl SoundEngine {
 
         let mut source_world = SourceWorld::new();
         let mut spatial_world = SpatialWorld::new();
+
+        // スケジュール再生の保留キュー（audio thread 専有）。
+        // 容量超過時は新規スケジュールが拒否されるため、十分大きく取る。
+        // Vec の事前 with_capacity により以後 push しても再確保は起きない。
+        const PENDING_SCHEDULED_CAPACITY: usize = MAX_SOURCES;
+        let mut pending_scheduled: Vec<PendingScheduled> =
+            Vec::with_capacity(PENDING_SCHEDULED_CAPACITY);
+        // エンジン起動からの累積フレーム tick（audio callback 単位で増加）。
+        let mut current_frame_tick: u64 = 0;
 
         let stream = device.build_output_stream(
             &config.into(),
@@ -255,8 +323,83 @@ impl SoundEngine {
                                 spatial_world.set_enabled(dense, enabled);
                             }
                         }
+
+                        // ── ライブソース制御 ──
+                        Command::SetSourceVolume { id, vol } => {
+                            source_world.set_vol(id, vol);
+                        }
+                        Command::SetSourcePitch { id, pitch } => {
+                            source_world.set_pitch(id, pitch);
+                        }
+                        Command::SeekSource { id, frame_offset } => {
+                            source_world.set_sample_offset(id, frame_offset);
+                        }
+                        Command::PauseSource { id } => {
+                            source_world.set_state(id, SourceState::Pausing);
+                        }
+                        Command::ResumeSource { id } => {
+                            source_world.set_state(id, SourceState::Playing);
+                        }
+                        Command::StopSource { id } => {
+                            source_world.set_state(id, SourceState::Stopped);
+                        }
+
+                        // ── スケジュール再生（保留キューに積む） ──
+                        Command::PlayScheduled {
+                            audio_buffer_index,
+                            vol,
+                            pitch,
+                            output_bus_dense,
+                            delay_seconds,
+                            token,
+                        } => {
+                            if pending_scheduled.len() < pending_scheduled.capacity() {
+                                let delay_frames =
+                                    (delay_seconds.max(0.0) * device_sample_rate) as u64;
+                                pending_scheduled.push(PendingScheduled {
+                                    target_tick: current_frame_tick + delay_frames,
+                                    audio_buffer_index,
+                                    vol,
+                                    pitch,
+                                    output_bus_dense,
+                                    token,
+                                });
+                            } else if token != 0 {
+                                let _ = event_producer.try_push(Event::PlayFailed { token });
+                            }
+                        }
                     }
                 }
+
+                // ── pending scheduled の消化 ──
+                // この callback で再生される範囲（current_frame_tick ..
+                // current_frame_tick + frame_count）に target_tick が入っているものを
+                // spawn する。jitter は最大 1 callback ぶん（数 ms）。
+                let frame_count = sample_count / device_channels;
+                let next_frame_tick = current_frame_tick + frame_count as u64;
+                let mut i = 0;
+                while i < pending_scheduled.len() {
+                    if pending_scheduled[i].target_tick <= next_frame_tick {
+                        let entry = pending_scheduled.swap_remove(i);
+                        let spawned = source_world.spawn(SourceComponent {
+                            vol: entry.vol,
+                            pitch: entry.pitch,
+                            sample_offset: 0.0,
+                            audio_buffer_index: entry.audio_buffer_index,
+                            output_bus: entry.output_bus_dense,
+                            token: entry.token,
+                        });
+                        if spawned.is_some() {
+                            spatial_world.push_defaults();
+                        } else if entry.token != 0 {
+                            let _ =
+                                event_producer.try_push(Event::PlayFailed { token: entry.token });
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                current_frame_tick = next_frame_tick;
 
                 // triple buffer から最新の listener / source positions を取り込む。
                 // commands の後にやることで、spawn と同フレームで publish された
@@ -364,6 +507,20 @@ impl SoundEngine {
     /// バッファをアンロードする。
     pub fn unload(&mut self, id: BufferId) -> bool {
         self.buffer_pool.unload(id)
+    }
+
+    /// 指定バッファに対する読み取り専用ハンドルを開く。
+    ///
+    /// `BufferReader` は内部で `Arc<AudioBuffer>` を保持するため、main thread が
+    /// `unload(id)` してもハンドルが生きている間はバッファのメモリは解放されない。
+    /// **任意のスレッドから `read_frames` を呼べる** のが特徴で、Unity の
+    /// `AudioClip.Create(stream: true, pcmReadCallback)` のように、main thread と
+    /// 別のスレッドから PCM をストリーム供給したいケース向け。
+    pub fn open_buffer_reader(&self, id: BufferId) -> Option<BufferReader> {
+        let index = self.buffer_pool.resolve(id)? as usize;
+        let snapshot = self.buffer_pool.shared_snapshot();
+        let buf = snapshot.get(index).and_then(|slot| slot.clone())?;
+        Some(BufferReader { buffer: buf })
     }
 
     /// ボイスをマスターバスに再生する（fire-and-forget）。
@@ -580,6 +737,112 @@ impl SoundEngine {
     pub fn set_source_spatial_enabled(&mut self, id: EntityId, enabled: bool) -> bool {
         self.command_producer
             .try_push(Command::SetSourceSpatialEnabled { id, enabled })
+            .is_ok()
+    }
+
+    // ── ライブソース制御 ──
+
+    /// ソースの音量を設定する（spawn 後の動的変更）。
+    #[must_use]
+    pub fn set_source_volume(&mut self, id: EntityId, vol: f32) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourceVolume { id, vol })
+            .is_ok()
+    }
+
+    /// ソースのピッチを設定する（spawn 後の動的変更）。
+    #[must_use]
+    pub fn set_source_pitch(&mut self, id: EntityId, pitch: f32) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourcePitch { id, pitch })
+            .is_ok()
+    }
+
+    /// ソースの再生位置（フレーム単位）をシークする。
+    #[must_use]
+    pub fn seek_source(&mut self, id: EntityId, frame_offset: f32) -> bool {
+        self.command_producer
+            .try_push(Command::SeekSource { id, frame_offset })
+            .is_ok()
+    }
+
+    /// ソースを一時停止する。再生位置は保持される。
+    #[must_use]
+    pub fn pause_source(&mut self, id: EntityId) -> bool {
+        self.command_producer
+            .try_push(Command::PauseSource { id })
+            .is_ok()
+    }
+
+    /// 一時停止中のソースを再開する。
+    #[must_use]
+    pub fn resume_source(&mut self, id: EntityId) -> bool {
+        self.command_producer
+            .try_push(Command::ResumeSource { id })
+            .is_ok()
+    }
+
+    /// ソースを停止する。次の audio callback で despawn される。
+    #[must_use]
+    pub fn stop_source(&mut self, id: EntityId) -> bool {
+        self.command_producer
+            .try_push(Command::StopSource { id })
+            .is_ok()
+    }
+
+    /// 指定秒数だけ遅らせてマスターバスに再生する。
+    ///
+    /// `delay_seconds` はサウンドスレッドがコマンドを受け取った時点を基準とする。
+    /// メインスレッドが累積 tick を知らないため、相対遅延としてサウンドスレッドへ送る。
+    /// jitter は最大 1 audio callback ぶん（数 ms）。
+    #[must_use]
+    pub fn play_delayed(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        delay_seconds: f32,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        self.command_producer
+            .try_push(Command::PlayScheduled {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense: 0,
+                delay_seconds,
+                token: 0,
+            })
+            .is_ok()
+    }
+
+    /// 指定秒数だけ遅らせて指定バスに再生する。
+    #[must_use]
+    pub fn play_delayed_to_bus(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        delay_seconds: f32,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
+            return false;
+        };
+        self.command_producer
+            .try_push(Command::PlayScheduled {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+                delay_seconds,
+                token: 0,
+            })
             .is_ok()
     }
 

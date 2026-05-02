@@ -15,6 +15,12 @@ mod spatial;
 /// サウンドエンジン本体。
 pub use core::engine::SoundEngine;
 
+/// メモリ上のバイト列からオーディオメタデータを取得する。
+pub use audio::{AudioMetadata, peek_metadata};
+
+/// バッファリーダー（任意スレッドから PCM を読める読み取りハンドル）。
+pub use core::engine::BufferReader;
+
 /// ロード済みオーディオバッファへのハンドル。
 pub use buffer_pool::BufferId;
 

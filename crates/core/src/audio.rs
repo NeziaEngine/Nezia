@@ -70,6 +70,45 @@ pub fn load_from_memory(bytes: &[u8]) -> Result<AudioBuffer, Box<dyn std::error:
     decode(Box::new(cursor), None)
 }
 
+/// オーディオファイルのメタデータ。
+#[derive(Debug, Clone, Copy)]
+pub struct AudioMetadata {
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// 総フレーム数（チャンネル数で割る前のサンプル数）。
+    /// コンテナがフレーム数を持たない場合は 0。
+    pub total_frames: u64,
+}
+
+/// メモリ上のバイト列からオーディオメタデータのみを取得する（フルデコードしない）。
+///
+/// `NeziaAudioImporter` が ScriptableObject 化する際に sample rate / channels /
+/// total frames を埋めるために使う。`AudioBuffer::create_audio_clip_proxy()` 相当の
+/// API も同じメタデータでサイズが決まる。
+pub fn peek_metadata(bytes: &[u8]) -> Result<AudioMetadata, Box<dyn std::error::Error>> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+    let probed = symphonia::default::get_probe().format(
+        &Hint::new(),
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    )?;
+
+    let track = probed
+        .format
+        .default_track()
+        .ok_or("no audio track found")?;
+    let codec = &track.codec_params;
+
+    Ok(AudioMetadata {
+        sample_rate: codec.sample_rate.unwrap_or(0),
+        channels: codec.channels.map(|c| c.count() as u16).unwrap_or(0),
+        total_frames: codec.n_frames.unwrap_or(0),
+    })
+}
+
 /// MediaSource からデコードする内部実装。
 fn decode(
     source: Box<dyn MediaSource>,

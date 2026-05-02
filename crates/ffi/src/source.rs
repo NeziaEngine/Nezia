@@ -195,6 +195,164 @@ pub unsafe extern "C" fn nezia_source_set_spatial_enabled(
     })
 }
 
+// ── ライブソース制御 ──
+
+/// 既存ソースの音量を設定する（spawn 後の動的変更）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_set_volume(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    volume: f32,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.set_source_volume(source.to_core(), volume) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// 既存ソースのピッチを設定する。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_set_pitch(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    pitch: f32,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.set_source_pitch(source.to_core(), pitch) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// ソースの再生位置（フレーム単位）をシークする。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_seek(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    frame_offset: f32,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.seek_source(source.to_core(), frame_offset) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// ソースを一時停止する。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_pause(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.pause_source(source.to_core()) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// 一時停止中のソースを再開する。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_resume(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.resume_source(source.to_core()) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// ソースを停止する（次の audio callback で despawn）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_stop(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.stop_source(source.to_core()) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// 指定秒数だけ遅らせてマスターバスに再生する（fire-and-forget）。
+///
+/// 戻り値: 1 = 受理、0 = 失敗。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_play_delayed(
+    engine: *mut NeziaEngine,
+    buffer: NeziaBufferId,
+    volume: f32,
+    pitch: f32,
+    delay_seconds: f32,
+) -> u8 {
+    guard_value(0, || {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return 0;
+        };
+        engine
+            .inner
+            .play_delayed(buffer.to_core(), volume, pitch, delay_seconds) as u8
+    })
+}
+
+/// 指定秒数だけ遅らせて指定バスに再生する（fire-and-forget）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_play_delayed_to_bus(
+    engine: *mut NeziaEngine,
+    buffer: NeziaBufferId,
+    volume: f32,
+    pitch: f32,
+    bus: NeziaEntityId,
+    delay_seconds: f32,
+) -> u8 {
+    guard_value(0, || {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return 0;
+        };
+        engine.inner.play_delayed_to_bus(
+            buffer.to_core(),
+            volume,
+            pitch,
+            bus.to_core(),
+            delay_seconds,
+        ) as u8
+    })
+}
+
 /// 複数ソースの位置を一括更新する（毎フレーム想定）。
 ///
 /// # 安全性

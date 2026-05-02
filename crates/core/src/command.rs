@@ -79,4 +79,35 @@ pub enum Command {
     },
     /// ソースの空間演算を有効化・無効化する。
     SetSourceSpatialEnabled { id: EntityId, enabled: bool },
+
+    // ── ライブソース制御（spawn 後の挙動変更） ──
+    /// ソースの音量を設定する。
+    SetSourceVolume { id: EntityId, vol: f32 },
+    /// ソースのピッチを設定する。
+    SetSourcePitch { id: EntityId, pitch: f32 },
+    /// ソースの再生位置（フレーム単位）を設定する。
+    SeekSource { id: EntityId, frame_offset: f32 },
+    /// ソースを一時停止する。
+    PauseSource { id: EntityId },
+    /// ソースを再開する。
+    ResumeSource { id: EntityId },
+    /// ソースを停止する（次の update で despawn される）。
+    StopSource { id: EntityId },
+
+    /// 指定秒数だけ遅らせて再生開始する。
+    ///
+    /// `delay_seconds` はサウンドスレッドがコマンドを受け取った時点を基準とした遅延。
+    /// メインスレッドが累積サンプル tick を知らないため、絶対 tick ではなく相対遅延で
+    /// 受け渡し、サウンドスレッド側で `current_tick + delay * sample_rate` に変換する。
+    PlayScheduled {
+        audio_buffer_index: u32,
+        vol: f32,
+        pitch: f32,
+        /// 出力先バスの密配列インデックス。
+        output_bus_dense: u32,
+        /// 受信時刻からの遅延（秒）。
+        delay_seconds: f32,
+        /// コールバックトークン。
+        token: u32,
+    },
 }

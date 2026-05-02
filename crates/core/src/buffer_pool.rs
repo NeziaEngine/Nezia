@@ -105,6 +105,14 @@ impl AudioBufferPool {
         true
     }
 
+    /// 共有 buffers のスナップショットを取得する。
+    ///
+    /// `BufferReader` 等が任意スレッドから直接バッファを参照するために使う。
+    /// 内部 `ArcSwap` のロード（lock-free）。
+    pub fn shared_snapshot(&self) -> arc_swap::Guard<Arc<Vec<Option<Arc<AudioBuffer>>>>> {
+        self.shared.load()
+    }
+
     /// ハンドルを検証し、有効ならスロットインデックスを返す。
     pub fn resolve(&self, id: BufferId) -> Option<u32> {
         let slot = self.slots.get(id.index as usize)?;

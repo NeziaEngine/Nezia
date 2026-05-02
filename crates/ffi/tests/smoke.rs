@@ -4,8 +4,15 @@
 //! オーディオデバイスがない CI 等では `nezia_engine_new` が NULL を返す可能性があるため、
 //! その場合は早期 return する。
 
+use nezia::nezia_audio_peek_metadata;
 use nezia::nezia_buffer_load_from_memory;
 use nezia::nezia_buffer_load_from_pcm;
+use nezia::nezia_buffer_reader_channels;
+use nezia::nezia_buffer_reader_close;
+use nezia::nezia_buffer_reader_open;
+use nezia::nezia_buffer_reader_read;
+use nezia::nezia_buffer_reader_sample_rate;
+use nezia::nezia_buffer_reader_total_frames;
 use nezia::nezia_buffer_unload;
 use nezia::nezia_bus_create;
 use nezia::nezia_bus_destroy;
@@ -17,7 +24,8 @@ use nezia::nezia_engine_poll_events;
 use nezia::nezia_engine_set_volume;
 use nezia::nezia_engine_stop_all;
 use nezia::nezia_listener_set;
-use nezia::{NeziaResult, NeziaVec3};
+use nezia::nezia_source_play_delayed;
+use nezia::{NeziaAudioMetadata, NeziaResult, NeziaVec3};
 
 #[test]
 fn lifecycle_smoke() {
@@ -64,10 +72,34 @@ fn lifecycle_smoke() {
             NeziaResult::Ok
         );
 
-        // PCM 直アップロード（無音 0.1 秒、stereo, 48kHz）
-        let pcm: Vec<f32> = vec![0.0; 48_000 / 10 * 2];
+        // PCM 直アップロード（パターン入り 0.1 秒、stereo, 48kHz）
+        let mut pcm: Vec<f32> = vec![0.0; 48_000 / 10 * 2];
+        for (i, s) in pcm.iter_mut().enumerate() {
+            *s = (i as f32) * 0.001;
+        }
         let pcm_id = nezia_buffer_load_from_pcm(engine, pcm.as_ptr(), pcm.len(), 2, 48_000);
         assert_ne!(pcm_id.index, u32::MAX, "load_from_pcm must succeed");
+
+        // BufferReader: 任意スレッドから PCM を取り出せること
+        let reader = nezia_buffer_reader_open(engine, pcm_id);
+        assert!(!reader.is_null());
+        assert_eq!(nezia_buffer_reader_channels(reader), 2);
+        assert_eq!(nezia_buffer_reader_sample_rate(reader), 48_000);
+        assert_eq!(
+            nezia_buffer_reader_total_frames(reader),
+            (pcm.len() / 2) as u64
+        );
+        let mut dst = vec![0.0f32; 8];
+        let read = nezia_buffer_reader_read(reader, 0, dst.as_mut_ptr(), dst.len());
+        assert_eq!(read, 4); // 4 frames (8 samples / 2 channels)
+        assert_eq!(dst[0], 0.0);
+        assert!((dst[1] - 0.001).abs() < 1e-6);
+        nezia_buffer_reader_close(reader);
+        nezia_buffer_reader_close(std::ptr::null_mut()); // NULL 安全
+
+        // play_delayed: 受理されること（実発火は audio thread 任せ）
+        assert_eq!(nezia_source_play_delayed(engine, pcm_id, 0.5, 1.0, 0.05), 1);
+
         assert_eq!(nezia_buffer_unload(engine, pcm_id), NeziaResult::Ok);
 
         // 不正引数: channels=0
@@ -78,6 +110,19 @@ fn lifecycle_smoke() {
         let garbage = [0u8; 32];
         let bad_mem = nezia_buffer_load_from_memory(engine, garbage.as_ptr(), garbage.len());
         assert_eq!(bad_mem.index, u32::MAX);
+
+        // peek_metadata: 不正バイト列は DecodeError
+        let mut meta = NeziaAudioMetadata {
+            sample_rate: 0,
+            channels: 0,
+            _pad: 0,
+            total_frames: 0,
+        };
+        let res = nezia_audio_peek_metadata(garbage.as_ptr(), garbage.len(), &mut meta);
+        assert_eq!(res, NeziaResult::DecodeError);
+        // NULL out_metadata
+        let res2 = nezia_audio_peek_metadata(garbage.as_ptr(), garbage.len(), std::ptr::null_mut());
+        assert_eq!(res2, NeziaResult::NullPointer);
 
         // poll は空でも OK
         assert_eq!(nezia_engine_poll_events(engine), NeziaResult::Ok);

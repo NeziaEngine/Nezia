@@ -144,6 +144,19 @@ pub struct NeziaSourcePositionUpdate {
     pub position: NeziaVec3,
 }
 
+/// オーディオファイルのメタデータ（`nezia_audio_peek_metadata` の出力）。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NeziaAudioMetadata {
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// 16-bit alignment padding（`channels` の後）。常に 0。
+    pub _pad: u16,
+    /// 総フレーム数（チャンネル数で割る前のサンプル数）。
+    /// コンテナがフレーム数を持たない場合は 0。
+    pub total_frames: u64,
+}
+
 /// 個別の `play_*_with_callback` で渡す再生終了コールバック。
 ///
 /// 自然終了時に `nezia_engine_poll_events` 経由で 1 度だけ呼ばれる。`user_data` は

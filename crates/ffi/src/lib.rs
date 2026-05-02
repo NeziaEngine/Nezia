@@ -11,7 +11,9 @@
 //! このため個別関数では `# Safety` セクションを省略している。
 #![allow(clippy::missing_safety_doc)]
 
+mod audio_meta;
 mod buffer;
+mod buffer_reader;
 mod bus;
 mod engine;
 mod panic;
@@ -22,7 +24,9 @@ mod types;
 // extern "C" 関数と ABI 型をクレートルートで再公開する。
 // `#[unsafe(no_mangle)]` により cdylib / staticlib にはモジュール可視性に
 // 関わらず symbol が出るが、Rust 側からの結合テストには名前経由のインポートが必要。
+pub use audio_meta::*;
 pub use buffer::*;
+pub use buffer_reader::*;
 pub use bus::*;
 pub use engine::*;
 pub use source::*;

@@ -30,7 +30,6 @@ impl Default for SourceComponent {
 }
 
 /// Source の再生状態。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceState {
     /// 再生中。
