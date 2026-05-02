@@ -1,0 +1,272 @@
+name: Unity Release
+
+# nezia-ffi をマルチプラットフォームでビルドし、生成された C# バインディングと
+# ネイティブライブラリを別リポジトリ (Nezia.Unity) に PR として送り込むワークフロー。
+#
+# 必要な secret:
+#   NEZIA_UNITY_PR_TOKEN — 対象リポジトリへの push / PR 作成権限を持つ PAT。
+#                          fine-grained token なら Contents:Write + Pull requests:Write。
+#
+# 必要な variable (Repository / Organization variables):
+#   NEZIA_UNITY_REPO — 対象リポジトリ (default: ${{ github.repository_owner }}/Nezia.Unity)
+#   NEZIA_UNITY_BASE_BRANCH — PR の base ブランチ (default: main)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "ビルドのみ実行し PR は出さない"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Nezia.Unity リポジトリのルートが UPM パッケージ自体なので、PACKAGE_DIR は空 (= リポジトリルート) 。
+  PLUGIN_SUBDIR: Runtime/Plugins
+
+jobs:
+  # ── プラットフォーム別 ffi ビルド ─────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── デスクトップ ──
+          - label: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            artifact: libnezia.dylib
+            kind: desktop
+          - label: macos-x86_64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            artifact: libnezia.dylib
+            kind: desktop
+          - label: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nezia.dll
+            kind: desktop
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: libnezia.so
+            kind: desktop
+          # ── iOS（staticlib） ──
+          # 実機 (arm64)。Unity の iOS Build Support は Plugins/iOS 配下に .a を要求する。
+          - label: ios-arm64
+            runner: macos-latest
+            target: aarch64-apple-ios
+            artifact: libnezia.a
+            kind: ios
+          # ── Android（cdylib） ──
+          - label: android-arm64
+            runner: ubuntu-latest
+            target: aarch64-linux-android
+            artifact: libnezia.so
+            kind: android
+          - label: android-armv7
+            runner: ubuntu-latest
+            target: armv7-linux-androideabi
+            artifact: libnezia.so
+            kind: android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux audio deps
+        if: matrix.kind == 'desktop' && matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Set up Android NDK
+        if: matrix.kind == 'android'
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Install cargo-ndk
+        if: matrix.kind == 'android'
+        run: cargo install cargo-ndk --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build ffi (release, desktop)
+        if: matrix.kind == 'desktop'
+        run: cargo build -p nezia-ffi --release --target ${{ matrix.target }}
+
+      - name: Build ffi (release, iOS staticlib)
+        if: matrix.kind == 'ios'
+        # iOS は cdylib をリンクできないため staticlib のみビルドする。
+        run: cargo rustc -p nezia-ffi --release --target ${{ matrix.target }} --crate-type=staticlib
+
+      - name: Build ffi (release, Android via NDK)
+        if: matrix.kind == 'android'
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        # Unity Android は API 21+ をサポート。cargo-ndk が NDK のクロスリンカと
+        # sysroot を自動で設定する。
+        run: cargo ndk --target ${{ matrix.target }} --platform 21 -- build -p nezia-ffi --release
+
+      - name: Stage native artifact
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact }}" "staging/${{ matrix.artifact }}"
+
+      - name: Stage generated C# bindings (linux only)
+        # csbindgen 出力はターゲット非依存なので、どこか 1 つだけ拾えばよい。
+        if: matrix.label == 'linux-x86_64'
+        shell: bash
+        run: |
+          cp crates/ffi/bindings/NeziaNative.g.cs staging/NeziaNative.g.cs
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezia-${{ matrix.label }}
+          path: staging/
+          if-no-files-found: error
+
+  # ── 生成物を Nezia.Unity リポジトリへ PR ─────────────────────────────────
+  publish:
+    name: Publish PR to Nezia.Unity
+    needs: build
+    runs-on: macos-latest # universal binary を作るため macOS で実行
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
+
+    steps:
+      - name: Resolve target repo settings
+        id: cfg
+        shell: bash
+        run: |
+          target_repo="${{ vars.NEZIA_UNITY_REPO }}"
+          if [ -z "$target_repo" ]; then
+            target_repo="${{ github.repository_owner }}/Nezia.Unity"
+          fi
+          base_branch="${{ vars.NEZIA_UNITY_BASE_BRANCH }}"
+          if [ -z "$base_branch" ]; then
+            base_branch="main"
+          fi
+          echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
+          echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
+          # PR ブランチ名: コミット SHA を入れて衝突回避。
+          short_sha="${GITHUB_SHA::7}"
+          echo "pr_branch=automation/nezia-core-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source repo (for commit metadata)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout Nezia.Unity repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.cfg.outputs.target_repo }}
+          token: ${{ secrets.NEZIA_UNITY_PR_TOKEN }}
+          path: target
+          ref: ${{ steps.cfg.outputs.base_branch }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble Unity package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="target"
+          plugin_root="$pkg/${{ env.PLUGIN_SUBDIR }}"
+          mkdir -p \
+            "$plugin_root/macOS" \
+            "$plugin_root/Windows/x86_64" \
+            "$plugin_root/Linux/x86_64" \
+            "$plugin_root/iOS" \
+            "$plugin_root/Android/arm64-v8a" \
+            "$plugin_root/Android/armeabi-v7a"
+
+          # macOS: arm64 + x86_64 を universal binary に結合
+          lipo -create \
+            artifacts/nezia-macos-arm64/libnezia.dylib \
+            artifacts/nezia-macos-x86_64/libnezia.dylib \
+            -output "$plugin_root/macOS/libnezia.dylib"
+          lipo -info "$plugin_root/macOS/libnezia.dylib"
+
+          cp artifacts/nezia-windows-x86_64/nezia.dll "$plugin_root/Windows/x86_64/nezia.dll"
+          cp artifacts/nezia-linux-x86_64/libnezia.so "$plugin_root/Linux/x86_64/libnezia.so"
+
+          # iOS は arm64 device static library のみ（シミュレータは将来 XCFramework で対応）
+          cp artifacts/nezia-ios-arm64/libnezia.a "$plugin_root/iOS/libnezia.a"
+
+          # Android: ABI 別ディレクトリに配置（Unity の Android Plugin Inspector 標準レイアウト）
+          cp artifacts/nezia-android-arm64/libnezia.so   "$plugin_root/Android/arm64-v8a/libnezia.so"
+          cp artifacts/nezia-android-armv7/libnezia.so   "$plugin_root/Android/armeabi-v7a/libnezia.so"
+
+          # C# バインディング（自動生成物は Generated/ 配下にまとめる）
+          mkdir -p "$pkg/Runtime/Generated"
+          cp artifacts/nezia-linux-x86_64/NeziaNative.g.cs "$pkg/Runtime/Generated/NeziaNative.g.cs"
+
+          # バージョン情報を VERSION.txt に書いて差分を可視化
+          {
+            echo "source-repo: ${{ github.repository }}"
+            echo "source-sha: ${{ github.sha }}"
+            echo "source-ref: ${{ github.ref }}"
+            echo "built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$pkg/VERSION.txt"
+
+      - name: Create Pull Request
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: target
+          token: ${{ secrets.NEZIA_UNITY_PR_TOKEN }}
+          base: ${{ steps.cfg.outputs.base_branch }}
+          branch: ${{ steps.cfg.outputs.pr_branch }}
+          commit-message: |
+            chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}
+
+            source: ${{ github.repository }}@${{ github.sha }}
+          title: "chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}"
+          body: |
+            Automated update of `nezia-core` native plugins and C# bindings.
+
+            - **source repo**: `${{ github.repository }}`
+            - **source ref**: `${{ github.ref }}`
+            - **source sha**: `${{ github.sha }}`
+
+            ### Included artifacts
+            - `${{ env.PLUGIN_SUBDIR }}/macOS/libnezia.dylib` (universal: arm64 + x86_64)
+            - `${{ env.PLUGIN_SUBDIR }}/Windows/x86_64/nezia.dll`
+            - `${{ env.PLUGIN_SUBDIR }}/Linux/x86_64/libnezia.so`
+            - `${{ env.PLUGIN_SUBDIR }}/iOS/libnezia.a` (arm64 device, static)
+            - `${{ env.PLUGIN_SUBDIR }}/Android/arm64-v8a/libnezia.so`
+            - `${{ env.PLUGIN_SUBDIR }}/Android/armeabi-v7a/libnezia.so`
+            - `Runtime/Generated/NeziaNative.g.cs`
+          labels: |
+            automation
+            nezia-core
+          delete-branch: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "PR URL: ${{ steps.cpr.outputs.pull-request-url }}"
+          echo "PR Number: ${{ steps.cpr.outputs.pull-request-number }}"

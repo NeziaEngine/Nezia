@@ -4,3 +4,6 @@ target/
 .DS_Store
 .idea/
 Sandbox/
+
+# csbindgen が build.rs で再生成する成果物（CI でのみ artifact 化する）
+crates/ffi/bindings/

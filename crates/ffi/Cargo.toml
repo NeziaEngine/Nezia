@@ -1,6 +1,15 @@
 [package]
-name = "ffi"
+name = "nezia-ffi"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "nezia"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
 [dependencies]
+# 自身の lib 名 (`nezia`) と core クレート名 (`nezia`) が衝突するため別名で取り込む。
+nezia_core = { package = "nezia", path = "../core" }
+
+[build-dependencies]
+csbindgen = "1.9"
