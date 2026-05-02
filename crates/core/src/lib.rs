@@ -23,4 +23,3 @@ pub use entity::EntityId;
 
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;
-

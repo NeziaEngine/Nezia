@@ -13,12 +13,14 @@ use ringbuf::{
 use crate::audio::AudioBuffer;
 use crate::buffer_pool::{AudioBufferPool, BufferId};
 use crate::bus::{BusComponent, BusSystem, BusWorld, MAX_BUSES};
-use crate::command::{Command, SPATIAL_BATCH_SIZE};
+use crate::command::Command;
 use crate::core::bus_routing::BusRoutingMirror;
 use crate::entity::EntityId;
 use crate::event::Event;
-use crate::source::{SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
-use crate::spatial::{AttenuationModel, SpatialWorld};
+use crate::source::{
+    MAX_SOURCES, SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceWorld,
+};
+use crate::spatial::{AttenuationModel, ListenerState, SpatialWorld};
 
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
@@ -32,6 +34,11 @@ pub struct SoundEngine {
     command_producer: ringbuf::HeapProd<Command>,
     /// イベントリングバッファのコンシューマ側（メインスレッドが所有）。
     event_consumer: ringbuf::HeapCons<Event>,
+    /// リスナー姿勢の triple buffer 入力側（newest-wins, alloc 無し）。
+    listener_input: triple_buffer::Input<ListenerState>,
+    /// ソース位置更新の triple buffer 入力側（newest-wins, alloc 無し）。
+    /// 内部 Vec の容量は MAX_SOURCES で固定。clear + extend_from_slice で再確保なし。
+    position_updates_input: triple_buffer::Input<Vec<(EntityId, [f32; 3])>>,
     /// cpal のストリームハンドル。Drop 時に再生が停止される。
     _stream: Stream,
     /// AudioBuffer のスロット管理。
@@ -72,6 +79,34 @@ impl SoundEngine {
         let event_ring = HeapRb::<Event>::new(EVENT_RING_CAPACITY);
         let (mut event_producer, event_consumer) = event_ring.split();
 
+        // 毎フレーム送る newest-wins 状態は triple buffer 経由で受け渡す。
+        // alloc 無し・lock-free・順序保証なし（最新値だけ届けばよい用途）。
+        let (listener_input, mut listener_output) =
+            triple_buffer::triple_buffer(&ListenerState::default());
+        // Vec の初期 len と capacity を MAX_SOURCES に揃えておく。Vec::clone は
+        // len ぶんの容量を確保するため、3 スロット全てが MAX_SOURCES ぶんの
+        // capacity を持ち、メインスレッドで clear + extend_from_slice しても
+        // 再確保が起きない。
+        let positions_initial: Vec<(EntityId, [f32; 3])> = vec![
+            (
+                EntityId {
+                    index: 0,
+                    generation: 0,
+                },
+                [0.0; 3],
+            );
+            MAX_SOURCES
+        ];
+        let (mut position_updates_input, mut position_updates_output) =
+            triple_buffer::triple_buffer(&positions_initial);
+        // 初期状態は「未公開」にしたいので、入力側を空 Vec に reset して publish。
+        // これでサウンドスレッド側 `update()` は「変更なし」を返し、初回 callback で
+        // ダミー位置データを apply してしまうのを防ぐ。
+        position_updates_input.input_buffer_mut().clear();
+        position_updates_input.publish();
+        // 初回 update() で空 Vec を吸収しておく（以降は新しい publish のみが届く）。
+        position_updates_output.update();
+
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
             Arc::new(ArcSwap::from_pointee(Vec::new()));
         let shared_buffers_clone = Arc::clone(&shared_buffers);
@@ -87,7 +122,10 @@ impl SoundEngine {
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let sample_count = data.len();
 
-                // コマンドを処理する。
+                // コマンドを先に処理する。spawn 系を反映してから triple buffer の
+                // 位置更新を適用しないと、spawn と同フレームで publish された位置が
+                // resolve 失敗で捨てられ、初回 callback がデフォルト位置 [0,0,0] で
+                // 再生されてしまう。
                 while let Some(cmd) = command_consumer.try_pop() {
                     match cmd {
                         Command::SetVolume(v) => {
@@ -203,7 +241,13 @@ impl SoundEngine {
                             rolloff,
                         } => {
                             if let Some(dense) = source_world.resolve(id) {
-                                spatial_world.set_params(dense, model, min_distance, max_distance, rolloff);
+                                spatial_world.set_params(
+                                    dense,
+                                    model,
+                                    min_distance,
+                                    max_distance,
+                                    rolloff,
+                                );
                             }
                         }
                         Command::SetSourceSpatialEnabled { id, enabled } => {
@@ -211,19 +255,20 @@ impl SoundEngine {
                                 spatial_world.set_enabled(dense, enabled);
                             }
                         }
-                        Command::BatchSetSourcePositions { count, updates } => {
-                            for (id, pos) in &updates[..count as usize] {
-                                if let Some(dense) = source_world.resolve(*id) {
-                                    spatial_world.set_position(dense, *pos);
-                                }
-                            }
-                        }
-                        Command::SetListener {
-                            position,
-                            forward,
-                            up,
-                        } => {
-                            spatial_world.listener.update(position, forward, up);
+                    }
+                }
+
+                // triple buffer から最新の listener / source positions を取り込む。
+                // commands の後にやることで、spawn と同フレームで publish された
+                // 位置も resolve に成功する（順序は spawn → 位置適用）。
+                if listener_output.update() {
+                    spatial_world.listener = *listener_output.output_buffer_mut();
+                }
+                if position_updates_output.update() {
+                    let updates = position_updates_output.output_buffer_mut();
+                    for (id, pos) in updates.iter() {
+                        if let Some(dense) = source_world.resolve(*id) {
+                            spatial_world.set_position(dense, *pos);
                         }
                     }
                 }
@@ -271,6 +316,8 @@ impl SoundEngine {
         Ok(Self {
             command_producer,
             event_consumer,
+            listener_input,
+            position_updates_input,
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
             bus_routing: BusRoutingMirror::new(master_bus_id),
@@ -405,7 +452,13 @@ impl SoundEngine {
     /// 返った EntityId を使って `set_source_spatial_params()` / `set_source_spatial_enabled()` /
     /// `batch_set_source_positions()` で空間パラメータを更新する。
     #[must_use]
-    pub fn spawn_source(&mut self, buffer: BufferId, vol: f32, pitch: f32, bus: EntityId) -> Option<EntityId> {
+    pub fn spawn_source(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+    ) -> Option<EntityId> {
         let index = self.buffer_pool.resolve(buffer)?;
         let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
 
@@ -466,11 +519,13 @@ impl SoundEngine {
     }
 
     /// リスナーの位置・向きを更新する（毎フレーム呼び出す）。
-    #[must_use]
-    pub fn set_listener(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) -> bool {
-        self.command_producer
-            .try_push(Command::SetListener { position, forward, up })
-            .is_ok()
+    ///
+    /// triple buffer 経由で publish するため、リングバッファ詰まりで失敗しない。
+    /// `forward` / `up` はメインスレッドで正規化してから受け渡す。
+    pub fn set_listener(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) {
+        let buf = self.listener_input.input_buffer_mut();
+        buf.update(position, forward, up);
+        self.listener_input.publish();
     }
 
     /// ソースの距離減衰パラメータを設定する（初期化・変更時のみ）。
@@ -504,23 +559,16 @@ impl SoundEngine {
 
     /// 複数ソースの位置を一括更新する（毎フレーム用）。
     ///
-    /// `updates` が `SPATIAL_BATCH_SIZE` を超える場合は複数コマンドに分割して送信する。
-    #[must_use]
-    pub fn batch_set_source_positions(&mut self, updates: &[(EntityId, [f32; 3])]) -> bool {
-        let dummy = (EntityId { index: 0, generation: 0 }, [0.0f32; 3]);
-        for chunk in updates.chunks(SPATIAL_BATCH_SIZE) {
-            let count = chunk.len() as u8;
-            let mut buf = [dummy; SPATIAL_BATCH_SIZE];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            if self
-                .command_producer
-                .try_push(Command::BatchSetSourcePositions { count, updates: buf })
-                .is_err()
-            {
-                return false;
-            }
-        }
-        true
+    /// triple buffer 経由で publish するため、リングバッファ詰まりで失敗しない。
+    /// `MAX_SOURCES` を超える分は切り捨てる（事前確保された容量を超えると
+    /// メインスレッド側で realloc が発生し、リアルタイム制約とは関係ないが
+    /// alloc コストが上がるため）。
+    pub fn batch_set_source_positions(&mut self, updates: &[(EntityId, [f32; 3])]) {
+        let buf = self.position_updates_input.input_buffer_mut();
+        buf.clear();
+        let take = updates.len().min(MAX_SOURCES);
+        buf.extend_from_slice(&updates[..take]);
+        self.position_updates_input.publish();
     }
 
     /// マスターバスの EntityId を返す。

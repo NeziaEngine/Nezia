@@ -92,6 +92,5 @@ impl SourceMixingSystem {
 
             world.sample_offset[source_i] = offset;
         }
-
     }
 }

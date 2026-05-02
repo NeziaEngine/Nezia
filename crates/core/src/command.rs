@@ -2,18 +2,15 @@ use crate::bus::MAX_BUSES;
 use crate::entity::EntityId;
 use crate::spatial::AttenuationModel;
 
-/// `BatchSetSourcePositions` の 1 コマンドあたりの最大エントリ数。
-///
-/// ゲーム側 ECS が Transform を一括イテレートした結果をそのまま詰めて送ることで、
-/// N 体の位置更新を `ceil(N / SPATIAL_BATCH_SIZE)` 件のコマンドに圧縮する。
-pub const SPATIAL_BATCH_SIZE: usize = 32;
-
 /// メインスレッドからサウンドスレッドへ送るコマンド。
 ///
 /// リングバッファ経由で送信されるため、すべてのバリアントは
 /// 固定サイズかつ `Copy` でなければならない。
 /// `UpdateProcessOrder` が `[u32; MAX_BUSES]` を保持するため enum サイズが大きくなるが、
 /// これはリアルタイム制約上ヒープ確保を避けるための意図的な設計である。
+///
+/// 毎フレーム送る「最新値さえ届けばよい」状態（リスナー姿勢・ソース位置）は
+/// このコマンド経路ではなく triple buffer 共有メモリ経由で受け渡す。
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy)]
 pub enum Command {
@@ -71,11 +68,8 @@ pub enum Command {
     /// バスの処理順序を更新する（リーフ→ルート順の密配列インデックス列）。
     UpdateProcessOrder { order: [u32; MAX_BUSES], len: u8 },
 
-    // ── 3D 空間コマンド ──
-
+    // ── 3D 空間コマンド（個別変更系。毎フレーム系は triple buffer 経由） ──
     /// ソースの距離減衰パラメータを設定する（初期化・変更時のみ）。
-    ///
-    /// 毎フレーム送る必要はない。位置のみ変わる場合は `BatchSetSourcePositions` を使う。
     SetSourceSpatialParams {
         id: EntityId,
         model: AttenuationModel,
@@ -85,20 +79,4 @@ pub enum Command {
     },
     /// ソースの空間演算を有効化・無効化する。
     SetSourceSpatialEnabled { id: EntityId, enabled: bool },
-    /// 複数ソースの位置を一括更新する（毎フレーム用）。
-    ///
-    /// `count` 件のみ有効。ゲーム側 ECS が Transform を一括イテレートした結果を
-    /// そのまま詰めて送ることで、コマンド件数を圧縮する。
-    BatchSetSourcePositions {
-        count: u8,
-        updates: [(EntityId, [f32; 3]); SPATIAL_BATCH_SIZE],
-    },
-    /// リスナーの状態を更新する（毎フレーム）。
-    ///
-    /// `forward` / `up` は正規化済みであること（サウンドスレッド側でも正規化する）。
-    SetListener {
-        position: [f32; 3],
-        forward: [f32; 3],
-        up: [f32; 3],
-    },
 }

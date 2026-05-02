@@ -36,8 +36,8 @@ impl SourceLifecycleSystem {
                 }
                 SourceState::Pausing => false,
             };
-            let should_despawn = natural_finish
-                || matches!(world.state[source_i], SourceState::Stopped);
+            let should_despawn =
+                natural_finish || matches!(world.state[source_i], SourceState::Stopped);
 
             if should_despawn {
                 if natural_finish {

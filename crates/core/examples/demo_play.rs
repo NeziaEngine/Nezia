@@ -27,7 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("バッファロード");
 
     let buf = engine.load(&wav)?;
-    ok(format!("load() => index={} gen={}", buf.index, buf.generation));
+    ok(format!(
+        "load() => index={} gen={}",
+        buf.index, buf.generation
+    ));
 
     // ─── 通常再生 ────────────────────────────────────────
     section("fire-and-forget 再生");
@@ -48,7 +51,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("1オクターブ上 (pitch=2.0)", 2.0),
     ] {
         println!("  ▶ {label}");
-        check(format!("  play(pitch={pitch})"), engine.play(buf, 1.0, pitch));
+        check(
+            format!("  play(pitch={pitch})"),
+            engine.play(buf, 1.0, pitch),
+        );
         thread::sleep(Duration::from_millis(1600));
         let _ = engine.stop_all();
         thread::sleep(Duration::from_millis(600));
@@ -60,12 +66,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (vol, label) in [
         (1.0_f32, "全開"),
-        (0.5,     "半分"),
-        (0.1,     "かすか"),
-        (0.0,     "無音"),
-        (1.0,     "全開に戻す"),
+        (0.5, "半分"),
+        (0.1, "かすか"),
+        (0.0, "無音"),
+        (1.0, "全開に戻す"),
     ] {
-        check(format!("  set_volume({vol:.1})  [{label}]"), engine.set_volume(vol));
+        check(
+            format!("  set_volume({vol:.1})  [{label}]"),
+            engine.set_volume(vol),
+        );
         let _ = engine.play(buf, 1.0, 1.0);
         thread::sleep(Duration::from_millis(1400));
         let _ = engine.stop_all();
@@ -139,7 +148,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("エラーパス");
 
     check("unload(buf)", engine.unload(buf));
-    check_false("unload(buf) 2回目 => false (二重アンロード)", engine.unload(buf));
+    check_false(
+        "unload(buf) 2回目 => false (二重アンロード)",
+        engine.unload(buf),
+    );
     check_false("play(unloaded buf) => false", engine.play(buf, 1.0, 1.0));
 
     // ─── 完了 ────────────────────────────────────────────
@@ -177,7 +189,11 @@ fn check_false(msg: impl std::fmt::Display, result: bool) {
 }
 
 /// ステレオ 16-bit PCM WAV (サイン波) を一時ファイルへ書き出す。
-fn gen_wav(freq: f32, sample_rate: u32, secs: f32) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+fn gen_wav(
+    freq: f32,
+    sample_rate: u32,
+    secs: f32,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     use std::io::Write as _;
     let path = std::env::temp_dir().join("nezia_demo_play.wav");
     let channels: u16 = 2;
@@ -203,9 +219,13 @@ fn gen_wav(freq: f32, sample_rate: u32, secs: f32) -> Result<std::path::PathBuf,
     let attack = (sample_rate as f32 * 0.01) as u32;
     let release = (sample_rate as f32 * 0.05) as u32;
     for i in 0..n {
-        let env = if i < attack { i as f32 / attack as f32 }
-                  else if i >= n - release { (n - i) as f32 / release as f32 }
-                  else { 1.0 };
+        let env = if i < attack {
+            i as f32 / attack as f32
+        } else if i >= n - release {
+            (n - i) as f32 / release as f32
+        } else {
+            1.0
+        };
         let s = ((step * i as f32).sin() * env * 0.5 * i16::MAX as f32) as i16;
         f.write_all(&s.to_le_bytes())?;
         f.write_all(&s.to_le_bytes())?;

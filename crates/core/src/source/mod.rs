@@ -11,8 +11,8 @@ pub const MAX_SOURCES: usize = 256;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::world::SourceState;
+    use super::*;
 
     #[test]
     fn spawn_and_access() {

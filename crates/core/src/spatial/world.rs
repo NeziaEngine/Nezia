@@ -19,6 +19,7 @@ pub enum AttenuationModel {
 ///
 /// `right` は `forward` と `up` から派生する。
 /// `update()` を呼ぶと同時に再計算される。
+#[derive(Clone, Copy)]
 pub struct ListenerState {
     pub position: [f32; 3],
     /// 正規化済み前方ベクトル。
@@ -125,7 +126,8 @@ impl SpatialWorld {
         self.positions_x.push(0.0);
         self.positions_y.push(0.0);
         self.positions_z.push(0.0);
-        self.attenuation_models.push(AttenuationModel::InverseDistance);
+        self.attenuation_models
+            .push(AttenuationModel::InverseDistance);
         self.min_distances.push(1.0);
         self.max_distances.push(500.0);
         self.rolloff_factors.push(1.0);

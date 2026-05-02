@@ -223,7 +223,6 @@ impl BusWorld {
             self.mix_buffer[start..start + clear_len].fill(0.0);
         }
     }
-
 }
 
 impl Default for BusWorld {
