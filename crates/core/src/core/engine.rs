@@ -335,6 +335,32 @@ impl SoundEngine {
         self.buffer_pool.load(path)
     }
 
+    /// メモリ上のエンコード済みバイト列からロードし、ハンドルを返す。
+    ///
+    /// 統合層からの主要ロード経路。`NeziaAudioClip` の保持バイト列、Addressables、
+    /// `UnityWebRequest` などホスト側で取得したバイト列をそのままデコードする。
+    pub fn load_from_memory(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<BufferId, Box<dyn std::error::Error>> {
+        self.buffer_pool.load_from_memory(bytes)
+    }
+
+    /// 既にデコード済みの PCM サンプル列からロードし、ハンドルを返す。
+    ///
+    /// Unity 標準 `AudioClip.GetData()` 結果のような、ホスト側で既に展開済みの
+    /// PCM を Nezia バッファに取り込む経路（移行期間用ブリッジ）。
+    /// `samples` はインターリーブ形式（ステレオなら `[L0, R0, L1, R1, ...]`）。
+    pub fn load_from_pcm(
+        &mut self,
+        samples: Vec<f32>,
+        channels: u16,
+        sample_rate: u32,
+    ) -> BufferId {
+        self.buffer_pool
+            .load_from_pcm(samples, channels, sample_rate)
+    }
+
     /// バッファをアンロードする。
     pub fn unload(&mut self, id: BufferId) -> bool {
         self.buffer_pool.unload(id)

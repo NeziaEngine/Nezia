@@ -56,10 +56,33 @@ impl AudioBufferPool {
         path: P,
     ) -> Result<BufferId, Box<dyn std::error::Error>> {
         let buffer = Arc::new(audio::load(path)?);
-        let (index, generation) = self.allocate_slot();
-        self.buffers[index as usize] = Some(buffer);
-        self.sync_shared();
-        Ok(BufferId { index, generation })
+        Ok(self.insert(buffer))
+    }
+
+    /// メモリ上のエンコード済みバイト列からロードし、ハンドルを返す。
+    ///
+    /// `NeziaAudioClip.encodedBytes` / Resources / Addressables / WebRequest 経由の
+    /// バイト列を直接デコードする経路。Symphonia がフォーマットを自動判別する。
+    pub fn load_from_memory(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<BufferId, Box<dyn std::error::Error>> {
+        let buffer = Arc::new(audio::load_from_memory(bytes)?);
+        Ok(self.insert(buffer))
+    }
+
+    /// 既にデコード済みの PCM サンプル列からロードし、ハンドルを返す。
+    ///
+    /// Unity の `AudioClip.GetData()` 結果を直接アップロードする経路（移行用ブリッジ）。
+    /// `samples` はインターリーブ形式。
+    pub fn load_from_pcm(
+        &mut self,
+        samples: Vec<f32>,
+        channels: u16,
+        sample_rate: u32,
+    ) -> BufferId {
+        let buffer = Arc::new(AudioBuffer::from_pcm(samples, channels, sample_rate));
+        self.insert(buffer)
     }
 
     /// バッファをアンロードする。
@@ -89,6 +112,14 @@ impl AudioBufferPool {
             return None;
         }
         Some(id.index)
+    }
+
+    /// デコード済みバッファをスロットに格納してハンドルを返す内部実装。
+    fn insert(&mut self, buffer: Arc<AudioBuffer>) -> BufferId {
+        let (index, generation) = self.allocate_slot();
+        self.buffers[index as usize] = Some(buffer);
+        self.sync_shared();
+        BufferId { index, generation }
     }
 
     fn allocate_slot(&mut self) -> (u32, u32) {

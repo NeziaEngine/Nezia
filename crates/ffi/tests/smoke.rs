@@ -4,6 +4,9 @@
 //! オーディオデバイスがない CI 等では `nezia_engine_new` が NULL を返す可能性があるため、
 //! その場合は早期 return する。
 
+use nezia::nezia_buffer_load_from_memory;
+use nezia::nezia_buffer_load_from_pcm;
+use nezia::nezia_buffer_unload;
 use nezia::nezia_bus_create;
 use nezia::nezia_bus_destroy;
 use nezia::nezia_bus_set_gain;
@@ -60,6 +63,21 @@ fn lifecycle_smoke() {
             ),
             NeziaResult::Ok
         );
+
+        // PCM 直アップロード（無音 0.1 秒、stereo, 48kHz）
+        let pcm: Vec<f32> = vec![0.0; 48_000 / 10 * 2];
+        let pcm_id = nezia_buffer_load_from_pcm(engine, pcm.as_ptr(), pcm.len(), 2, 48_000);
+        assert_ne!(pcm_id.index, u32::MAX, "load_from_pcm must succeed");
+        assert_eq!(nezia_buffer_unload(engine, pcm_id), NeziaResult::Ok);
+
+        // 不正引数: channels=0
+        let bad = nezia_buffer_load_from_pcm(engine, pcm.as_ptr(), pcm.len(), 0, 48_000);
+        assert_eq!(bad.index, u32::MAX);
+
+        // load_from_memory: 不正バイト列はデコード失敗 → INVALID
+        let garbage = [0u8; 32];
+        let bad_mem = nezia_buffer_load_from_memory(engine, garbage.as_ptr(), garbage.len());
+        assert_eq!(bad_mem.index, u32::MAX);
 
         // poll は空でも OK
         assert_eq!(nezia_engine_poll_events(engine), NeziaResult::Ok);

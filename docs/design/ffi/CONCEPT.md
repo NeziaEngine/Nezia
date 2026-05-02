@@ -12,6 +12,20 @@
 統合に、C# バインディングは Unity 統合にそれぞれ用いる。当面の動作確認は Unity を
 主ターゲットとして進めるが、API 設計はエンジン非依存とする。
 
+## ドロップイン互換戦略との関係
+
+NEZIA ENGINE の差別化方針として、各エンジンの標準サウンド API（Unity の
+`AudioSource` 等）と互換のラッパを提供することでモック開発から導入できる
+ミドルウェアを目指す。詳細は [integration/CONCEPT.md](../integration/CONCEPT.md)
+を参照。`ffi` 側ではこの戦略を成立させるため、以下の追加 API を提供する必要がある。
+
+- `nezia_buffer_load_from_memory` — Resources / Addressables / WebRequest 経由で
+  得たバイト列を直接ロード
+- `nezia_buffer_load_from_pcm` — `AudioClip.GetData()` で取り出した float PCM を
+  直接アップロード（レベル 2 互換用）
+
+これらは現行 API（`nezia_buffer_load`）と並列に提供し、用途に応じて使い分ける。
+
 ## 統合モデルにおける位置づけ
 
 NEZIA ENGINE は用途に応じて 2 種類の統合経路を提供する。`ffi` はそのうちの一方である。

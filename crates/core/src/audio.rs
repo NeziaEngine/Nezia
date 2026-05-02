@@ -1,10 +1,11 @@
 use std::fs::File;
+use std::io::Cursor;
 use std::path::Path;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
@@ -27,6 +28,21 @@ impl AudioBuffer {
     pub fn frame_count(&self) -> usize {
         self.samples.len() / self.channels as usize
     }
+
+    /// 既にデコード済みの PCM サンプル列から `AudioBuffer` を構築する。
+    ///
+    /// Unity の `AudioClip.GetData()` 結果のような、ホスト側で既にデコード済みの
+    /// データを Nezia バッファに取り込む経路で利用する。
+    ///
+    /// `samples` はインターリーブ形式（ステレオなら `[L0, R0, L1, R1, ...]`）。
+    /// `channels` は 1 以上、`sample_rate` も 1 以上を想定する。
+    pub fn from_pcm(samples: Vec<f32>, channels: u16, sample_rate: u32) -> Self {
+        Self {
+            samples,
+            channels,
+            sample_rate,
+        }
+    }
 }
 
 /// オーディオファイルを読み込み、デコードして `AudioBuffer` を返す。
@@ -35,10 +51,34 @@ impl AudioBuffer {
 /// 自動判別してデコードする。
 pub fn load<P: AsRef<Path>>(path: P) -> Result<AudioBuffer, Box<dyn std::error::Error>> {
     let file = File::open(path.as_ref())?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let extension_hint = path
+        .as_ref()
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_string());
+    decode(Box::new(file), extension_hint.as_deref())
+}
+
+/// オーディオデータをメモリ上のバイト列から読み込み、デコードして `AudioBuffer` を返す。
+///
+/// `Resources` / `Addressables` / `UnityWebRequest` 等で取得したエンコード済みバイト列や、
+/// `NeziaAudioClip` が保持する元ファイルバイト列をそのままデコードする経路。
+/// バイト列はコピーされるため、呼出後に `bytes` を解放してよい。
+pub fn load_from_memory(bytes: &[u8]) -> Result<AudioBuffer, Box<dyn std::error::Error>> {
+    // symphonia の MediaSource は 'static を要求する。`Cursor<Vec<u8>>` を所有させる。
+    let cursor = Cursor::new(bytes.to_vec());
+    decode(Box::new(cursor), None)
+}
+
+/// MediaSource からデコードする内部実装。
+fn decode(
+    source: Box<dyn MediaSource>,
+    extension: Option<&str>,
+) -> Result<AudioBuffer, Box<dyn std::error::Error>> {
+    let mss = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = path.as_ref().extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = extension {
         hint.with_extension(ext);
     }
 
