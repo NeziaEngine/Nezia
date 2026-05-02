@@ -91,11 +91,6 @@ impl AudioBufferPool {
         Some(id.index)
     }
 
-    /// ハンドルが有効か確認する。
-    pub fn contains(&self, id: BufferId) -> bool {
-        self.resolve(id).is_some()
-    }
-
     fn allocate_slot(&mut self) -> (u32, u32) {
         if let Some(index) = self.free_list.pop() {
             let generation = self.slots[index as usize].generation;

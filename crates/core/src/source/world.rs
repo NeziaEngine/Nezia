@@ -30,12 +30,11 @@ impl Default for SourceComponent {
 }
 
 /// Source の再生状態。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceState {
     /// 再生中。
     Playing,
-    /// 未使用（スロットは確保されているが再生していない）。
-    Free,
     /// 一時停止中。再開可能。
     Pausing,
     /// 停止済み。次の update で despawn される。
@@ -75,6 +74,7 @@ impl Default for SourceWorld {
     }
 }
 
+#[allow(dead_code)]
 impl SourceWorld {
     pub fn new() -> Self {
         Self {
@@ -197,10 +197,6 @@ impl SourceWorld {
         }
     }
 
-    pub fn audio_buffer_index(&self, id: EntityId) -> Option<u32> {
-        self.resolve(id).map(|i| self.audio_buffer_index[i])
-    }
-
     pub fn state(&self, id: EntityId) -> Option<SourceState> {
         self.resolve(id).map(|i| self.state[i])
     }
@@ -214,16 +210,6 @@ impl SourceWorld {
         }
     }
 
-    /// ミキシングに必要な全スライスを同時に返す。
-    pub fn mixing_slices(&mut self) -> (&[f32], &[f32], &mut [f32], &[u32]) {
-        (
-            &self.vol,
-            &self.pitch,
-            &mut self.sample_offset,
-            &self.audio_buffer_index,
-        )
-    }
-
     // ── 一括アクセス（密配列スライス） ──
 
     pub fn vols(&self) -> &[f32] {
@@ -232,34 +218,6 @@ impl SourceWorld {
 
     pub fn vols_mut(&mut self) -> &mut [f32] {
         &mut self.vol
-    }
-
-    pub fn pitches(&self) -> &[f32] {
-        &self.pitch
-    }
-
-    pub fn pitches_mut(&mut self) -> &mut [f32] {
-        &mut self.pitch
-    }
-
-    pub fn sample_offsets(&self) -> &[f32] {
-        &self.sample_offset
-    }
-
-    pub fn sample_offsets_mut(&mut self) -> &mut [f32] {
-        &mut self.sample_offset
-    }
-
-    pub fn audio_buffer_indices(&self) -> &[u32] {
-        &self.audio_buffer_index
-    }
-
-    pub fn states(&self) -> &[SourceState] {
-        &self.state
-    }
-
-    pub fn states_mut(&mut self) -> &mut [SourceState] {
-        &mut self.state
     }
 
     /// 密配列インデックスを指定して Source を削除する（swap-remove）。

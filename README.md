@@ -1,6 +1,6 @@
 # NEZIA ENGINE
 
-![img.png](img.png)
+![img.png](logo.png)
 
 データ指向設計によるサウンドミドルウェアライブラリ（Rust）。
 

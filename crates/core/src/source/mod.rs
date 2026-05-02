@@ -4,7 +4,7 @@ mod world;
 
 pub use lifecycle::SourceLifecycleSystem;
 pub use system::SourceMixingSystem;
-pub use world::{SourceComponent, SourceState, SourceWorld};
+pub use world::{SourceComponent, SourceWorld};
 
 /// 最大同時発音数。
 pub const MAX_SOURCES: usize = 256;
@@ -12,6 +12,7 @@ pub const MAX_SOURCES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::world::SourceState;
 
     #[test]
     fn spawn_and_access() {

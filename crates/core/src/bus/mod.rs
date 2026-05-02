@@ -185,8 +185,8 @@ mod tests {
         world.clear_mix_buffers(sample_count);
         {
             let buf = world.mix_buffer_mut();
-            for i in 0..sample_count {
-                buf[i] = 1.0;
+            for s in buf.iter_mut().take(sample_count) {
+                *s = 1.0;
             }
         }
 
@@ -209,8 +209,8 @@ mod tests {
         world.clear_mix_buffers(sample_count);
         {
             let buf = world.mix_buffer_mut();
-            for i in 0..sample_count {
-                buf[i] = 1.0;
+            for s in buf.iter_mut().take(sample_count) {
+                *s = 1.0;
             }
         }
 

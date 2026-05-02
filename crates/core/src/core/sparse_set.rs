@@ -24,6 +24,7 @@ struct SparseEntry {
     generation: u32,
 }
 
+#[allow(dead_code)]
 impl SparseSet {
     /// 指定キャパシティでスパースセットを生成する。
     pub fn new(capacity: usize) -> Self {

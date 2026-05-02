@@ -39,6 +39,7 @@ pub struct BusWorld {
     master_entity: EntityId,
 }
 
+#[allow(dead_code)]
 impl BusWorld {
     /// BusWorld を生成し、マスターバスを挿入した状態で返す。
     ///
@@ -159,10 +160,6 @@ impl BusWorld {
         self.entities.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entities.is_empty()
-    }
-
     // ── 個別アクセサ ──
 
     pub fn gain(&self, id: EntityId) -> Option<f32> {
@@ -212,11 +209,6 @@ impl BusWorld {
 
     // ── ミキシングバッファ ──
 
-    /// バスの mix_buffer のストライド（バスあたりのサンプル数）。
-    pub fn bus_stride(&self) -> usize {
-        MAX_MIX_BUFFER_SIZE
-    }
-
     /// フラット mix_buffer への可変参照。SourceMixingSystem::update() に渡す用。
     pub fn mix_buffer_mut(&mut self) -> &mut [f32] {
         &mut self.mix_buffer
@@ -232,23 +224,6 @@ impl BusWorld {
         }
     }
 
-    // ── 密配列スライス（テスト・デバッグ用）──
-
-    pub fn gains(&self) -> &[f32] {
-        &self.gain
-    }
-
-    pub fn muteds(&self) -> &[bool] {
-        &self.muted
-    }
-
-    pub fn output_bus_denses(&self) -> &[u32] {
-        &self.output_bus_dense
-    }
-
-    pub fn process_order(&self) -> &[u32] {
-        &self.process_order
-    }
 }
 
 impl Default for BusWorld {

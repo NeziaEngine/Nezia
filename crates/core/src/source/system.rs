@@ -19,6 +19,7 @@ impl SourceMixingSystem {
     /// 再生が完了した Source は自動的に despawn される。
     ///
     /// `bus_mix_buffer` は呼び出し前にゼロクリアされている前提。
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         world: &mut SourceWorld,
         spatial: &mut SpatialWorld,

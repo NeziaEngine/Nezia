@@ -8,7 +8,7 @@ use super::world::{SourceState, SourceWorld};
 
 /// Source ライフサイクル管理システム。
 ///
-/// 再生が完了した・停止済み・Free 状態の Source を検出し、
+/// 再生が完了した・停止済みの Source を検出し、
 /// `SourceWorld` と `SpatialWorld` から一括 despawn する。
 /// `SourceMixingSystem` のミキシングとは責務を分離している。
 pub struct SourceLifecycleSystem;
@@ -26,7 +26,7 @@ impl SourceLifecycleSystem {
     ) {
         for source_i in (0..world.vol.len()).rev() {
             let natural_finish = match world.state[source_i] {
-                SourceState::Stopped | SourceState::Free => false,
+                SourceState::Stopped => false,
                 SourceState::Playing => {
                     let buf_idx = world.audio_buffer_index[source_i] as usize;
                     match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
@@ -37,10 +37,7 @@ impl SourceLifecycleSystem {
                 SourceState::Pausing => false,
             };
             let should_despawn = natural_finish
-                || matches!(
-                    world.state[source_i],
-                    SourceState::Stopped | SourceState::Free
-                );
+                || matches!(world.state[source_i], SourceState::Stopped);
 
             if should_despawn {
                 if natural_finish {

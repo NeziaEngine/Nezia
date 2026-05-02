@@ -1,11 +1,7 @@
-[package]
-name = "nezia"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-arc-swap = "1.9.1"
-cpal = "0.17.3"
-ringbuf = "0.4.8"
-symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "vorbis"] }
-wide = "0.7"
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/daemon",
+    "crates/ffi"
+]
