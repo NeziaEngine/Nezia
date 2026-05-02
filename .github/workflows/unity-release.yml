@@ -120,9 +120,10 @@ jobs:
         if: matrix.kind == 'android'
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        # Unity Android は API 21+ をサポート。cargo-ndk が NDK のクロスリンカと
-        # sysroot を自動で設定する。
-        run: cargo ndk --target ${{ matrix.target }} --platform 21 -- build -p nezia-ffi --release
+        # cpal 0.17 が AAudio を直接リンクするため、libaaudio.so が sysroot に
+        # 存在する API 26 (Android 8.0) 以上でビルドする必要がある。
+        # 結果として Nezia の Android 最低サポートも API 26 となる。
+        run: cargo ndk --target ${{ matrix.target }} --platform 26 -- build -p nezia-ffi --release
 
       - name: Stage native artifact
         shell: bash
