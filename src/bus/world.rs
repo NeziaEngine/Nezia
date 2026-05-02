@@ -1,3 +1,4 @@
+use crate::core::sparse_set::SparseSet;
 use crate::entity::EntityId;
 
 use super::{MAX_BUSES, MAX_MIX_BUFFER_SIZE};
@@ -16,11 +17,8 @@ pub struct BusComponent {
 /// バスごとのコンポーネントを管理する。
 /// マスターバスは `new()` で自動生成され、EntityId は常に `(index: 0, generation: 0)`。
 pub struct BusWorld {
-    // ── 疎配列（sparse array）──
-    /// entity.index → 密配列インデックスへのマッピング。
-    pub(super) sparse: Vec<Option<SparseEntry>>,
-    /// 密配列インデックス → entity.index への逆マッピング。
-    dense_to_sparse: Vec<u32>,
+    // ── エンティティ管理 ──
+    entities: SparseSet,
 
     // ── 密配列（dense arrays / コンポーネント）──
     /// 音量倍率（0.0〜）。
@@ -29,10 +27,6 @@ pub struct BusWorld {
     pub(super) muted: Vec<bool>,
     /// 出力先バスの密配列インデックス。ホットループでの EntityId 解決を避けるため密配列インデックスで保持。
     pub(super) output_bus_dense: Vec<u32>,
-
-    // ── スロット管理 ──
-    free_list: Vec<u32>,
-    next_index: u32,
 
     // ── ミキシング ──
     /// フラットな中間ミキシングバッファ。
@@ -43,12 +37,6 @@ pub struct BusWorld {
 
     /// マスターバスの EntityId。
     master_entity: EntityId,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct SparseEntry {
-    pub(super) dense_index: u32,
-    pub(super) generation: u32,
 }
 
 impl BusWorld {
@@ -62,20 +50,18 @@ impl BusWorld {
         };
 
         let mut world = Self {
-            sparse: Vec::with_capacity(MAX_BUSES),
-            dense_to_sparse: Vec::with_capacity(MAX_BUSES),
+            entities: SparseSet::new(MAX_BUSES),
             gain: Vec::with_capacity(MAX_BUSES),
             muted: Vec::with_capacity(MAX_BUSES),
             output_bus_dense: Vec::with_capacity(MAX_BUSES),
-            free_list: Vec::with_capacity(MAX_BUSES),
-            next_index: 0,
             mix_buffer: vec![0.0; MAX_BUSES * MAX_MIX_BUFFER_SIZE],
             process_order: Vec::with_capacity(MAX_BUSES),
             master_entity,
         };
 
         // マスターバスを entity_index=0 で挿入。output_bus_dense=0（自己参照）。
-        world.insert_at(0, 1.0, 0);
+        world.insert_components(1.0, 0);
+        world.entities.alloc_at_index(0);
         // 初期 process_order: マスターバスのみ（dense index 0）。
         world.process_order.push(0);
 
@@ -89,45 +75,14 @@ impl BusWorld {
 
     /// EntityId を検証し、有効なら密配列インデックスを返す。
     pub(super) fn resolve(&self, id: EntityId) -> Option<usize> {
-        let entry = self.sparse.get(id.index as usize)?.as_ref()?;
-        if entry.generation != id.generation {
-            return None;
-        }
-        Some(entry.dense_index as usize)
+        self.entities.resolve(id)
     }
 
-    /// 内部: 指定した entity_index でバスを挿入する。
-    fn insert_at(&mut self, entity_index: u32, gain: f32, output_bus_dense_val: u32) -> EntityId {
-        let dense_index = self.gain.len() as u32;
-
-        if entity_index as usize >= self.sparse.len() {
-            self.sparse.resize(entity_index as usize + 1, None);
-        }
-
-        let generation = self.sparse[entity_index as usize]
-            .map(|e| e.generation)
-            .unwrap_or(0);
-
-        self.sparse[entity_index as usize] = Some(SparseEntry {
-            dense_index,
-            generation,
-        });
-
-        self.free_list.retain(|&i| i != entity_index);
-
-        if entity_index >= self.next_index {
-            self.next_index = entity_index + 1;
-        }
-
-        self.dense_to_sparse.push(entity_index);
+    /// コンポーネント密配列にデータを追加する（内部用）。
+    fn insert_components(&mut self, gain: f32, output_bus_dense_val: u32) {
         self.gain.push(gain);
         self.muted.push(false);
         self.output_bus_dense.push(output_bus_dense_val);
-
-        EntityId {
-            index: entity_index,
-            generation,
-        }
     }
 
     /// 指定した EntityId でバスを生成する（サウンドスレッド用）。
@@ -135,26 +90,28 @@ impl BusWorld {
     /// メインスレッドが EntityId を事前に決定し、コマンドで送ってきた場合に使用する。
     /// `MAX_BUSES` に達している場合は `false` を返す。
     pub fn spawn_with_id(&mut self, id: EntityId, params: BusComponent) -> bool {
-        if self.gain.len() >= MAX_BUSES {
+        self.insert_components(params.gain, params.output_bus_dense);
+        let Some((_id, _dense)) = self.entities.alloc_at_index(id.index) else {
+            // alloc 失敗時、push したコンポーネントを除去する。
+            self.gain.pop();
+            self.muted.pop();
+            self.output_bus_dense.pop();
             return false;
-        }
-        self.insert_at(id.index, params.gain, params.output_bus_dense);
+        };
         true
     }
 
     /// バスを生成し、EntityId を返す。
     pub fn spawn(&mut self, params: BusComponent) -> Option<EntityId> {
-        if self.gain.len() >= MAX_BUSES {
+        self.insert_components(params.gain, params.output_bus_dense);
+        let Some((id, _dense)) = self.entities.alloc() else {
+            // alloc 失敗時、push したコンポーネントを除去する。
+            self.gain.pop();
+            self.muted.pop();
+            self.output_bus_dense.pop();
             return None;
-        }
-        let entity_index = if let Some(reused) = self.free_list.pop() {
-            reused
-        } else {
-            let index = self.next_index;
-            self.next_index += 1;
-            index
         };
-        Some(self.insert_at(entity_index, params.gain, params.output_bus_dense))
+        Some(id)
     }
 
     /// バスを削除する（swap-remove）。
@@ -165,18 +122,10 @@ impl BusWorld {
         if id == self.master_entity {
             return false;
         }
-        let Some(dense_index) = self.resolve(id) else {
+        let Some(dense_index) = self.entities.dealloc(id) else {
             return false;
         };
         let last_dense = self.gain.len() - 1;
-
-        if let Some(entry) = &mut self.sparse[id.index as usize] {
-            *entry = SparseEntry {
-                dense_index: 0,
-                generation: entry.generation + 1,
-            };
-        }
-        self.free_list.push(id.index);
 
         for d in 0..self.output_bus_dense.len() {
             if self.output_bus_dense[d] == dense_index as u32 {
@@ -187,19 +136,12 @@ impl BusWorld {
         }
 
         if dense_index != last_dense {
-            let moved_sparse_index = self.dense_to_sparse[last_dense];
-            if let Some(entry) = &mut self.sparse[moved_sparse_index as usize] {
-                entry.dense_index = dense_index as u32;
-            }
-            self.dense_to_sparse[dense_index] = moved_sparse_index;
-
             let src_start = last_dense * MAX_MIX_BUFFER_SIZE;
             let dst_start = dense_index * MAX_MIX_BUFFER_SIZE;
             self.mix_buffer
                 .copy_within(src_start..src_start + MAX_MIX_BUFFER_SIZE, dst_start);
         }
 
-        self.dense_to_sparse.swap_remove(dense_index);
         self.gain.swap_remove(dense_index);
         self.muted.swap_remove(dense_index);
         self.output_bus_dense.swap_remove(dense_index);
@@ -209,16 +151,16 @@ impl BusWorld {
 
     /// EntityId が有効か確認する。
     pub fn contains(&self, id: EntityId) -> bool {
-        self.resolve(id).is_some()
+        self.entities.contains(id)
     }
 
     /// 現在のバス数（マスターバスを含む）。
     pub fn len(&self) -> usize {
-        self.gain.len()
+        self.entities.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.gain.is_empty()
+        self.entities.is_empty()
     }
 
     // ── 個別アクセサ ──

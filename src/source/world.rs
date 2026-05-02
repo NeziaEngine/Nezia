@@ -1,3 +1,4 @@
+use crate::core::sparse_set::SparseSet;
 use crate::entity::EntityId;
 
 use super::MAX_SOURCES;
@@ -48,11 +49,8 @@ pub enum SourceState {
 /// 各コンポーネント（vol, pitch, sample_offset）は独立した密配列に格納され、
 /// キャッシュ効率の高い一括処理が可能。
 pub struct SourceWorld {
-    // ── 疎配列（sparse array） ──
-    /// EntityId.index → 密配列インデックスへのマッピング。
-    sparse: Vec<Option<SparseEntry>>,
-    /// 密配列インデックス → EntityId.index への逆マッピング。
-    dense_to_sparse: Vec<u32>,
+    // ── エンティティ管理 ──
+    entities: SparseSet,
 
     // ── 密配列（dense arrays / コンポーネント） ──
     /// 音量（0.0〜1.0）。
@@ -69,16 +67,6 @@ pub struct SourceWorld {
     pub(super) output_bus: Vec<u32>,
     /// コールバックトークン。0 = コールバックなし。
     pub(super) token: Vec<u32>,
-
-    // ── スロット管理 ──
-    free_list: Vec<u32>,
-    next_index: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SparseEntry {
-    dense_index: u32,
-    generation: u32,
 }
 
 impl Default for SourceWorld {
@@ -90,8 +78,7 @@ impl Default for SourceWorld {
 impl SourceWorld {
     pub fn new() -> Self {
         Self {
-            sparse: Vec::with_capacity(MAX_SOURCES),
-            dense_to_sparse: Vec::with_capacity(MAX_SOURCES),
+            entities: SparseSet::new(MAX_SOURCES),
             vol: Vec::with_capacity(MAX_SOURCES),
             pitch: Vec::with_capacity(MAX_SOURCES),
             sample_offset: Vec::with_capacity(MAX_SOURCES),
@@ -99,8 +86,6 @@ impl SourceWorld {
             state: Vec::with_capacity(MAX_SOURCES),
             output_bus: Vec::with_capacity(MAX_SOURCES),
             token: Vec::with_capacity(MAX_SOURCES),
-            free_list: Vec::with_capacity(MAX_SOURCES),
-            next_index: 0,
         }
     }
 
@@ -108,34 +93,7 @@ impl SourceWorld {
     ///
     /// `MAX_SOURCES` に達している場合は `None` を返す。
     pub fn spawn(&mut self, params: SourceComponent) -> Option<EntityId> {
-        if self.vol.len() >= MAX_SOURCES {
-            return None;
-        }
-        let dense_index = self.vol.len() as u32;
-
-        let (index, generation) = if let Some(reused) = self.free_list.pop() {
-            let reused_gen = self.sparse[reused as usize]
-                .map(|e| e.generation)
-                .unwrap_or(0);
-            self.sparse[reused as usize] = Some(SparseEntry {
-                dense_index,
-                generation: reused_gen,
-            });
-            (reused, reused_gen)
-        } else {
-            let index = self.next_index;
-            self.next_index += 1;
-            if index as usize >= self.sparse.len() {
-                self.sparse.resize(index as usize + 1, None);
-            }
-            self.sparse[index as usize] = Some(SparseEntry {
-                dense_index,
-                generation: 0,
-            });
-            (index, 0)
-        };
-
-        self.dense_to_sparse.push(index);
+        let (id, _dense) = self.entities.alloc()?;
         self.vol.push(params.vol);
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
@@ -143,8 +101,7 @@ impl SourceWorld {
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
-
-        Some(EntityId { index, generation })
+        Some(id)
     }
 
     /// 事前割り当てされた EntityId を使って Source をスポーンする（3D ソース用）。
@@ -152,22 +109,9 @@ impl SourceWorld {
     /// 同じ index が既に使用中の場合は `false` を返す。
     /// メインスレッドが EntityId を事前発行し、`SpawnSource` コマンドで渡す想定。
     pub fn spawn_with_id(&mut self, id: EntityId, params: SourceComponent) -> bool {
-        if self.vol.len() >= MAX_SOURCES {
+        let Some(_dense) = self.entities.alloc_with_id(id) else {
             return false;
-        }
-        if id.index as usize >= self.sparse.len() {
-            self.sparse.resize(id.index as usize + 1, None);
-        }
-        if self.sparse[id.index as usize].is_some() {
-            return false;
-        }
-
-        let dense_index = self.vol.len() as u32;
-        self.sparse[id.index as usize] = Some(SparseEntry {
-            dense_index,
-            generation: id.generation,
-        });
-        self.dense_to_sparse.push(id.index);
+        };
         self.vol.push(params.vol);
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
@@ -175,48 +119,19 @@ impl SourceWorld {
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
-
-        // 内部 spawn() との index 衝突を防ぐ。
-        if id.index >= self.next_index {
-            self.next_index = id.index + 1;
-        }
-
         true
     }
 
     /// EntityId を検証し、有効なら密配列インデックスを返す。
     pub fn resolve(&self, id: EntityId) -> Option<usize> {
-        let entry = self.sparse.get(id.index as usize)?.as_ref()?;
-        if entry.generation != id.generation {
-            return None;
-        }
-        Some(entry.dense_index as usize)
+        self.entities.resolve(id)
     }
 
     /// Source を削除する（swap-remove）。
     pub fn despawn(&mut self, id: EntityId) -> bool {
-        let Some(dense_index) = self.resolve(id) else {
+        let Some(dense_index) = self.entities.dealloc(id) else {
             return false;
         };
-        let last_dense = self.vol.len() - 1;
-
-        if let Some(entry) = &mut self.sparse[id.index as usize] {
-            *entry = SparseEntry {
-                dense_index: 0,
-                generation: entry.generation + 1,
-            };
-        }
-        self.free_list.push(id.index);
-
-        if dense_index != last_dense {
-            let moved_sparse_index = self.dense_to_sparse[last_dense];
-            if let Some(entry) = &mut self.sparse[moved_sparse_index as usize] {
-                entry.dense_index = dense_index as u32;
-            }
-            self.dense_to_sparse[dense_index] = moved_sparse_index;
-        }
-
-        self.dense_to_sparse.swap_remove(dense_index);
         self.vol.swap_remove(dense_index);
         self.pitch.swap_remove(dense_index);
         self.sample_offset.swap_remove(dense_index);
@@ -224,22 +139,21 @@ impl SourceWorld {
         self.state.swap_remove(dense_index);
         self.output_bus.swap_remove(dense_index);
         self.token.swap_remove(dense_index);
-
         true
     }
 
     /// EntityId が有効か確認する。
     pub fn contains(&self, id: EntityId) -> bool {
-        self.resolve(id).is_some()
+        self.entities.contains(id)
     }
 
     /// 現在の Source 数。
     pub fn len(&self) -> usize {
-        self.vol.len()
+        self.entities.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.vol.is_empty()
+        self.entities.is_empty()
     }
 
     // ── 個別アクセス ──
@@ -353,29 +267,9 @@ impl SourceWorld {
     /// `SourceMixingSystem::update()` が再生終了した Source を直接削除するために使用する。
     /// 逆順で呼び出すこと（swap-remove のため後ろから消さないとインデックスがずれる）。
     pub(super) fn despawn_by_dense_index(&mut self, dense_index: usize) {
-        if dense_index >= self.vol.len() {
+        if !self.entities.dealloc_by_dense_index(dense_index) {
             return;
         }
-
-        let sparse_index = self.dense_to_sparse[dense_index];
-        if let Some(entry) = &mut self.sparse[sparse_index as usize] {
-            *entry = SparseEntry {
-                dense_index: 0,
-                generation: entry.generation + 1,
-            };
-        }
-        self.free_list.push(sparse_index);
-
-        let last_dense = self.vol.len() - 1;
-        if dense_index != last_dense {
-            let moved_sparse_index = self.dense_to_sparse[last_dense];
-            if let Some(entry) = &mut self.sparse[moved_sparse_index as usize] {
-                entry.dense_index = dense_index as u32;
-            }
-            self.dense_to_sparse[dense_index] = moved_sparse_index;
-        }
-
-        self.dense_to_sparse.swap_remove(dense_index);
         self.vol.swap_remove(dense_index);
         self.pitch.swap_remove(dense_index);
         self.sample_offset.swap_remove(dense_index);
