@@ -158,6 +158,13 @@ impl SourceWorld {
         self.looping.push(params.looping);
         self.priority.push(params.priority);
         self.is_virtual.push(false);
+        self.pre_chain.push(
+            [EffectId {
+                index: 0,
+                generation: 0,
+            }; MAX_EFFECTS_PER_SOURCE],
+        );
+        self.pre_count.push(0);
         true
     }
 
