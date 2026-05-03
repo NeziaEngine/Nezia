@@ -144,6 +144,14 @@ pub struct NeziaSourcePositionUpdate {
     pub position: NeziaVec3,
 }
 
+/// SP-10: `nezia_source_batch_set_velocities` の入力要素。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NeziaSourceVelocityUpdate {
+    pub source: NeziaEntityId,
+    pub velocity: NeziaVec3,
+}
+
 /// オーディオファイルのメタデータ（`nezia_audio_peek_metadata` の出力）。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

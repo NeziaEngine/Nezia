@@ -41,6 +41,10 @@ pub struct ListenerState {
     pub distance_focus_level: f32,
     /// SP-06: パンニング計算用の補間係数 `[0.0, 1.0]`。
     pub direction_focus_level: f32,
+
+    /// SP-10: リスナーの速度ベクトル（m/s）。Doppler 計算に使用。
+    /// 既定値 [0,0,0] では Doppler 効果は発生しない。
+    pub velocity: [f32; 3],
 }
 
 impl Default for ListenerState {
@@ -53,6 +57,7 @@ impl Default for ListenerState {
             focus_point: [0.0, 0.0, 0.0],
             distance_focus_level: 0.0,
             direction_focus_level: 0.0,
+            velocity: [0.0, 0.0, 0.0],
         }
     }
 }
@@ -138,14 +143,32 @@ pub struct SpatialWorld {
     pub(super) rolloff_factors: Vec<f32>,
     pub(super) spatial_enabled: Vec<bool>,
 
+    // ── SP-10 Doppler: 速度 SoA (m/s)。既定値は [0,0,0]（効果なし） ──
+    pub(super) velocities_x: Vec<f32>,
+    pub(super) velocities_y: Vec<f32>,
+    pub(super) velocities_z: Vec<f32>,
+    /// SP-10: ソースごとの Doppler 効果係数 `[0.0, 1.0]`（Unity `AudioSource.dopplerLevel` 互換）。
+    /// 0.0 で Doppler 無効、1.0 で完全適用。中間値は速度成分を線形スケール。
+    pub(super) doppler_levels: Vec<f32>,
+
     /// 事前計算済み L チャンネルゲイン（`SpatialSystem::compute_gains()` が書き込む）。
     pub left_gains: Vec<f32>,
     /// 事前計算済み R チャンネルゲイン（`SpatialSystem::compute_gains()` が書き込む）。
     pub right_gains: Vec<f32>,
+    /// SP-10: 事前計算済み Doppler ピッチ倍率（`SpatialSystem::compute_gains()` が書き込む）。
+    /// `SourceMixingSystem` 側で `pitch * doppler_pitches[i]` を再生レートに反映する。
+    /// `spatial_enabled = false` または `doppler_level = 0.0` の場合は常に `1.0`。
+    pub doppler_pitches: Vec<f32>,
 
     /// リスナー（シングルトン）。
     pub listener: ListenerState,
+
+    /// SP-10: 媒質中の音速（m/s）。既定値 343.0（Unity 互換）。
+    pub sound_speed: f32,
 }
+
+/// 既定音速（m/s, 空気中・常温）。Unity `AudioSettings.speedOfSound` のデフォルトと一致。
+pub const DEFAULT_SOUND_SPEED: f32 = 343.0;
 
 impl Default for SpatialWorld {
     fn default() -> Self {
@@ -164,9 +187,15 @@ impl SpatialWorld {
             max_distances: Vec::with_capacity(MAX_SOURCES),
             rolloff_factors: Vec::with_capacity(MAX_SOURCES),
             spatial_enabled: Vec::with_capacity(MAX_SOURCES),
+            velocities_x: Vec::with_capacity(MAX_SOURCES),
+            velocities_y: Vec::with_capacity(MAX_SOURCES),
+            velocities_z: Vec::with_capacity(MAX_SOURCES),
+            doppler_levels: Vec::with_capacity(MAX_SOURCES),
             left_gains: Vec::with_capacity(MAX_SOURCES),
             right_gains: Vec::with_capacity(MAX_SOURCES),
+            doppler_pitches: Vec::with_capacity(MAX_SOURCES),
             listener: ListenerState::default(),
+            sound_speed: DEFAULT_SOUND_SPEED,
         }
     }
 
@@ -183,8 +212,13 @@ impl SpatialWorld {
         self.max_distances.push(500.0);
         self.rolloff_factors.push(1.0);
         self.spatial_enabled.push(false);
+        self.velocities_x.push(0.0);
+        self.velocities_y.push(0.0);
+        self.velocities_z.push(0.0);
+        self.doppler_levels.push(1.0);
         self.left_gains.push(0.0);
         self.right_gains.push(0.0);
+        self.doppler_pitches.push(1.0);
     }
 
     /// `SourceWorld` がデスポーンしたタイミングで呼び出す（swap-remove）。
@@ -200,8 +234,13 @@ impl SpatialWorld {
         self.max_distances.swap_remove(dense_index);
         self.rolloff_factors.swap_remove(dense_index);
         self.spatial_enabled.swap_remove(dense_index);
+        self.velocities_x.swap_remove(dense_index);
+        self.velocities_y.swap_remove(dense_index);
+        self.velocities_z.swap_remove(dense_index);
+        self.doppler_levels.swap_remove(dense_index);
         self.left_gains.swap_remove(dense_index);
         self.right_gains.swap_remove(dense_index);
+        self.doppler_pitches.swap_remove(dense_index);
     }
 
     // ── 空間コンポーネント setter ──
@@ -231,5 +270,25 @@ impl SpatialWorld {
         self.positions_x[dense_index] = position[0];
         self.positions_y[dense_index] = position[1];
         self.positions_z[dense_index] = position[2];
+    }
+
+    /// SP-10: ソースの速度ベクトル (m/s) を設定する（密配列インデックスで指定）。
+    pub fn set_velocity(&mut self, dense_index: usize, velocity: [f32; 3]) {
+        self.velocities_x[dense_index] = velocity[0];
+        self.velocities_y[dense_index] = velocity[1];
+        self.velocities_z[dense_index] = velocity[2];
+    }
+
+    /// SP-10: ソースの Doppler レベル `[0.0, 1.0]` を設定する。
+    /// 値域外は内部でクランプされる。
+    pub fn set_doppler_level(&mut self, dense_index: usize, level: f32) {
+        self.doppler_levels[dense_index] = level.clamp(0.0, 1.0);
+    }
+
+    /// SP-10: 媒質中の音速 (m/s) を設定する。0 以下の値は無視される。
+    pub fn set_sound_speed(&mut self, speed: f32) {
+        if speed > 0.0 {
+            self.sound_speed = speed;
+        }
     }
 }

@@ -680,38 +680,73 @@ ListenerState:                      48B（right フィールド追加後）
 
 ## ドップラー効果（SP-10）
 
-> **ステータス: 将来対応**
+> **ステータス: 実装済み**
 
-### 基本式
+### 基本式（OpenAL / 一般物理学準拠）
 
 ```
-f_observed = f_source × (v_sound + v_listener) / (v_sound + v_source)
+f_obs / f_src = (c + v_l_toward) / (c - v_s_toward)
 ```
 
-- `v_sound` = 340.0 m/s（空気中の音速、設定可能）
-- `v_listener` = リスナーの接近速度（正 = 近づく）
-- `v_source` = ソースの接近速度（正 = 近づく）
+- `c` = 媒質中の音速 (m/s)。既定値 343.0（Unity `AudioSettings.speedOfSound` と一致）。`SoundEngine::set_sound_speed()` で変更可能。
+- `v_l_toward` = リスナー速度のうち「source → listener 方向ではなく listener → source 方向」成分。**正で接近、負で離反**。
+- `v_s_toward` = ソース速度の listener 方向成分。**正で接近、負で離反**。
 
-### 追加コンポーネント
+`v_*_toward` は `dot(v, normalize(source - listener))` の符号付き射影として求める。
+
+### 追加された SoA フィールド
 
 ```rust
-// SourceWorld に追加
-velocities: Vec<[f32; 3]>,
+// SpatialWorld（既存の SoA 規則に従い完全分離）
+velocities_x: Vec<f32>,
+velocities_y: Vec<f32>,
+velocities_z: Vec<f32>,
+doppler_levels: Vec<f32>,    // [0.0, 1.0], Unity AudioSource.dopplerLevel 互換
+doppler_pitches: Vec<f32>,   // 出力: SourceMixingSystem が読み取る
 
-// ListenerState に追加
+// ListenerState
 velocity: [f32; 3],
 ```
 
-### ピッチへの反映
+### dopplerLevel による効果スケーリング（Unity 互換）
+
+各ソースに `doppler_level: f32 ∈ [0.0, 1.0]` を持つ。`v_l_toward` と `v_s_toward` の両方を `doppler_level` で線形スケールしてから式に代入する:
+
+- `0.0`: Doppler 完全無効（`f_obs / f_src = 1.0`）
+- `1.0`: 物理計算をそのまま適用（既定値）
+- 中間: 効果の強弱を調整
+
+### 出力経路と SourceMixingSystem への接続
+
+`SpatialSystem::compute_gains()` がフレームごとに各ソースの Doppler 倍率を計算して `doppler_pitches[i]` に書き込む。`SourceMixingSystem::update()` 側では:
 
 ```rust
-let doppler_pitch = compute_doppler(
-    source_velocity, listener_velocity,
-    source_position, listener_position,
-    sound_speed
-);
-effective_pitch = source.pitch * doppler_pitch;
+let advance = pitch * doppler_pitches[i] * rate_ratio;
 ```
+
+として再生レート（`sample_offset` の進み幅）に乗算する。`spatial_enabled = false` または `doppler_level = 0.0` の場合は常に `1.0` で素通し（最速経路）。
+
+### ピッチ倍率のクランプ
+
+数値発散を防ぐため `[0.5, 4.0]` で `clamp` する。具体的には:
+
+- 分母 `(c - v_s_toward * level) <= 0`（ソース超音速接近）→ 4.0 へ張り付き
+- 分子 `(c + v_l_toward * level) <= 0`（リスナー超音速離反）→ 0.5 へ張り付き
+
+これは Unity の `AudioSource.dopplerLevel` の効果幅とおおよそ一致する。
+
+### スレッド経路
+
+| データ | 経路 | API |
+|---|---|---|
+| リスナー速度（毎フレーム） | listener triple buffer に同居（pose と同 publish） | `set_listener_velocity(vel)` |
+| ソース速度（バッチ・毎フレーム） | 専用 triple buffer（positions と同パターン） | `batch_set_source_velocities(updates)` |
+| Doppler レベル（低頻度） | コマンド | `set_source_doppler_level(id, level)` |
+| 音速（極めて低頻度） | コマンド | `set_sound_speed(speed)` |
+
+### SIMD 化の現状
+
+距離・パンニングの SIMD パスは既存どおり `f32x4` で 4 並列。Doppler 計算は現状スカラーで、SIMD パス内でも `apply_doppler` を 4 回呼ぶ実装。`compute_gains` のホットループでは依然として `dx/dy/dz/dist` の SIMD 計算結果を活用しており、Doppler 単独のオーバーヘッドは小さい。Phase 5 で Source 大量並列時にプロファイルした上で Doppler の完全 SIMD 化を判断する。
 
 ---
 

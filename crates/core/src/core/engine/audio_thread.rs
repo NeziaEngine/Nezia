@@ -6,7 +6,7 @@ use ringbuf::traits::{Consumer, Producer};
 use crate::audio::AudioBuffer;
 use crate::bus::{BusComponent, BusSystem, BusWorld};
 use crate::command::Command;
-use crate::entity::{EntityId, SourcePositionUpdate};
+use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{
     SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceState, SourceWorld,
@@ -25,6 +25,7 @@ pub(super) struct AudioThread {
     event_producer: ringbuf::HeapProd<Event>,
     listener_output: triple_buffer::Output<ListenerState>,
     position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
+    velocity_updates_output: triple_buffer::Output<Vec<SourceVelocityUpdate>>,
     source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
     bus_world: BusWorld,
     source_world: SourceWorld,
@@ -45,6 +46,7 @@ impl AudioThread {
         event_producer: ringbuf::HeapProd<Event>,
         listener_output: triple_buffer::Output<ListenerState>,
         position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
+        velocity_updates_output: triple_buffer::Output<Vec<SourceVelocityUpdate>>,
         source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
         bus_world: BusWorld,
         source_world: SourceWorld,
@@ -60,6 +62,7 @@ impl AudioThread {
             event_producer,
             listener_output,
             position_updates_output,
+            velocity_updates_output,
             source_snapshots_input,
             bus_world,
             source_world,
@@ -98,16 +101,26 @@ impl AudioThread {
             // SP-06: フォーカス系フィールドは Command で管理しているため
             // pose（位置・向き）のみを反映する。直接代入すると triple buffer
             // 入力側に残っているデフォルト focus 値で上書きされてしまう。
+            // SP-10: velocity も入力側で publish される最新値をそのまま反映する。
             let pose = self.listener_output.output_buffer_mut();
             self.spatial_world
                 .listener
                 .update(pose.position, pose.forward, pose.up);
+            self.spatial_world.listener.velocity = pose.velocity;
         }
         if self.position_updates_output.update() {
             let updates = self.position_updates_output.output_buffer_mut();
             for update in updates.iter() {
                 if let Some(dense) = self.source_world.resolve(update.source) {
                     self.spatial_world.set_position(dense, update.position);
+                }
+            }
+        }
+        if self.velocity_updates_output.update() {
+            let updates = self.velocity_updates_output.output_buffer_mut();
+            for update in updates.iter() {
+                if let Some(dense) = self.source_world.resolve(update.source) {
+                    self.spatial_world.set_velocity(dense, update.velocity);
                 }
             }
         }
@@ -361,6 +374,14 @@ fn process_command(
                 distance_focus_level,
                 direction_focus_level,
             );
+        }
+        Command::SetSourceDopplerLevel { id, level } => {
+            if let Some(dense) = source_world.resolve(id) {
+                spatial_world.set_doppler_level(dense, level);
+            }
+        }
+        Command::SetSoundSpeed { speed } => {
+            spatial_world.set_sound_speed(speed);
         }
 
         // ── ライブソース制御 ──

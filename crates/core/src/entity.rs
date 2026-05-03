@@ -24,3 +24,14 @@ pub struct SourcePositionUpdate {
     pub source: EntityId,
     pub position: [f32; 3],
 }
+
+/// SP-10: `batch_set_source_velocities()` の入力要素。
+///
+/// `#[repr(C)]` で固定レイアウトとし、FFI 層の `NeziaSourceVelocityUpdate` と
+/// バイト並びを一致させる。
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SourceVelocityUpdate {
+    pub source: EntityId,
+    pub velocity: [f32; 3],
+}
