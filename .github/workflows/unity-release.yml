@@ -15,6 +15,15 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # docs / メタファイルのみの変更ではビルドを走らせない。
+    # tag push にも適用されるが、リリースタグは通常コード変更を伴うので問題なし。
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE*"
+      - ".gitignore"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
   workflow_dispatch:
     inputs:
       dry_run:
