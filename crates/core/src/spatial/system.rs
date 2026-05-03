@@ -1,4 +1,4 @@
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+use std::f32::consts::FRAC_PI_4;
 
 use wide::f32x4;
 
@@ -131,10 +131,16 @@ fn apply_gains(
         world.rolloff_factors[i],
     );
 
-    // アジマス角 → イコールパワーパン。
-    let azimuth = local_x.atan2(local_z);
-    let pan_angle = azimuth.clamp(-FRAC_PI_2, FRAC_PI_2);
-    let pan = pan_angle / FRAC_PI_2; // -1.0(左) 〜 1.0(右)
+    // 水平面投影ベクトルの sin(azimuth) を直接パン値に使う。
+    // 真前/真後ろで pan=0、真横で pan=±1。後方半球では真後ろに向かって滑らかにセンターへ戻る。
+    // 前後の区別は付かない（前後混同）が、これは HRTF を導入するまでステレオでは原理的に解消できない。
+    // 旧実装の atan2 + clamp は真後ろで full L↔R の不連続を生み、後方半球が常に飽和していた。
+    let horiz = (local_x * local_x + local_z * local_z).sqrt();
+    let pan = if horiz > 0.0 {
+        (local_x / horiz).clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
     let angle = (pan + 1.0) * FRAC_PI_4;
 
     let base = vol * dist_gain;
