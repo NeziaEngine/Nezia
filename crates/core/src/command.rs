@@ -80,6 +80,15 @@ pub enum Command {
     /// ソースの空間演算を有効化・無効化する。
     SetSourceSpatialEnabled { id: EntityId, enabled: bool },
 
+    /// SP-06: リスナーフォーカスを設定する（変更時のみ送信）。
+    /// `*_focus_level` は内部で `[0.0, 1.0]` にクランプされる。
+    /// 0.0 でフォーカス無効（リスナー位置のみ使用）。
+    SetListenerFocus {
+        focus_point: [f32; 3],
+        distance_focus_level: f32,
+        direction_focus_level: f32,
+    },
+
     // ── ライブソース制御（spawn 後の挙動変更） ──
     /// ソースの音量を設定する。
     SetSourceVolume { id: EntityId, vol: f32 },

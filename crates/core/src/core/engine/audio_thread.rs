@@ -84,7 +84,13 @@ impl AudioThread {
         // commands の後にやることで、spawn と同フレームで publish された
         // 位置も resolve に成功する（順序は spawn → 位置適用）。
         if self.listener_output.update() {
-            self.spatial_world.listener = *self.listener_output.output_buffer_mut();
+            // SP-06: フォーカス系フィールドは Command で管理しているため
+            // pose（位置・向き）のみを反映する。直接代入すると triple buffer
+            // 入力側に残っているデフォルト focus 値で上書きされてしまう。
+            let pose = self.listener_output.output_buffer_mut();
+            self.spatial_world
+                .listener
+                .update(pose.position, pose.forward, pose.up);
         }
         if self.position_updates_output.update() {
             let updates = self.position_updates_output.output_buffer_mut();
@@ -267,6 +273,17 @@ fn process_command(
             if let Some(dense) = source_world.resolve(id) {
                 spatial_world.set_enabled(dense, enabled);
             }
+        }
+        Command::SetListenerFocus {
+            focus_point,
+            distance_focus_level,
+            direction_focus_level,
+        } => {
+            spatial_world.listener.set_focus(
+                focus_point,
+                distance_focus_level,
+                direction_focus_level,
+            );
         }
 
         // ── ライブソース制御 ──

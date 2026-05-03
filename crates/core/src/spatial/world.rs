@@ -19,6 +19,10 @@ pub enum AttenuationModel {
 ///
 /// `right` は `forward` と `up` から派生する。
 /// `update()` を呼ぶと同時に再計算される。
+///
+/// SP-06: フォーカスポイント補間係数を持つ。距離減衰用とパンニング用で
+/// 独立した補間係数を取り、空間演算では仮想リスナー位置
+/// `lerp(position, focus_point, *_focus_level)` を使用する。
 #[derive(Clone, Copy)]
 pub struct ListenerState {
     pub position: [f32; 3],
@@ -28,6 +32,15 @@ pub struct ListenerState {
     pub up: [f32; 3],
     /// 派生値: `normalize(cross(forward, up))`。`update()` 時に自動更新。
     pub right: [f32; 3],
+
+    /// SP-06: フォーカスポイント（ワールド空間）。
+    /// `*_focus_level` が 0 の場合は使用されない。
+    pub focus_point: [f32; 3],
+    /// SP-06: 距離減衰計算用の補間係数 `[0.0, 1.0]`。
+    /// 0.0 でリスナー位置のみ使用、1.0 でフォーカス点完全採用。
+    pub distance_focus_level: f32,
+    /// SP-06: パンニング計算用の補間係数 `[0.0, 1.0]`。
+    pub direction_focus_level: f32,
 }
 
 impl Default for ListenerState {
@@ -37,18 +50,56 @@ impl Default for ListenerState {
             forward: [0.0, 0.0, -1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
+            focus_point: [0.0, 0.0, 0.0],
+            distance_focus_level: 0.0,
+            direction_focus_level: 0.0,
         }
     }
 }
 
 impl ListenerState {
     /// リスナーの位置・向きを更新する。`right` は自動計算される。
+    /// フォーカスポイント関連フィールドは変更しない。
     pub fn update(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) {
         self.position = position;
         self.forward = vec3_normalize(forward);
         self.up = vec3_normalize(up);
         self.right = vec3_normalize(vec3_cross(self.forward, self.up));
     }
+
+    /// SP-06: フォーカスポイントと補間係数を設定する。
+    /// 補間係数は `[0.0, 1.0]` にクランプされる。
+    pub fn set_focus(
+        &mut self,
+        focus_point: [f32; 3],
+        distance_focus_level: f32,
+        direction_focus_level: f32,
+    ) {
+        self.focus_point = focus_point;
+        self.distance_focus_level = distance_focus_level.clamp(0.0, 1.0);
+        self.direction_focus_level = direction_focus_level.clamp(0.0, 1.0);
+    }
+
+    /// SP-06: 距離減衰計算に使う仮想リスナー位置を返す。
+    #[inline]
+    pub fn virtual_position_for_distance(&self) -> [f32; 3] {
+        lerp3(self.position, self.focus_point, self.distance_focus_level)
+    }
+
+    /// SP-06: パンニング計算に使う仮想リスナー位置を返す。
+    #[inline]
+    pub fn virtual_position_for_direction(&self) -> [f32; 3] {
+        lerp3(self.position, self.focus_point, self.direction_focus_level)
+    }
+}
+
+#[inline]
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
 }
 
 pub(super) fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

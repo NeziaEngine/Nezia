@@ -19,6 +19,7 @@
 | SP-03 | リスナー管理 | 位置・向き・上方ベクトルの設定 |
 | SP-04 | 減衰モデル選択 | ソースごとに減衰モデルを選択可能 |
 | SP-05 | 有効/無効切替 | ソースごとに空間演算を ON/OFF できる |
+| SP-06 | リスナーフォーカス | 距離減衰／パンニングを別座標で計算する補助点と補間係数 |
 
 ### 拡張機能（将来）
 
@@ -84,6 +85,145 @@ pub struct ListenerState {
 ```
 
 マルチリスナー（分割画面など）は将来対応とし、MVP ではサポートしない。
+
+---
+
+## リスナーフォーカス（SP-06）
+
+### 動機
+
+「カメラはプレイヤーの背後にあるが、サウンドはプレイヤーの位置基準で鳴らしたい」「カメラから離れた位置にあるオブジェクトの音を、カメラ寄りに引き寄せて聞かせたい」といった用途で、**距離減衰やパンニングをリスナー位置とは別の座標で計算したい**という要求がある。
+
+CRI ADX の `criAtomEx3dListener_SetDistanceFactor` / 同 `SetFocusPoint` 系 API と同様に、リスナーに**フォーカスポイント**と**補間係数**を持たせ、空間演算に用いる「仮想リスナー位置」を `lerp(listener, focus_point, level)` で導出する。
+
+距離減衰用とパンニング（定位）用で**独立した補間係数**を持たせることで、たとえば「距離はカメラ基準、定位はキャラクター基準」といった分離も可能にする。
+
+### 仮想リスナー位置の導出
+
+```
+virtual_pos_for_distance = lerp(listener.position, listener.focus_point, listener.distance_focus_level)
+virtual_pos_for_panning  = lerp(listener.position, listener.focus_point, listener.direction_focus_level)
+```
+
+- `*_focus_level` は `[0.0, 1.0]` 範囲の `f32`。`0.0` で従来動作（リスナー位置をそのまま使用）、`1.0` でフォーカスポイント完全採用。
+- 補間係数はクランプして適用する（範囲外指定時は端で打ち止め）。
+- `forward` / `up` / `right` 基底は仮想位置に**移動しない**（リスナーの向きはそのまま）。仮想リスナーは「位置だけずらした聴取点」として扱う。
+
+### 振る舞い
+
+| `distance_focus_level` | `direction_focus_level` | 効果 |
+|------------------------|-------------------------|------|
+| 0.0 | 0.0 | 従来動作（リスナー位置のみ使用） |
+| 1.0 | 1.0 | 完全にフォーカスポイント基準で聴く |
+| 1.0 | 0.0 | 距離はフォーカス点基準、定位はリスナー基準 |
+| 0.0 | 1.0 | 距離はリスナー基準、定位はフォーカス点基準 |
+| 0.5 | 0.5 | リスナーとフォーカス点の中間（ユーザー例） |
+
+### コンポーネント設計
+
+`ListenerState` を以下のとおり拡張する。
+
+```rust
+pub struct ListenerState {
+    pub position: [f32; 3],
+    pub forward:  [f32; 3],
+    pub up:       [f32; 3],
+    pub right:    [f32; 3],
+
+    // SP-06: フォーカスポイント
+    pub focus_point:           [f32; 3],   // ワールド空間の補助点
+    pub distance_focus_level:  f32,        // [0.0, 1.0]、距離減衰用補間係数
+    pub direction_focus_level: f32,        // [0.0, 1.0]、パンニング用補間係数
+}
+```
+
+デフォルト値:
+
+| フィールド | デフォルト | 意味 |
+|-----------|-----------|------|
+| `focus_point` | `[0.0, 0.0, 0.0]` | 任意（`*_focus_level = 0.0` なら未使用） |
+| `distance_focus_level` | `0.0` | フォーカス無効（後方互換） |
+| `direction_focus_level` | `0.0` | フォーカス無効（後方互換） |
+
+### 処理フローへの組み込み
+
+`SourceSystem::update()` のループ前にフレーム頭で**一度だけ**仮想位置を計算してキャッシュする。ソース毎に `lerp` を実行する必要はない。
+
+```rust
+// 各サウンドコールバック冒頭、コマンドドレイン直後に 1 回だけ
+let vpos_dist = lerp3(listener.position, listener.focus_point, listener.distance_focus_level);
+let vpos_pan  = lerp3(listener.position, listener.focus_point, listener.direction_focus_level);
+
+for each active source:
+  // 距離減衰には vpos_dist、パンニングには vpos_pan を使う
+  dist = distance(source.position, vpos_dist);
+  ...
+  let dir = source.position - vpos_pan;
+  let local_x = dot(dir, listener.right);
+  let local_z = dot(dir, listener.forward);
+  ...
+```
+
+両 level が `0.0` の場合は `vpos_dist == vpos_pan == listener.position` となり、従来動作と完全一致する（追加コストはフレームあたり `lerp3` × 2 のみ）。
+
+### コマンド拡張
+
+リスナー本体は毎フレーム更新されるため `SetListener` に統合せず、**フォーカスは独立コマンド**として分離する。フォーカスは UI/カメラ演出など低頻度で変化するパラメータが想定され、毎フレーム送る必要がないため。
+
+```rust
+pub enum Command {
+    // ... 既存 ...
+
+    /// リスナーフォーカスを設定する（変更時のみ送信）。
+    /// level は内部で [0.0, 1.0] にクランプされる。
+    SetListenerFocus {
+        focus_point:           [f32; 3],
+        distance_focus_level:  f32,
+        direction_focus_level: f32,
+    },
+}
+```
+
+### SoundEngine API
+
+```rust
+impl SoundEngine {
+    /// リスナーフォーカスを設定する。
+    /// `*_focus_level = 0.0` でフォーカス無効（リスナー位置のみ使用）。
+    /// 値は内部で [0.0, 1.0] にクランプされる。
+    pub fn set_listener_focus(
+        &self,
+        focus_point: [f32; 3],
+        distance_focus_level: f32,
+        direction_focus_level: f32,
+    );
+}
+```
+
+使用例:
+
+```rust
+// カメラはプレイヤー背後、聴取点はプレイヤー寄りに 70% 引き寄せる
+engine.set_listener(camera.pos, camera.forward, camera.up);
+engine.set_listener_focus(player.pos, 0.7, 0.7);
+
+// 距離はカメラ基準のまま、定位だけプレイヤー基準にしたい（TPS 演出）
+engine.set_listener_focus(player.pos, 0.0, 1.0);
+
+// フォーカス解除
+engine.set_listener_focus([0.0; 3], 0.0, 0.0);
+```
+
+### 後方互換性
+
+- 既存の `SetListener` コマンドおよび `set_listener()` API は変更しない。
+- `ListenerState` 初期化時に `*_focus_level = 0.0` とすることで、`set_listener_focus` を一度も呼ばないユースケースは従来動作を維持する。
+
+### 設計上の判断
+
+- **マルチフォーカスポイントは持たない**: ADX の挙動と整合させ、リスナー 1 体につきフォーカス点 1 個に限定する。複雑化を避け、MVP の範囲を抑える。
+- **`forward` / `up` を補間しない**: 仮想リスナーは「位置のみ移動した同一聴取者」とする。回転までブレンドすると意味論が曖昧になり、`right` 再計算もホットループ内に戻ってしまう。
+- **マルチリスナー未対応との関係**: SP-06 はシングルリスナーの拡張として閉じる。マルチリスナー対応時は各リスナーが独立にフォーカスを持つ設計に拡張する。
 
 ---
 
@@ -597,6 +737,7 @@ Phase 1 (MVP)
   └─ SP-03 リスナー管理
   └─ SP-04 減衰モデル選択
   └─ SP-05 有効/無効切替
+  └─ SP-06 リスナーフォーカス
 
 Phase 2
   └─ SP-10 ドップラー効果
