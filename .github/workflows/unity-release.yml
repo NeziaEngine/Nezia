@@ -167,9 +167,9 @@ jobs:
           fi
           echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
           echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
-          # PR ブランチ名: コミット SHA を入れて衝突回避。
+          # PR ブランチ名は固定。既存 PR があれば追記コミットで更新する運用。
           short_sha="${GITHUB_SHA::7}"
-          echo "pr_branch=automation/nezia-core-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "pr_branch=automation/nezia-core" >> "$GITHUB_OUTPUT"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout source repo (for commit metadata)
@@ -184,6 +184,23 @@ jobs:
           token: ${{ secrets.NEZIA_UNITY_PR_TOKEN }}
           path: target
           ref: ${{ steps.cfg.outputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Switch to PR branch (existing or new)
+        shell: bash
+        working-directory: target
+        run: |
+          set -euo pipefail
+          branch="${{ steps.cfg.outputs.pr_branch }}"
+          base="${{ steps.cfg.outputs.base_branch }}"
+          git fetch origin "$branch" || true
+          if git rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
+            echo "existing branch found, appending commits"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            echo "no existing branch, branching from $base"
+            git checkout -B "$branch" "origin/$base"
+          fi
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -233,41 +250,72 @@ jobs:
             echo "built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > "$pkg/VERSION.txt"
 
-      - name: Create Pull Request
-        id: cpr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          path: target
-          token: ${{ secrets.NEZIA_UNITY_PR_TOKEN }}
-          base: ${{ steps.cfg.outputs.base_branch }}
-          branch: ${{ steps.cfg.outputs.pr_branch }}
-          commit-message: |
-            chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}
+      - name: Commit & push (no force)
+        id: push
+        shell: bash
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git config user.name  "nezia-core-bot"
+          git config user.email "nezia-core-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}
 
-            source: ${{ github.repository }}@${{ github.sha }}
-          title: "chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}"
-          body: |
-            Automated update of `nezia-core` native plugins and C# bindings.
+          source: ${{ github.repository }}@${{ github.sha }}"
+          git push origin "${{ steps.cfg.outputs.pr_branch }}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
-            - **source repo**: `${{ github.repository }}`
-            - **source ref**: `${{ github.ref }}`
-            - **source sha**: `${{ github.sha }}`
+      - name: Open or update Pull Request
+        if: steps.push.outputs.changed == 'true'
+        id: pr
+        shell: bash
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ secrets.NEZIA_UNITY_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          branch="${{ steps.cfg.outputs.pr_branch }}"
+          base="${{ steps.cfg.outputs.base_branch }}"
+          title="chore: update nezia-core artifacts to ${{ steps.cfg.outputs.short_sha }}"
+          body=$(cat <<'EOF'
+          Automated update of `nezia-core` native plugins and C# bindings.
 
-            ### Included artifacts
-            - `${{ env.PLUGIN_SUBDIR }}/macOS/libnezia.dylib` (universal: arm64 + x86_64)
-            - `${{ env.PLUGIN_SUBDIR }}/Windows/x86_64/nezia.dll`
-            - `${{ env.PLUGIN_SUBDIR }}/Linux/x86_64/libnezia.so`
-            - `${{ env.PLUGIN_SUBDIR }}/iOS/libnezia.a` (arm64 device, static)
-            - `${{ env.PLUGIN_SUBDIR }}/Android/arm64-v8a/libnezia.so`
-            - `${{ env.PLUGIN_SUBDIR }}/Android/armeabi-v7a/libnezia.so`
-            - `Runtime/Generated/NeziaNative.g.cs`
-          labels: |
-            automation
-            nezia-core
-          delete-branch: true
+          - **source repo**: `${{ github.repository }}`
+          - **source ref**: `${{ github.ref }}`
+          - **source sha**: `${{ github.sha }}`
+
+          ### Included artifacts
+          - `${{ env.PLUGIN_SUBDIR }}/macOS/libnezia.dylib` (universal: arm64 + x86_64)
+          - `${{ env.PLUGIN_SUBDIR }}/Windows/x86_64/nezia.dll`
+          - `${{ env.PLUGIN_SUBDIR }}/Linux/x86_64/libnezia.so`
+          - `${{ env.PLUGIN_SUBDIR }}/iOS/libnezia.a` (arm64 device, static)
+          - `${{ env.PLUGIN_SUBDIR }}/Android/arm64-v8a/libnezia.so`
+          - `${{ env.PLUGIN_SUBDIR }}/Android/armeabi-v7a/libnezia.so`
+          - `Runtime/Generated/NeziaNative.g.cs`
+          EOF
+          )
+          existing=$(gh pr list --head "$branch" --state open --json number -q '.[0].number' || true)
+          if [ -z "$existing" ]; then
+            url=$(gh pr create --base "$base" --head "$branch" \
+              --title "$title" --body "$body" \
+              --label automation --label nezia-core)
+            number=$(gh pr view "$url" --json number -q '.number')
+          else
+            gh pr edit "$existing" --title "$title" --body "$body" >/dev/null
+            url=$(gh pr view "$existing" --json url -q '.url')
+            number="$existing"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
 
       - name: Summary
         if: always()
         run: |
-          echo "PR URL: ${{ steps.cpr.outputs.pull-request-url }}"
-          echo "PR Number: ${{ steps.cpr.outputs.pull-request-number }}"
+          echo "PR URL: ${{ steps.pr.outputs.url }}"
+          echo "PR Number: ${{ steps.pr.outputs.number }}"
+          echo "Changed: ${{ steps.push.outputs.changed }}"
