@@ -13,11 +13,14 @@
 //!   - シナリオ2: 音源がリスナーに接近 (距離減衰確認)
 //!   - シナリオ3: 4 減衰モデルの比較
 //!   - シナリオ4: リスナー回転
+//!   - シナリオ5: SP-10 Doppler (通過する救急車)
+//!   - シナリオ6: dopplerLevel 0.0 / 0.5 / 1.0 比較
+//!   - シナリオ7: リスナーが移動して Doppler 発生
 
 use std::thread;
 use std::time::Duration;
 
-use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate};
+use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate, SourceVelocityUpdate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");
@@ -181,8 +184,146 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = engine.stop_all();
     thread::sleep(Duration::from_millis(800));
 
-    // ─── シナリオ5: 大量バッチ ──────────────────
-    section("シナリオ5: batch_set_source_positions 33件 (triple buffer 経由)");
+    // ─── シナリオ5: Doppler 効果 (通過する救急車) ──────────────
+    section("シナリオ5: SP-10 Doppler (通過する救急車)");
+    println!("  ▶ ソースが正面奥 z=+30m から手前 z=-30m へ高速で通過");
+    println!("    接近時はピッチ↑、通過後はピッチ↓ (古典的なドップラー効果)");
+    println!("  ▶ 速度: -60 m/s (時速 216km 相当)、リスナーは原点に静止");
+
+    // リスナー姿勢を初期化（前のシナリオで回転していたため）
+    engine.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+    engine.set_listener_velocity([0.0, 0.0, 0.0]);
+
+    let src = engine
+        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .expect("play_with_handle");
+    let _ =
+        engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 60.0, 1.0);
+    let _ = engine.set_source_spatial_enabled(src, true);
+    let _ = engine.set_source_doppler_level(src, 1.0);
+
+    let speed = -60.0_f32; // m/s, -Z 方向
+    let total_secs = 4.0_f32;
+    let steps = 40;
+    let dt = total_secs / steps as f32;
+    for step in 0..=steps {
+        let t = step as f32 * dt;
+        let z = 30.0 + speed * t;
+        engine.batch_set_source_positions(&[SourcePositionUpdate {
+            source: src,
+            position: [0.0, 0.0, z],
+        }]);
+        engine.batch_set_source_velocities(&[SourceVelocityUpdate {
+            source: src,
+            velocity: [0.0, 0.0, speed],
+        }]);
+        let approaching = z > 0.0;
+        let arrow = if approaching { "→ →" } else { "← ←" };
+        print!(
+            "\r  z={z:+6.1}m  {arrow}  {} 通過",
+            if approaching {
+                "接近中"
+            } else {
+                "離反中"
+            }
+        );
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        thread::sleep(Duration::from_secs_f32(dt));
+    }
+    println!("\r  完了                                       ");
+    let _ = engine.stop_all();
+    thread::sleep(Duration::from_millis(800));
+
+    // ─── シナリオ6: dopplerLevel 比較 ────────────────────────
+    section("シナリオ6: dopplerLevel 比較 (0.0 / 0.5 / 1.0)");
+    println!("  ▶ 同じ通過パターンを 3 回繰り返し、効果の強弱を比較");
+
+    let levels = [
+        ("level=0.0 (Doppler 無効)  ", 0.0_f32),
+        ("level=0.5 (半量)          ", 0.5),
+        ("level=1.0 (物理通り)      ", 1.0),
+    ];
+    for (label, level) in levels {
+        let src = engine
+            .play_with_handle(buf, 1.0, 1.0, master, false)
+            .expect("play_with_handle");
+        let _ = engine.set_source_spatial_params(
+            src,
+            AttenuationModel::InverseDistance,
+            1.0,
+            60.0,
+            1.0,
+        );
+        let _ = engine.set_source_spatial_enabled(src, true);
+        let _ = engine.set_source_doppler_level(src, level);
+        println!("  ▶ {label}");
+
+        let total_secs = 2.5_f32;
+        let steps = 25;
+        let dt = total_secs / steps as f32;
+        for step in 0..=steps {
+            let t = step as f32 * dt;
+            let z = 20.0 + speed * t;
+            engine.batch_set_source_positions(&[SourcePositionUpdate {
+                source: src,
+                position: [0.0, 0.0, z],
+            }]);
+            engine.batch_set_source_velocities(&[SourceVelocityUpdate {
+                source: src,
+                velocity: [0.0, 0.0, speed],
+            }]);
+            thread::sleep(Duration::from_secs_f32(dt));
+        }
+        let _ = engine.stop_all();
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    // ─── シナリオ7: リスナー移動による Doppler ──────────────
+    section("シナリオ7: リスナーが固定音源に向かって走る");
+    println!("  ▶ ソース静止 [0,0,15]、リスナーが +Z 方向 30 m/s で接近 → 離反");
+    println!("    接近時はピッチ↑、通過後（行き過ぎ）はピッチ↓");
+
+    let src = engine
+        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .expect("play_with_handle");
+    let _ =
+        engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 60.0, 1.0);
+    let _ = engine.set_source_spatial_enabled(src, true);
+    let _ = engine.set_source_doppler_level(src, 1.0);
+    engine.batch_set_source_positions(&[SourcePositionUpdate {
+        source: src,
+        position: [0.0, 0.0, 15.0],
+    }]);
+    // ソース速度 0 を明示
+    engine.batch_set_source_velocities(&[SourceVelocityUpdate {
+        source: src,
+        velocity: [0.0, 0.0, 0.0],
+    }]);
+
+    let listener_speed = 30.0_f32;
+    let total_secs = 3.0_f32;
+    let steps = 30;
+    let dt = total_secs / steps as f32;
+    for step in 0..=steps {
+        let t = step as f32 * dt;
+        let z = -15.0 + listener_speed * t; // -15 → +15 を通過
+        engine.set_listener([0.0, 0.0, z], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+        engine.set_listener_velocity([0.0, 0.0, listener_speed]);
+        print!("\r  リスナー z={z:+6.1}m  (音源は z=+15m)");
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        thread::sleep(Duration::from_secs_f32(dt));
+    }
+    println!("\r  完了                                       ");
+    let _ = engine.stop_all();
+    // リスナー速度を 0 に戻す（後続シナリオに影響しないよう）
+    engine.set_listener_velocity([0.0, 0.0, 0.0]);
+    engine.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
+    thread::sleep(Duration::from_millis(800));
+
+    // ─── シナリオ8: 大量バッチ ──────────────────
+    section("シナリオ8: batch_set_source_positions 33件 (triple buffer 経由)");
     println!("  ▶ triple buffer に snapshot 公開 (音には影響なし)");
 
     let big: Vec<SourcePositionUpdate> = (0..33)
