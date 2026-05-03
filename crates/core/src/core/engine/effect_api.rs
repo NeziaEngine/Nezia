@@ -14,8 +14,14 @@ impl SoundEngine {
     /// - サウンドスレッド側で対象が解決できない / チェーン満杯 / 種別 World 上限
     ///   (sound thread で発生した時点で silently drop され、main 視点では成功として返る)
     ///
-    /// Source 対象 + `EffectKind::Reverb` や `EffectPosition::Post` は Phase 2-3 (PR 1)
-    /// では sound thread 側で無視される (PR 2 で対応)。
+    /// Source 対象 + `EffectKind::Reverb` は Phase 2-3 時点での暫定制約として拒否される。
+    /// Wwise / FMOD / Unity いずれも per-voice Reverb は技術的には可能だが、業界標準の運用は
+    /// **Aux Bus + Send/Return で 1 個の Reverb を全ソースで共有**する形であり、per-voice は
+    /// ほぼ使われない。NEZIA も Phase 3-3 で Send/Return が入った時点で同じ標準パターンが
+    /// 組めるようになり、Source 単位 Reverb の直接挿入機能を別途追加する必要はない。
+    ///
+    /// `EffectPosition::Post` は Source 対象では Phase 2-3 (PR 1) では未実装 (Post-Spatial chain
+    /// の信号フロー統合は PR 2 で対応)。
     #[must_use]
     pub fn add_effect(
         &mut self,
