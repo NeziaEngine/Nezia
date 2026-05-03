@@ -177,6 +177,16 @@ impl SparseSet {
     ///
     /// 逆順で呼び出すこと（swap-remove のため後ろから消さないとインデックスがずれる）。
     /// 呼び出し側は全コンポーネント配列で `swap_remove(dense_index)` すること。
+    /// dense_index に対応する `EntityId` を返す。
+    pub fn entity_at_dense(&self, dense_index: usize) -> Option<EntityId> {
+        let sparse_index = *self.dense_to_sparse.get(dense_index)?;
+        let entry = self.sparse[sparse_index as usize].as_ref()?;
+        Some(EntityId {
+            index: sparse_index,
+            generation: entry.generation,
+        })
+    }
+
     pub fn dealloc_by_dense_index(&mut self, dense_index: usize) -> bool {
         if dense_index >= self.len() {
             return false;

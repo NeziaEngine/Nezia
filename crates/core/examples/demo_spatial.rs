@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: x=-12m → x=+12m  (正面 z=-5m, 20ステップ × 400ms)");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master)
+        .spawn_source(buf, 1.0, 1.0, master, false)
         .expect("spawn_source");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: z=-40m → z=+5m  (18ステップ × 500ms)");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master)
+        .spawn_source(buf, 1.0, 1.0, master, false)
         .expect("spawn_source");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 40.0, 1.0);
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (label, model, min, max, rolloff) in models {
         let src = engine
-            .spawn_source(buf, 1.0, 1.0, master)
+            .spawn_source(buf, 1.0, 1.0, master, false)
             .expect("spawn_source");
         let _ = engine.set_source_spatial_params(src, model, min, max, rolloff);
         let _ = engine.set_source_spatial_enabled(src, true);
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 13ステップ × 400ms でリスナーが 90° 回転");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master)
+        .spawn_source(buf, 1.0, 1.0, master, false)
         .expect("spawn_source");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);

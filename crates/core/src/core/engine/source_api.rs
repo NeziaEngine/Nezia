@@ -9,7 +9,7 @@ use super::SoundEngine;
 impl SoundEngine {
     /// ボイスをマスターバスに再生する（fire-and-forget）。
     #[must_use]
-    pub fn play(&mut self, buffer: BufferId, vol: f32, pitch: f32) -> bool {
+    pub fn play(&mut self, buffer: BufferId, vol: f32, pitch: f32, looping: bool) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
             return false;
         };
@@ -19,6 +19,7 @@ impl SoundEngine {
                 vol,
                 pitch,
                 token: 0,
+                looping,
             })
             .is_ok()
     }
@@ -33,6 +34,7 @@ impl SoundEngine {
         buffer: BufferId,
         vol: f32,
         pitch: f32,
+        looping: bool,
         callback: impl FnOnce() + Send + 'static,
     ) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
@@ -46,6 +48,7 @@ impl SoundEngine {
                 vol,
                 pitch,
                 token,
+                looping,
             })
             .is_ok();
         if !ok {
@@ -56,7 +59,14 @@ impl SoundEngine {
 
     /// ボイスを指定バスに再生する（fire-and-forget）。
     #[must_use]
-    pub fn play_to_bus(&mut self, buffer: BufferId, vol: f32, pitch: f32, bus: EntityId) -> bool {
+    pub fn play_to_bus(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        looping: bool,
+    ) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
             return false;
         };
@@ -70,6 +80,7 @@ impl SoundEngine {
                 pitch,
                 output_bus_dense,
                 token: 0,
+                looping,
             })
             .is_ok()
     }
@@ -85,6 +96,7 @@ impl SoundEngine {
         vol: f32,
         pitch: f32,
         bus: EntityId,
+        looping: bool,
         callback: impl FnOnce() + Send + 'static,
     ) -> bool {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
@@ -102,6 +114,7 @@ impl SoundEngine {
                 pitch,
                 output_bus_dense,
                 token,
+                looping,
             })
             .is_ok();
         if !ok {
@@ -121,6 +134,7 @@ impl SoundEngine {
         vol: f32,
         pitch: f32,
         bus: EntityId,
+        looping: bool,
     ) -> Option<EntityId> {
         let index = self.buffer_pool.resolve(buffer)?;
         let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
@@ -138,8 +152,54 @@ impl SoundEngine {
                 pitch,
                 output_bus_dense,
                 token: 0,
+                looping,
             })
             .ok()?;
+
+        self.next_source_index += 1;
+        Some(id)
+    }
+
+    /// 3D ソースをスポーンし、自然終了時にコールバックを呼ぶ。
+    ///
+    /// `looping = true` の場合は終了通知が発火しないため、コールバックは呼ばれずに
+    /// `stop_source()` などで明示的に終わらせるまで保持される。
+    /// `MAX_SOURCES` 上限などでコマンド送信に失敗した場合はコールバックは呼ばれず破棄される。
+    #[must_use]
+    pub fn spawn_source_with_callback(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        looping: bool,
+        callback: impl FnOnce() + Send + 'static,
+    ) -> Option<EntityId> {
+        let index = self.buffer_pool.resolve(buffer)?;
+        let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
+
+        let id = EntityId {
+            index: self.next_source_index,
+            generation: 0,
+        };
+
+        let token = self.callbacks.register(Box::new(callback));
+        let ok = self
+            .command_producer
+            .try_push(Command::SpawnSource {
+                id,
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+                token,
+                looping,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.cancel(token);
+            return None;
+        }
 
         self.next_source_index += 1;
         Some(id)
@@ -201,6 +261,14 @@ impl SoundEngine {
     pub fn stop_source(&mut self, id: EntityId) -> bool {
         self.command_producer
             .try_push(Command::StopSource { id })
+            .is_ok()
+    }
+
+    /// ソースのループフラグを動的に変更する。
+    #[must_use]
+    pub fn set_source_loop(&mut self, id: EntityId, looping: bool) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourceLoop { id, looping })
             .is_ok()
     }
 }

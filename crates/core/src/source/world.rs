@@ -14,6 +14,8 @@ pub struct SourceComponent {
     pub output_bus: u32,
     /// コールバックトークン。0 = コールバックなし。
     pub token: u32,
+    /// ループ再生フラグ。`true` の場合、バッファ末尾到達時に先頭へ巻き戻す。
+    pub looping: bool,
 }
 
 impl Default for SourceComponent {
@@ -25,6 +27,7 @@ impl Default for SourceComponent {
             audio_buffer_index: 0,
             output_bus: 0,
             token: 0,
+            looping: false,
         }
     }
 }
@@ -65,6 +68,8 @@ pub struct SourceWorld {
     pub(super) output_bus: Vec<u32>,
     /// コールバックトークン。0 = コールバックなし。
     pub(super) token: Vec<u32>,
+    /// ループ再生フラグ。
+    pub(super) looping: Vec<bool>,
 }
 
 impl Default for SourceWorld {
@@ -85,6 +90,7 @@ impl SourceWorld {
             state: Vec::with_capacity(MAX_SOURCES),
             output_bus: Vec::with_capacity(MAX_SOURCES),
             token: Vec::with_capacity(MAX_SOURCES),
+            looping: Vec::with_capacity(MAX_SOURCES),
         }
     }
 
@@ -100,6 +106,7 @@ impl SourceWorld {
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
+        self.looping.push(params.looping);
         Some(id)
     }
 
@@ -118,6 +125,7 @@ impl SourceWorld {
         self.state.push(SourceState::Playing);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
+        self.looping.push(params.looping);
         true
     }
 
@@ -138,6 +146,7 @@ impl SourceWorld {
         self.state.swap_remove(dense_index);
         self.output_bus.swap_remove(dense_index);
         self.token.swap_remove(dense_index);
+        self.looping.swap_remove(dense_index);
         true
     }
 
@@ -196,6 +205,19 @@ impl SourceWorld {
         }
     }
 
+    pub fn looping(&self, id: EntityId) -> Option<bool> {
+        self.resolve(id).map(|i| self.looping[i])
+    }
+
+    pub fn set_looping(&mut self, id: EntityId, value: bool) -> bool {
+        if let Some(i) = self.resolve(id) {
+            self.looping[i] = value;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn state(&self, id: EntityId) -> Option<SourceState> {
         self.resolve(id).map(|i| self.state[i])
     }
@@ -219,6 +241,15 @@ impl SourceWorld {
         &mut self.vol
     }
 
+    /// 密配列の (entity, sample_offset) を順に走査するイテレータ。
+    pub fn snapshots(&self) -> impl Iterator<Item = (EntityId, f32)> + '_ {
+        let len = self.sample_offset.len();
+        (0..len).filter_map(move |dense| {
+            let id = self.entities.entity_at_dense(dense)?;
+            Some((id, self.sample_offset[dense]))
+        })
+    }
+
     /// 密配列インデックスを指定して Source を削除する（swap-remove）。
     ///
     /// `SourceMixingSystem::update()` が再生終了した Source を直接削除するために使用する。
@@ -234,5 +265,6 @@ impl SourceWorld {
         self.state.swap_remove(dense_index);
         self.output_bus.swap_remove(dense_index);
         self.token.swap_remove(dense_index);
+        self.looping.swap_remove(dense_index);
     }
 }

@@ -28,10 +28,14 @@ impl SourceLifecycleSystem {
             let natural_finish = match world.state[source_i] {
                 SourceState::Stopped => false,
                 SourceState::Playing => {
-                    let buf_idx = world.audio_buffer_index[source_i] as usize;
-                    match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
-                        Some(ab) => world.sample_offset[source_i] as usize >= ab.frame_count(),
-                        None => true,
+                    if world.looping[source_i] {
+                        false
+                    } else {
+                        let buf_idx = world.audio_buffer_index[source_i] as usize;
+                        match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
+                            Some(ab) => world.sample_offset[source_i] as usize >= ab.frame_count(),
+                            None => true,
+                        }
                     }
                 }
                 SourceState::Pausing => false,

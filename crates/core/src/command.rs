@@ -23,6 +23,8 @@ pub enum Command {
         pitch: f32,
         /// コールバックトークン。0 = コールバックなし。
         token: u32,
+        /// ループ再生フラグ。
+        looping: bool,
     },
     /// ボイスを指定バス（密配列インデックス）に再生する（fire-and-forget）。
     PlayToBus {
@@ -33,6 +35,8 @@ pub enum Command {
         output_bus_dense: u32,
         /// コールバックトークン。0 = コールバックなし。
         token: u32,
+        /// ループ再生フラグ。
+        looping: bool,
     },
     /// EntityId 付きでソースをスポーンする（3D ソース用）。
     ///
@@ -47,6 +51,8 @@ pub enum Command {
         output_bus_dense: u32,
         /// コールバックトークン。0 = コールバックなし。
         token: u32,
+        /// ループ再生フラグ。
+        looping: bool,
     },
     /// すべてのボイスを停止する。
     StopAll,
@@ -102,4 +108,6 @@ pub enum Command {
     ResumeSource { id: EntityId },
     /// ソースを停止する（次の update で despawn される）。
     StopSource { id: EntityId },
+    /// ソースのループフラグを設定する（再生中の動的変更）。
+    SetSourceLoop { id: EntityId, looping: bool },
 }

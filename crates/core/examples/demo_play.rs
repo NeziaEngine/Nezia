@@ -36,7 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("fire-and-forget 再生");
     println!("  ▶ 440 Hz のサイン波が聴こえるはずです");
 
-    check("play(vol=1.0, pitch=1.0)", engine.play(buf, 1.0, 1.0));
+    check(
+        "play(vol=1.0, pitch=1.0)",
+        engine.play(buf, 1.0, 1.0, false),
+    );
     thread::sleep(Duration::from_millis(1600));
     let _ = engine.stop_all();
     thread::sleep(Duration::from_millis(600));
@@ -53,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  ▶ {label}");
         check(
             format!("  play(pitch={pitch})"),
-            engine.play(buf, 1.0, pitch),
+            engine.play(buf, 1.0, pitch, false),
         );
         thread::sleep(Duration::from_millis(1600));
         let _ = engine.stop_all();
@@ -75,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("  set_volume({vol:.1})  [{label}]"),
             engine.set_volume(vol),
         );
-        let _ = engine.play(buf, 1.0, 1.0);
+        let _ = engine.play(buf, 1.0, 1.0, false);
         thread::sleep(Duration::from_millis(1400));
         let _ = engine.stop_all();
         thread::sleep(Duration::from_millis(600));
@@ -85,11 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("同時再生 (3ボイス重ね)");
     println!("  ▶ ピッチの異なる3音が重なった和音が聴こえるはずです");
 
-    let _ = engine.play(buf, 0.6, 1.0);
+    let _ = engine.play(buf, 0.6, 1.0, false);
     thread::sleep(Duration::from_millis(200));
-    let _ = engine.play(buf, 0.4, 1.5);
+    let _ = engine.play(buf, 0.4, 1.5, false);
     thread::sleep(Duration::from_millis(200));
-    let _ = engine.play(buf, 0.3, 0.75);
+    let _ = engine.play(buf, 0.3, 0.75, false);
     ok("3ボイス同時再生中...");
     thread::sleep(Duration::from_millis(3000));
     let _ = engine.stop_all();
@@ -103,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let finished_clone = std::sync::Arc::clone(&finished);
     check(
         "play_with_callback(vol=1.0, pitch=1.0)",
-        engine.play_with_callback(buf, 1.0, 1.0, move || {
+        engine.play_with_callback(buf, 1.0, 1.0, false, move || {
             finished_clone.store(true, std::sync::atomic::Ordering::Relaxed);
         }),
     );
@@ -129,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let not_called_clone = std::sync::Arc::clone(&not_called);
     check(
         "play_with_callback → stop_all() で中断",
-        engine.play_with_callback(buf, 1.0, 1.0, move || {
+        engine.play_with_callback(buf, 1.0, 1.0, false, move || {
             not_called_clone.store(true, std::sync::atomic::Ordering::Relaxed);
         }),
     );
@@ -152,7 +155,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "unload(buf) 2回目 => false (二重アンロード)",
         engine.unload(buf),
     );
-    check_false("play(unloaded buf) => false", engine.play(buf, 1.0, 1.0));
+    check_false(
+        "play(unloaded buf) => false",
+        engine.play(buf, 1.0, 1.0, false),
+    );
 
     // ─── 完了 ────────────────────────────────────────────
     let _ = std::fs::remove_file(&wav);
