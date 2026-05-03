@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n  ▶ {label}  → 期待音量: {expected_vol}");
         check(
             format!("  play_to_bus({label})"),
-            engine.play_to_bus(buf, 1.0, 1.0, bus),
+            engine.play_to_bus(buf, 1.0, 1.0, bus, false),
         );
         thread::sleep(Duration::from_millis(1600));
         let _ = engine.stop_all();
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         println!("\n  ▶ sfx_bus gain={gain:.1}  [{label}]");
         let _ = engine.set_bus_gain(sfx_bus, gain);
-        let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus);
+        let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus, false);
         thread::sleep(Duration::from_millis(1600));
         let _ = engine.stop_all();
         thread::sleep(Duration::from_millis(600));
@@ -90,14 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n  ▶ sfx_bus をミュート → 無音になるはずです");
     let _ = engine.set_bus_muted(sfx_bus, true);
-    let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus);
+    let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus, false);
     thread::sleep(Duration::from_millis(1600));
     let _ = engine.stop_all();
     thread::sleep(Duration::from_millis(600));
 
     println!("\n  ▶ sfx_bus のミュートを解除 → 聴こえるはずです");
     let _ = engine.set_bus_muted(sfx_bus, false);
-    let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus);
+    let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx_bus, false);
     thread::sleep(Duration::from_millis(1600));
     let _ = engine.stop_all();
     thread::sleep(Duration::from_millis(600));
@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n  ▶ music_bus をミュート → sub_bus の音も消えるはずです");
     let _ = engine.set_bus_muted(music_bus, true);
-    let _ = engine.play_to_bus(buf, 1.0, 1.0, sub_bus);
+    let _ = engine.play_to_bus(buf, 1.0, 1.0, sub_bus, false);
     thread::sleep(Duration::from_millis(1600));
     let _ = engine.set_bus_muted(music_bus, false);
     let _ = engine.stop_all();
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     check("destroy_bus(sub_bus)", engine.destroy_bus(sub_bus));
     check_false(
         "play_to_bus(削除済み sub_bus) → false",
-        engine.play_to_bus(buf, 1.0, 1.0, sub_bus),
+        engine.play_to_bus(buf, 1.0, 1.0, sub_bus, false),
     );
     check("destroy_bus(sfx_bus)", engine.destroy_bus(sfx_bus));
     check("destroy_bus(music_bus)", engine.destroy_bus(music_bus));

@@ -31,6 +31,18 @@ use callback_registry::CallbackRegistry;
 
 pub use buffer_reader::BufferReader;
 
+/// メインスレッドからソースの生存・再生位置を確認するためのスナップショット。
+///
+/// サウンドスレッドが各オーディオコールバック末尾で publish し、メインスレッドが
+/// `poll_events()` で取り込む。`SourceWorld` の所有自体はサウンドスレッド側に残し、
+/// クエリだけが triple buffer 経由で同期される。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SourceSnapshot {
+    pub(super) index: u32,
+    pub(super) generation: u32,
+    pub(super) sample_offset: f32,
+}
+
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
 
@@ -64,6 +76,12 @@ pub struct SoundEngine {
     pub(super) next_source_index: u32,
     /// コールバック登録テーブル。
     pub(super) callbacks: CallbackRegistry,
+    /// サウンドスレッドが publish する生存ソースのスナップショット出力側。
+    /// `poll_events()` で update し、`source_state_cache` にコピーされる。
+    pub(super) source_snapshots_output: triple_buffer::Output<Vec<SourceSnapshot>>,
+    /// メインスレッド側の最新スナップショット。
+    /// `is_source_alive()` / `source_position()` がここを参照する。
+    pub(super) source_state_cache: Vec<SourceSnapshot>,
 }
 
 impl SoundEngine {
@@ -95,6 +113,7 @@ impl SoundEngine {
         let (listener_input, listener_output) =
             triple_buffer::triple_buffer(&ListenerState::default());
         let (position_updates_input, position_updates_output) = build_position_updates_buffer();
+        let (source_snapshots_input, source_snapshots_output) = build_source_snapshots_buffer();
 
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
             Arc::new(ArcSwap::from_pointee(Vec::new()));
@@ -111,6 +130,7 @@ impl SoundEngine {
             event_producer,
             listener_output,
             position_updates_output,
+            source_snapshots_input,
             bus_world,
             source_world,
             spatial_world,
@@ -141,6 +161,8 @@ impl SoundEngine {
             bus_routing: BusRoutingMirror::new(master_bus_id),
             next_source_index: 0,
             callbacks: CallbackRegistry::new(),
+            source_snapshots_output,
+            source_state_cache: Vec::with_capacity(MAX_SOURCES),
         })
     }
 
@@ -161,6 +183,33 @@ impl SoundEngine {
                 }
             }
         }
+
+        // ソース状態スナップショットを取り込む。
+        if self.source_snapshots_output.update() {
+            self.source_state_cache.clear();
+            self.source_state_cache
+                .extend_from_slice(self.source_snapshots_output.output_buffer_mut());
+        }
+    }
+
+    /// ソースが現在 SourceWorld に存在するかを最新スナップショットで確認する。
+    ///
+    /// スナップショットは `poll_events()` でのみ更新されるため、最後の poll
+    /// 以降の生成・終了は反映されない。フレーム末尾で poll する想定。
+    #[must_use]
+    pub fn is_source_alive(&self, id: EntityId) -> bool {
+        self.source_state_cache
+            .iter()
+            .any(|s| s.index == id.index && s.generation == id.generation)
+    }
+
+    /// ソースの再生位置（フレーム単位）を最新スナップショットから取得する。
+    #[must_use]
+    pub fn source_position(&self, id: EntityId) -> Option<f32> {
+        self.source_state_cache
+            .iter()
+            .find(|s| s.index == id.index && s.generation == id.generation)
+            .map(|s| s.sample_offset)
     }
 }
 
@@ -172,6 +221,29 @@ impl SoundEngine {
 /// ダミー位置データが apply されるのを防ぐ。
 type PositionUpdatesIn = triple_buffer::Input<Vec<(EntityId, [f32; 3])>>;
 type PositionUpdatesOut = triple_buffer::Output<Vec<(EntityId, [f32; 3])>>;
+
+type SourceSnapshotsIn = triple_buffer::Input<Vec<SourceSnapshot>>;
+type SourceSnapshotsOut = triple_buffer::Output<Vec<SourceSnapshot>>;
+
+/// ソーススナップショット用の triple buffer を初期化する。
+///
+/// 全 3 スロットに `MAX_SOURCES` ぶんの capacity を確保しておくことで、
+/// サウンドスレッドの `clear + push` で再確保が起きないようにする。
+fn build_source_snapshots_buffer() -> (SourceSnapshotsIn, SourceSnapshotsOut) {
+    let initial: Vec<SourceSnapshot> = vec![
+        SourceSnapshot {
+            index: 0,
+            generation: 0,
+            sample_offset: 0.0
+        };
+        MAX_SOURCES
+    ];
+    let (mut input, mut output) = triple_buffer::triple_buffer(&initial);
+    input.input_buffer_mut().clear();
+    input.publish();
+    output.update();
+    (input, output)
+}
 
 fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
     let positions_initial: Vec<(EntityId, [f32; 3])> = vec![

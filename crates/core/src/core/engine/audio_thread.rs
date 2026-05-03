@@ -13,6 +13,8 @@ use crate::source::{
 };
 use crate::spatial::{ListenerState, SpatialWorld};
 
+use super::SourceSnapshot;
+
 /// オーディオスレッド側の所有状態を一括で持つ構造体。
 ///
 /// cpal のコールバック内に直接ロジックを書くと engine.rs が肥大化するため、
@@ -22,6 +24,7 @@ pub(super) struct AudioThread {
     event_producer: ringbuf::HeapProd<Event>,
     listener_output: triple_buffer::Output<ListenerState>,
     position_updates_output: triple_buffer::Output<Vec<(EntityId, [f32; 3])>>,
+    source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
     bus_world: BusWorld,
     source_world: SourceWorld,
     spatial_world: SpatialWorld,
@@ -38,6 +41,7 @@ impl AudioThread {
         event_producer: ringbuf::HeapProd<Event>,
         listener_output: triple_buffer::Output<ListenerState>,
         position_updates_output: triple_buffer::Output<Vec<(EntityId, [f32; 3])>>,
+        source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
         bus_world: BusWorld,
         source_world: SourceWorld,
         spatial_world: SpatialWorld,
@@ -51,6 +55,7 @@ impl AudioThread {
             event_producer,
             listener_output,
             position_updates_output,
+            source_snapshots_input,
             bus_world,
             source_world,
             spatial_world,
@@ -134,7 +139,30 @@ impl AudioThread {
             self.device_channels,
             sample_count,
         );
+
+        // 生存ソースのスナップショットを publish する（メインスレッドのクエリ用）。
+        publish_source_snapshots(&mut self.source_snapshots_input, &self.source_world);
     }
+}
+
+/// 生存ソースのスナップショットを triple buffer に publish する。
+///
+/// `clear + push` で再確保が起きないよう、入力バッファ容量は `MAX_SOURCES` で
+/// 事前確保されている前提（`build_source_snapshots_buffer()` 参照）。
+fn publish_source_snapshots(
+    input: &mut triple_buffer::Input<Vec<SourceSnapshot>>,
+    source_world: &SourceWorld,
+) {
+    let buf = input.input_buffer_mut();
+    buf.clear();
+    for (id, sample_offset) in source_world.snapshots() {
+        buf.push(SourceSnapshot {
+            index: id.index,
+            generation: id.generation,
+            sample_offset,
+        });
+    }
+    input.publish();
 }
 
 /// 1 個のコマンドをサウンドスレッド側のワールドに反映する。
@@ -155,6 +183,7 @@ fn process_command(
             vol,
             pitch,
             token,
+            looping,
         } => {
             let spawned = source_world.spawn(SourceComponent {
                 vol,
@@ -163,6 +192,7 @@ fn process_command(
                 audio_buffer_index,
                 output_bus: 0,
                 token,
+                looping,
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
@@ -176,6 +206,7 @@ fn process_command(
             pitch,
             output_bus_dense,
             token,
+            looping,
         } => {
             let spawned = source_world.spawn(SourceComponent {
                 vol,
@@ -184,6 +215,7 @@ fn process_command(
                 audio_buffer_index,
                 output_bus: output_bus_dense,
                 token,
+                looping,
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
@@ -198,6 +230,7 @@ fn process_command(
             pitch,
             output_bus_dense,
             token,
+            looping,
         } => {
             let spawned = source_world.spawn_with_id(
                 id,
@@ -208,6 +241,7 @@ fn process_command(
                     audio_buffer_index,
                     output_bus: output_bus_dense,
                     token,
+                    looping,
                 },
             );
             if spawned {
@@ -287,6 +321,9 @@ fn process_command(
         }
         Command::StopSource { id } => {
             source_world.set_state(id, SourceState::Stopped);
+        }
+        Command::SetSourceLoop { id, looping } => {
+            source_world.set_looping(id, looping);
         }
     }
 }

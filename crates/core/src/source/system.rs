@@ -62,8 +62,18 @@ impl SourceMixingSystem {
             let bus_buf = &mut bus_mix_buffer[bus_offset..bus_offset + process_len];
 
             let mut offset = world.sample_offset[source_i];
+            let looping = world.looping[source_i];
+            let frame_count_f = src_frame_count as f32;
 
             for frame in bus_buf.chunks_mut(device_channels) {
+                if looping && offset >= frame_count_f {
+                    // 末尾を超えた分だけ巻き戻す。空バッファは spawn 時点で除外想定。
+                    offset = if frame_count_f > 0.0 {
+                        offset.rem_euclid(frame_count_f)
+                    } else {
+                        0.0
+                    };
+                }
                 let frame_idx = offset as usize;
                 if frame_idx >= src_frame_count {
                     break;
@@ -71,7 +81,11 @@ impl SourceMixingSystem {
 
                 let frac = offset - offset.floor();
                 let idx0 = frame_idx;
-                let idx1 = (idx0 + 1).min(src_frame_count - 1);
+                let idx1 = if looping {
+                    (idx0 + 1) % src_frame_count
+                } else {
+                    (idx0 + 1).min(src_frame_count - 1)
+                };
 
                 for (ch, out) in frame.iter_mut().enumerate() {
                     let src_ch = ch % src_channels;

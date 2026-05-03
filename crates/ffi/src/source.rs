@@ -28,6 +28,7 @@ fn unpack(addr: usize) -> *mut c_void {
 
 /// マスターバスにボイスを再生する（fire-and-forget）。
 ///
+/// `looping` は 0 = 一度きり再生 / 非 0 = ループ再生。
 /// 戻り値: 1 = 受理、0 = 失敗（無効バッファ / コマンドキュー満杯）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_source_play(
@@ -35,24 +36,29 @@ pub unsafe extern "C" fn nezia_source_play(
     buffer: NeziaBufferId,
     volume: f32,
     pitch: f32,
+    looping: u8,
 ) -> u8 {
     guard_value(0, || {
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return 0;
         };
-        engine.inner.play(buffer.to_core(), volume, pitch) as u8
+        engine
+            .inner
+            .play(buffer.to_core(), volume, pitch, looping != 0) as u8
     })
 }
 
 /// マスターバスにボイスを再生し、自然終了時にコールバックを呼ぶ。
 ///
 /// `user_data` のライフタイムはコールバック発火まで呼出側が保証する。
+/// `looping != 0` の場合は終了通知が発火しないためコールバックは呼ばれない。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_source_play_with_callback(
     engine: *mut NeziaEngine,
     buffer: NeziaBufferId,
     volume: f32,
     pitch: f32,
+    looping: u8,
     callback: NeziaFinishCallback,
     user_data: *mut c_void,
 ) -> u8 {
@@ -64,7 +70,7 @@ pub unsafe extern "C" fn nezia_source_play_with_callback(
         let cb = callback;
         engine
             .inner
-            .play_with_callback(buffer.to_core(), volume, pitch, move || {
+            .play_with_callback(buffer.to_core(), volume, pitch, looping != 0, move || {
                 if let Some(f) = cb {
                     // SAFETY: 呼出側契約により f / user_data は有効。
                     unsafe { f(unpack(ud)) };
@@ -81,6 +87,7 @@ pub unsafe extern "C" fn nezia_source_play_to_bus(
     volume: f32,
     pitch: f32,
     bus: NeziaEntityId,
+    looping: u8,
 ) -> u8 {
     guard_value(0, || {
         let Some(engine) = (unsafe { engine.as_mut() }) else {
@@ -88,7 +95,7 @@ pub unsafe extern "C" fn nezia_source_play_to_bus(
         };
         engine
             .inner
-            .play_to_bus(buffer.to_core(), volume, pitch, bus.to_core()) as u8
+            .play_to_bus(buffer.to_core(), volume, pitch, bus.to_core(), looping != 0) as u8
     })
 }
 
@@ -100,6 +107,7 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
     volume: f32,
     pitch: f32,
     bus: NeziaEntityId,
+    looping: u8,
     callback: NeziaFinishCallback,
     user_data: *mut c_void,
 ) -> u8 {
@@ -114,6 +122,7 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
             volume,
             pitch,
             bus.to_core(),
+            looping != 0,
             move || {
                 if let Some(f) = cb {
                     // SAFETY: 呼出側契約により f / user_data は有効。
@@ -125,6 +134,10 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
 }
 
 /// 3D ソースをスポーンし、EntityId を返す。失敗時は INVALID。
+///
+/// `callback` が `Some` のとき、自然終了時に `nezia_engine_poll_events()` 経由で
+/// 1 度だけ呼ばれる（`looping != 0` の場合は呼ばれない）。`user_data` のライフタイムは
+/// コールバック発火まで呼出側が保証する。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_source_spawn(
     engine: *mut NeziaEngine,
@@ -132,16 +145,101 @@ pub unsafe extern "C" fn nezia_source_spawn(
     volume: f32,
     pitch: f32,
     bus: NeziaEntityId,
+    looping: u8,
+    callback: NeziaFinishCallback,
+    user_data: *mut c_void,
 ) -> NeziaEntityId {
     guard_entity(|| {
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return NeziaEntityId::INVALID;
         };
-        engine
-            .inner
-            .spawn_source(buffer.to_core(), volume, pitch, bus.to_core())
+        let result = if callback.is_some() {
+            let ud = pack(user_data);
+            let cb = callback;
+            engine.inner.spawn_source_with_callback(
+                buffer.to_core(),
+                volume,
+                pitch,
+                bus.to_core(),
+                looping != 0,
+                move || {
+                    if let Some(f) = cb {
+                        // SAFETY: 呼出側契約により f / user_data は有効。
+                        unsafe { f(unpack(ud)) };
+                    }
+                },
+            )
+        } else {
+            engine
+                .inner
+                .spawn_source(buffer.to_core(), volume, pitch, bus.to_core(), looping != 0)
+        };
+        result
             .map(NeziaEntityId::from_core)
             .unwrap_or(NeziaEntityId::INVALID)
+    })
+}
+
+/// 既存ソースのループフラグを動的に変更する。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_set_loop(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    looping: u8,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.set_source_loop(source.to_core(), looping != 0) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// ソースが現在 SourceWorld に存在するか確認する。
+///
+/// 1 = 存在、0 = 不在 / generation 不一致 / NULL ポインタ。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_is_alive(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+) -> u8 {
+    guard_value(0, || {
+        let Some(engine) = (unsafe { engine.as_ref() }) else {
+            return 0;
+        };
+        engine.inner.is_source_alive(source.to_core()) as u8
+    })
+}
+
+/// 現在のソース再生位置（フレーム単位）を取得する。
+///
+/// 取得タイミングはサウンドスレッドからスナップショットされた共有状態に依存し、
+/// 厳密には数ミリ秒の遅延がある。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_get_position(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    out_frames: *mut f32,
+) -> NeziaResult {
+    guard_result(|| {
+        if out_frames.is_null() {
+            return NeziaResult::NullPointer;
+        }
+        let Some(engine) = (unsafe { engine.as_ref() }) else {
+            return NeziaResult::NullPointer;
+        };
+        match engine.inner.source_position(source.to_core()) {
+            Some(frames) => {
+                // SAFETY: out_frames は呼出側契約により書き込み可能。
+                unsafe { out_frames.write(frames) };
+                NeziaResult::Ok
+            }
+            None => NeziaResult::InvalidHandle,
+        }
     })
 }
 
