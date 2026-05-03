@@ -3,8 +3,8 @@
 //! cargo run --example demo_dsp
 //!
 //! カバー範囲:
-//!   - add_effect: バスへの LPF / HPF 挿入
-//!   - set_effect_param: cutoff / Q の動的変更
+//!   - add_effect: バスへの LPF / HPF / Reverb 挿入
+//!   - set_effect_param: cutoff / Q / wet / room_size の動的変更
 //!   - set_effect_enabled: ON/OFF トグル (A/B 比較)
 //!   - remove_effect: チェーンからの削除
 //!
@@ -15,7 +15,9 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{EffectKind, EffectPosition, EffectTarget, LpfParam, SoundEngine};
+use nezia::{
+    EffectKind, EffectPosition, EffectTarget, HpfParam, LpfParam, ReverbParam, SoundEngine,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");
@@ -75,9 +77,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             EffectPosition::Pre,
         )
         .expect("add HPF");
-    // HPF の param インデックスは LpfParam と同レイアウト (Cutoff=0, Q=1) なので流用。
-    let _ = engine.set_effect_param(hpf, nezia::HpfParam::Cutoff, 2000.0);
-    let _ = engine.set_effect_param(hpf, nezia::HpfParam::Q, 0.707);
+    let _ = engine.set_effect_param(hpf, HpfParam::Cutoff, 2000.0);
+    let _ = engine.set_effect_param(hpf, HpfParam::Q, 0.707);
     println!("  ▶ HPF ON  (cutoff=2kHz, Q=0.707, 2.5 秒)");
     thread::sleep(Duration::from_millis(2500));
 
@@ -150,6 +151,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = engine.remove_effect(lpf);
     let _ = engine.stop_all();
+    thread::sleep(Duration::from_millis(700));
+
+    // ─── シナリオ5: Reverb (Bus 単位、wet スイープ) ────────
+    section("シナリオ5: バス Reverb ─ wet=0.0 → 0.6 へスイープ");
+    println!("  ▶ wet が増えるほど残響が強まり、空間的に広がる");
+
+    let _src = engine
+        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .expect("play_with_handle");
+    let rev = engine
+        .add_effect(
+            EffectTarget::Bus(master),
+            EffectKind::Reverb,
+            EffectPosition::Post,
+        )
+        .expect("add Reverb");
+    let _ = engine.set_effect_param(rev, ReverbParam::RoomSize, 0.8);
+    let _ = engine.set_effect_param(rev, ReverbParam::Damping, 0.3);
+    let _ = engine.set_effect_param(rev, ReverbParam::Width, 1.0);
+    let _ = engine.set_effect_param(rev, ReverbParam::Dry, 0.7);
+
+    let steps = 24;
+    let dt = Duration::from_millis(150);
+    for i in 0..=steps {
+        let wet = i as f32 / steps as f32 * 0.6;
+        let _ = engine.set_effect_param(rev, ReverbParam::Wet, wet);
+        print!("\r  wet = {:.2}", wet);
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        thread::sleep(dt);
+    }
+    println!("\r  完了                   ");
+    let _ = engine.remove_effect(rev);
+    let _ = engine.stop_all();
+    thread::sleep(Duration::from_millis(700));
+
+    // ─── シナリオ6: Reverb (room_size 比較) ─────────────
+    section("シナリオ6: Reverb room_size 比較 (small → medium → hall)");
+    println!("  ▶ room_size が大きいほど残響時間が長くなる");
+
+    for (label, size) in [
+        ("small (0.2)  ", 0.2_f32),
+        ("medium (0.5) ", 0.5),
+        ("hall (0.95)  ", 0.95),
+    ] {
+        let _src = engine
+            .play_with_handle(buf, 0.4, 1.0, master, false)
+            .expect("play_with_handle");
+        let rev = engine
+            .add_effect(
+                EffectTarget::Bus(master),
+                EffectKind::Reverb,
+                EffectPosition::Post,
+            )
+            .expect("add Reverb");
+        let _ = engine.set_effect_param(rev, ReverbParam::RoomSize, size);
+        let _ = engine.set_effect_param(rev, ReverbParam::Damping, 0.3);
+        let _ = engine.set_effect_param(rev, ReverbParam::Wet, 0.4);
+        let _ = engine.set_effect_param(rev, ReverbParam::Dry, 0.6);
+        let _ = engine.set_effect_param(rev, ReverbParam::Width, 1.0);
+        println!("  ▶ {label}");
+        thread::sleep(Duration::from_millis(2500));
+        let _ = engine.remove_effect(rev);
+        let _ = engine.stop_all();
+        thread::sleep(Duration::from_millis(500));
+    }
+
     let _ = engine.unload(buf);
     let _ = std::fs::remove_file(&wav);
     println!("\n✓ demo_dsp: 全チェック通過\n");

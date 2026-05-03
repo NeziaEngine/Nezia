@@ -8,7 +8,7 @@ use crate::bus::{BusComponent, BusSystem, BusWorld};
 use crate::command::Command;
 use crate::effect::{
     EffectKind, EffectPosition, EffectTarget, EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld,
-    Owner,
+    Owner, ReverbParam, ReverbWorld,
 };
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
@@ -37,6 +37,10 @@ pub(super) struct AudioThread {
     effect_world: EffectWorld,
     lpf_world: LpfWorld,
     hpf_world: HpfWorld,
+    reverb_world: ReverbWorld,
+    /// Source Pre-Spatial chain 適用用の事前確保 mono スクラッチ。
+    /// 容量は `MAX_MIX_BUFFER_SIZE / 1ch` でフレーム単位。サウンドスレッド alloc 0。
+    mono_scratch: Vec<f32>,
     shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
     /// メインスレッドと共有する SoA ライブパラメータ。
     /// コールバック冒頭で全アクティブソースに対して atomic load → dense 配列へ反映する。
@@ -61,6 +65,7 @@ impl AudioThread {
         effect_world: EffectWorld,
         lpf_world: LpfWorld,
         hpf_world: HpfWorld,
+        reverb_world: ReverbWorld,
         shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
         live_params: Arc<SourceLiveParams>,
         master_bus_id: EntityId,
@@ -80,6 +85,8 @@ impl AudioThread {
             effect_world,
             lpf_world,
             hpf_world,
+            reverb_world,
+            mono_scratch: vec![0.0; crate::bus::MAX_MIX_BUFFER_SIZE],
             shared_buffers,
             live_params,
             master_bus_id,
@@ -105,6 +112,7 @@ impl AudioThread {
                 &mut self.effect_world,
                 &mut self.lpf_world,
                 &mut self.hpf_world,
+                &mut self.reverb_world,
                 &mut self.event_producer,
                 self.master_bus_id,
             );
@@ -113,6 +121,7 @@ impl AudioThread {
         // DSP パラメータ変更で立った dirty フラグをフラッシュして係数を再計算する。
         self.lpf_world.flush_dirty(self.device_sample_rate);
         self.hpf_world.flush_dirty(self.device_sample_rate);
+        self.reverb_world.flush_dirty();
 
         // triple buffer から最新の listener / source positions を取り込む。
         // commands の後にやることで、spawn と同フレームで publish された
@@ -166,6 +175,11 @@ impl AudioThread {
             SourceMixingSystem::update(
                 &mut self.source_world,
                 &mut self.spatial_world,
+                &self.effect_world,
+                &mut self.lpf_world,
+                &mut self.hpf_world,
+                &mut self.reverb_world,
+                &mut self.mono_scratch,
                 mix_buf,
                 crate::bus::MAX_MIX_BUFFER_SIZE,
                 sample_count,
@@ -192,6 +206,7 @@ impl AudioThread {
             &self.effect_world,
             &mut self.lpf_world,
             &mut self.hpf_world,
+            &mut self.reverb_world,
             data,
             self.device_channels,
             sample_count,
@@ -259,6 +274,7 @@ fn process_command(
     effect_world: &mut EffectWorld,
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
+    reverb_world: &mut ReverbWorld,
     event_producer: &mut ringbuf::HeapProd<Event>,
     master_bus_id: EntityId,
 ) {
@@ -454,6 +470,7 @@ fn process_command(
                 effect_world,
                 lpf_world,
                 hpf_world,
+                reverb_world,
             );
         }
         Command::DespawnEffect { id } => {
@@ -464,13 +481,22 @@ fn process_command(
                 effect_world,
                 lpf_world,
                 hpf_world,
+                reverb_world,
             );
         }
         Command::SetEffectEnabled { id, enabled } => {
             effect_world.set_enabled(id, enabled);
         }
         Command::SetEffectParam { id, param, value } => {
-            apply_effect_param(id, param, value, effect_world, lpf_world, hpf_world);
+            apply_effect_param(
+                id,
+                param,
+                value,
+                effect_world,
+                lpf_world,
+                hpf_world,
+                reverb_world,
+            );
         }
     }
 }
@@ -490,6 +516,7 @@ fn spawn_effect(
     effect_world: &mut EffectWorld,
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
+    reverb_world: &mut ReverbWorld,
 ) {
     // 1. owner dense を解決。
     let owner = match target {
@@ -498,7 +525,7 @@ fn spawn_effect(
             None => return,
         },
         EffectTarget::Source(src_id) => {
-            // Source 対象 + Reverb は Phase 2-3 では非対応。
+            // Source 対象 + Reverb は Phase 2-3 では非対応 (Phase 3-3 Send 経由)。
             if matches!(kind, EffectKind::Reverb) {
                 return;
             }
@@ -523,7 +550,10 @@ fn spawn_effect(
             Some(d) => d,
             None => return,
         },
-        EffectKind::Reverb => return, // Phase 2-3 (PR 1) では未実装。
+        EffectKind::Reverb => match reverb_world.spawn(id) {
+            Some(d) => d,
+            None => return,
+        },
     };
 
     // 3. owner のチェーンに slot を追加。失敗したら state も巻き戻す。
@@ -540,7 +570,9 @@ fn spawn_effect(
             EffectKind::Hpf => {
                 let _ = hpf_world.despawn(state_index);
             }
-            EffectKind::Reverb => {}
+            EffectKind::Reverb => {
+                let _ = reverb_world.despawn(state_index);
+            }
         }
         return;
     }
@@ -556,6 +588,7 @@ fn spawn_effect(
     effect_world.spawn_with_id(id, kind, algo, owner, position, slot, state_index);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn despawn_effect(
     id: crate::effect::EffectId,
     bus_world: &mut BusWorld,
@@ -563,6 +596,7 @@ fn despawn_effect(
     effect_world: &mut EffectWorld,
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
+    reverb_world: &mut ReverbWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -589,24 +623,23 @@ fn despawn_effect(
     let moved = match kind {
         EffectKind::Lpf => lpf_world.despawn(state_index),
         EffectKind::Hpf => hpf_world.despawn(state_index),
-        EffectKind::Reverb => None,
+        EffectKind::Reverb => reverb_world.despawn(state_index),
     };
     if let Some((moved_id, new_state_index)) = moved {
         let _ = moved_id;
         // 末尾要素 (元の last_dense) が state_index 位置に移動した。
-        let old = (lpf_world.len() as u32).max(hpf_world.len() as u32); // not used
-        let _ = old;
         // メタ層側で「kind 種別 + state_index == 旧末尾」を新位置に書き換える。
         // 旧末尾 index は "新サイズ" (despawn 後の len)。
         let last_after = match kind {
             EffectKind::Lpf => lpf_world.len() as u32,
             EffectKind::Hpf => hpf_world.len() as u32,
-            EffectKind::Reverb => 0,
+            EffectKind::Reverb => reverb_world.len() as u32,
         };
         effect_world.remap_state_index(kind, last_after, new_state_index);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_effect_param(
     id: crate::effect::EffectId,
     param: u8,
@@ -614,6 +647,7 @@ fn apply_effect_param(
     effect_world: &EffectWorld,
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
+    reverb_world: &mut ReverbWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -635,6 +669,18 @@ fn apply_effect_param(
                 hpf_world.set_q(state_index, value);
             }
         }
-        EffectKind::Reverb => {}
+        EffectKind::Reverb => {
+            if param == ReverbParam::RoomSize as u8 {
+                reverb_world.set_room_size(state_index, value);
+            } else if param == ReverbParam::Damping as u8 {
+                reverb_world.set_damping(state_index, value);
+            } else if param == ReverbParam::Wet as u8 {
+                reverb_world.set_wet(state_index, value);
+            } else if param == ReverbParam::Dry as u8 {
+                reverb_world.set_dry(state_index, value);
+            } else if param == ReverbParam::Width as u8 {
+                reverb_world.set_width(state_index, value);
+            }
+        }
     }
 }
