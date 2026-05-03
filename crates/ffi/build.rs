@@ -8,9 +8,11 @@ fn main() {
         "src/types.rs",
         "src/engine.rs",
         "src/buffer.rs",
+        "src/buffer_reader.rs",
         "src/source.rs",
         "src/bus.rs",
         "src/spatial.rs",
+        "src/audio_meta.rs",
     ];
 
     let mut builder = csbindgen::Builder::default()
