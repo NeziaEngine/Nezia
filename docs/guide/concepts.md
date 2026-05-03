@@ -20,7 +20,7 @@ let buf = engine.load("assets/footstep.wav")?;
 
 ```rust
 let bus: EntityId = engine.create_bus(1.0).unwrap();
-let src: EntityId = engine.spawn_source(buf, 1.0, 1.0, bus).unwrap();
+let src: EntityId = engine.play_with_handle(buf, 1.0, 1.0, bus, false).unwrap();
 ```
 
 - 解放されたあとの `EntityId` を使って操作しても `false` が返るだけで安全。
@@ -61,16 +61,21 @@ let src: EntityId = engine.spawn_source(buf, 1.0, 1.0, bus).unwrap();
 let _ = engine.play(buf, 1.0, 1.0);
 ```
 
-### 制御可能な 3D ソース
+### ハンドル付き再生（制御可能なソース）
 
-`spawn_source` で作るソースは `EntityId` を返し、毎フレーム位置などを更新できる。
-プレイヤーや敵の足音など、空間内を動く音に使う。
+`play_with_handle` は `EntityId` を返し、毎フレーム位置・音量・ピッチなどを更新できる。
+プレイヤーや敵の足音など、空間内を動く音や動的に制御したい音に使う。
 
 ```rust
-let src = engine.spawn_source(buf, 1.0, 1.0, bus).unwrap();
+let src = engine.play_with_handle(buf, 1.0, 1.0, bus, false).unwrap();
 engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 50.0, 1.0);
 engine.batch_set_source_positions(&[(src, [10.0, 0.0, 5.0])]);
 ```
+
+Source は 1 回の発音インスタンスを表す。バッファ末尾到達 (`looping = false`) または
+`stop_source()` で despawn され、その時点で `EntityId` は無効化される。
+再生し直したい場合は再度 `play_with_handle` を呼んで新しいハンドルを取り直す
+（Unity の `AudioSource.Play()` のように同じインスタンスを再利用するモデルではない）。
 
 詳細は [3D サウンド](spatial.md) を参照。
 

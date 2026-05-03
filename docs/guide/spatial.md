@@ -9,7 +9,7 @@
 use nezia::{SoundEngine, AttenuationModel};
 
 // 1. ソースを spawn
-let src = engine.spawn_source(buf, 1.0, 1.0, sfx_bus).unwrap();
+let src = engine.play_with_handle(buf, 1.0, 1.0, sfx_bus).unwrap();
 
 // 2. 距離減衰の特性を 1 度だけ設定
 engine.set_source_spatial_params(
@@ -28,15 +28,16 @@ loop {
 }
 ```
 
-## ソースの生成 — `spawn_source`
+## ハンドル付き再生 — `play_with_handle`
 
 ```rust
-let src: EntityId = engine.spawn_source(buf, vol, pitch, output_bus)
-    .ok_or("spawn 失敗")?;
+let src: EntityId = engine.play_with_handle(buf, vol, pitch, output_bus, false)
+    .ok_or("play_with_handle 失敗")?;
 ```
 
-`play` と違ってハンドルを返すので、後から位置や有効/無効を変更できる。
-鳴り終わると内部で自動的に解放される。
+`play` と違ってハンドル（`EntityId`）を返すので、後から位置・音量・有効/無効を変更できる。
+Source は 1 回の発音インスタンスを表し、鳴り終わると（または `stop_source()` で）内部で自動的に解放される。
+再生し直したい場合は再度 `play_with_handle` を呼んで新しいハンドルを取り直す。
 
 ## リスナー — `set_listener`
 

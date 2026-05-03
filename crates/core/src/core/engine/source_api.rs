@@ -123,12 +123,18 @@ impl SoundEngine {
         ok
     }
 
-    /// 3D ソースをスポーンし、EntityId を返す。
+    /// 再生を開始し、制御用ハンドル（EntityId）を返す。
     ///
-    /// 返った EntityId を使って `set_source_spatial_params()` / `set_source_spatial_enabled()` /
-    /// `batch_set_source_positions()` で空間パラメータを更新する。
+    /// Source は 1 回の発音インスタンスを表す。バッファ末尾到達 (`looping=false`) または
+    /// `stop_source()` で despawn され、その時点で EntityId は無効化される。
+    /// 再生し直したい場合は再度この関数を呼んで新しい EntityId を取り直す。
+    ///
+    /// 返った EntityId は `set_source_volume()` / `set_source_pitch()` / `seek_source()` /
+    /// `pause_source()` / `resume_source()` / `stop_source()` および
+    /// `set_source_spatial_params()` / `set_source_spatial_enabled()` /
+    /// `batch_set_source_positions()` の引数として使う。
     #[must_use]
-    pub fn spawn_source(
+    pub fn play_with_handle(
         &mut self,
         buffer: BufferId,
         vol: f32,
@@ -160,13 +166,14 @@ impl SoundEngine {
         Some(id)
     }
 
-    /// 3D ソースをスポーンし、自然終了時にコールバックを呼ぶ。
+    /// 再生を開始し、自然終了時にコールバックを呼ぶ版。EntityId を返す。
     ///
+    /// セマンティクスは `play_with_handle()` と同じ（Source = 1 回の発音インスタンス）。
     /// `looping = true` の場合は終了通知が発火しないため、コールバックは呼ばれずに
     /// `stop_source()` などで明示的に終わらせるまで保持される。
     /// `MAX_SOURCES` 上限などでコマンド送信に失敗した場合はコールバックは呼ばれず破棄される。
     #[must_use]
-    pub fn spawn_source_with_callback(
+    pub fn play_with_handle_and_callback(
         &mut self,
         buffer: BufferId,
         vol: f32,

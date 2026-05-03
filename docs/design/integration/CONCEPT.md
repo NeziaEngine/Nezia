@@ -109,6 +109,27 @@ src.Play();
 完全 1:1 互換は目指さない（`reverbZoneMix` 等の高度な項目は対象外）。**80% の使用ケースを
 標準コードのままで動かす** ことが目標。
 
+#### 設計判断: 寿命モデルの差異を統合層が吸収する
+
+Unity の `AudioSource` は「永続インスタンスを保持し、`Play()` / `Stop()` を繰り返し
+呼ぶ」モデル。一方 NEZIA core の Source は **1 回の発音ごとに新しい EntityId を取り
+直す短命ボイス**モデル（[core/source.md](../core/source.md) 参照）。
+
+このインピーダンス差は core を太らせず、統合層で吸収する:
+
+- `NeziaAudioSource` は永続インスタンス側の状態（clip / volume / pitch / loop /
+  spatial 設定）を C# 側にキャッシュとして保持する。
+- `Play()` のたびに内部で `nezia_source_play_with_handle()` を呼び、新しい EntityId を
+  取得して保持中の設定を反映する。前の EntityId は捨てる（Stop 済みなら自動 despawn、
+  まだ鳴っていれば従来どおり鳴り続ける = Unity の OneShot 的な挙動）。
+- `Stop()` は現在の EntityId に対して `nezia_source_stop()` を発行。次の `Play()` で
+  EntityId は新規取得される。
+- `isPlaying` は core 側の `is_source_alive()` で問い合わせる。
+
+これにより core は「1 Source = 1 発音」という単純なライフサイクルを保ったまま、
+Unity 側のユーザーには「永続インスタンス」体験を提供できる。プロジェクトファイル方式
+（B）は逆に core のライフサイクルにそのまま乗るため、ラッパー不要。
+
 ### レベル 2: アセット型互換
 
 レベル 1 の体験を成立させるには「Inspector でドラッグして `clip` プロパティに

@@ -60,11 +60,11 @@ engine.destroy_bus(sfx); // bool（master を渡すと false）
 
 ## バスへ再生する
 
-`play_to_bus` / `play_to_bus_with_callback` / `spawn_source` は出力先バスを引数で取る。
+`play_to_bus` / `play_to_bus_with_callback` / `play_with_handle` は出力先バスを引数で取る。
 
 ```rust
 let _ = engine.play_to_bus(buf, 1.0, 1.0, sfx);
-let src = engine.spawn_source(buf, 1.0, 1.0, sfx).unwrap();
+let src = engine.play_with_handle(buf, 1.0, 1.0, sfx, false).unwrap();
 ```
 
 bus に渡した `EntityId` が無効化されていると失敗する（`false` または `None`）。
