@@ -24,7 +24,6 @@ use nezia::nezia_engine_poll_events;
 use nezia::nezia_engine_set_volume;
 use nezia::nezia_engine_stop_all;
 use nezia::nezia_listener_set;
-use nezia::nezia_source_play_delayed;
 use nezia::{NeziaAudioMetadata, NeziaResult, NeziaVec3};
 
 #[test]
@@ -96,9 +95,6 @@ fn lifecycle_smoke() {
         assert!((dst[1] - 0.001).abs() < 1e-6);
         nezia_buffer_reader_close(reader);
         nezia_buffer_reader_close(std::ptr::null_mut()); // NULL 安全
-
-        // play_delayed: 受理されること（実発火は audio thread 任せ）
-        assert_eq!(nezia_source_play_delayed(engine, pcm_id, 0.5, 1.0, 0.05), 1);
 
         assert_eq!(nezia_buffer_unload(engine, pcm_id), NeziaResult::Ok);
 

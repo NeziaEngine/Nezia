@@ -308,51 +308,6 @@ pub unsafe extern "C" fn nezia_source_stop(
     })
 }
 
-/// 指定秒数だけ遅らせてマスターバスに再生する（fire-and-forget）。
-///
-/// 戻り値: 1 = 受理、0 = 失敗。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nezia_source_play_delayed(
-    engine: *mut NeziaEngine,
-    buffer: NeziaBufferId,
-    volume: f32,
-    pitch: f32,
-    delay_seconds: f32,
-) -> u8 {
-    guard_value(0, || {
-        let Some(engine) = (unsafe { engine.as_mut() }) else {
-            return 0;
-        };
-        engine
-            .inner
-            .play_delayed(buffer.to_core(), volume, pitch, delay_seconds) as u8
-    })
-}
-
-/// 指定秒数だけ遅らせて指定バスに再生する（fire-and-forget）。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nezia_source_play_delayed_to_bus(
-    engine: *mut NeziaEngine,
-    buffer: NeziaBufferId,
-    volume: f32,
-    pitch: f32,
-    bus: NeziaEntityId,
-    delay_seconds: f32,
-) -> u8 {
-    guard_value(0, || {
-        let Some(engine) = (unsafe { engine.as_mut() }) else {
-            return 0;
-        };
-        engine.inner.play_delayed_to_bus(
-            buffer.to_core(),
-            volume,
-            pitch,
-            bus.to_core(),
-            delay_seconds,
-        ) as u8
-    })
-}
-
 /// 複数ソースの位置を一括更新する（毎フレーム想定）。
 ///
 /// # 安全性
