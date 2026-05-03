@@ -305,6 +305,30 @@ ffi 側ではそれぞれ `nezia_buffer_load_from_memory` / `nezia_buffer_load_f
 
 UE 互換のために追加 API が必要かは Unreal 統合の設計時に再評価する。
 
+## Integration 層が吸収する責務
+
+core / ffi の API を最小に保つため、以下の責務は **Integration 層側で実装**する。core にはこれらに対応する API を追加しない。
+
+### 個別 API 感覚 ⇄ バッチ呼び出しの変換
+
+core の `nezia_source_batch_set_positions` は配列を 1 回で受け取る形（triple buffer 経由・tearing なし・alloc 0）。一方 Unity ユーザは `audioSource.transform.position = v` のような **個別書き込みの感覚** で扱いたい。
+
+この差は Integration 層が吸収する:
+
+- `NeziaAudioSource` ラッパが各ソースの desired position を C# 側に保持
+- フレーム末尾（`LateUpdate` 等）に全ソースぶんを配列化して `nezia_source_batch_set_positions` を 1 回呼ぶ
+- ユーザコードからは「個別代入の感覚」、core から見ると「バッチ呼び出し」
+
+この棲み分けにより:
+
+- core は「個別 position API」を持たなくて済む（経路が増えない、両 API 混在時の挙動仕様も増えない）
+- 既存の triple buffer 経路の利点（一貫スナップショット・alloc 0・レイテンシ最短）をそのまま享受
+- volume / pitch / spatial_enabled は **個別 API のまま** Atomic per-slot で受ける（[threading.md](../core/threading.md) 参照）。これらはスカラーで `AtomicU64` 1 個に収まり tearing しないため core に直接個別 API がある
+
+### 高レベル抽象（FMOD Event 相当・サウンドバンク等）
+
+これらも core の責務外。各エンジン向けプラグインで独自に実装する。
+
 ## アセットワークフローの推奨順位
 
 | 順位 | 経路 | 用途 |

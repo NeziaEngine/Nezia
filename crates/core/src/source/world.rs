@@ -250,6 +250,26 @@ impl SourceWorld {
         })
     }
 
+    /// dense index に対応する EntityId を取得する。
+    pub fn entity_at_dense(&self, dense_index: usize) -> Option<EntityId> {
+        self.entities.entity_at_dense(dense_index)
+    }
+
+    /// volume / pitch の dense 配列に直接書き込む。
+    ///
+    /// `apply_live_params` 等で SoA 一括反映する際に使う。
+    pub fn write_vol(&mut self, dense_index: usize, value: f32) {
+        if dense_index < self.vol.len() {
+            self.vol[dense_index] = value;
+        }
+    }
+
+    pub fn write_pitch(&mut self, dense_index: usize, value: f32) {
+        if dense_index < self.pitch.len() {
+            self.pitch[dense_index] = value;
+        }
+    }
+
     /// 密配列インデックスを指定して Source を削除する（swap-remove）。
     ///
     /// `SourceMixingSystem::update()` が再生終了した Source を直接削除するために使用する。

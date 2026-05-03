@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 use ringbuf::traits::Producer;
 
 use crate::buffer_pool::BufferId;
@@ -5,6 +7,12 @@ use crate::command::Command;
 use crate::entity::EntityId;
 
 use super::SoundEngine;
+
+/// FFI 用の C 関数ポインタコールバック型。
+///
+/// `play_*_with_callback_native` 系で受け取る型。`extern "C"` のため
+/// クロージャキャプチャはできず、`user_data` を経由して呼出側のコンテキストを伝える。
+pub type NativeFinishFn = unsafe extern "C" fn(user_data: *mut c_void);
 
 impl SoundEngine {
     /// ボイスをマスターバスに再生する（fire-and-forget）。
@@ -40,7 +48,9 @@ impl SoundEngine {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
             return false;
         };
-        let token = self.callbacks.register(Box::new(callback));
+        let Some(token) = self.callbacks.register_rust(Box::new(callback)) else {
+            return false;
+        };
         let ok = self
             .command_producer
             .try_push(Command::Play {
@@ -105,7 +115,9 @@ impl SoundEngine {
         let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
             return false;
         };
-        let token = self.callbacks.register(Box::new(callback));
+        let Some(token) = self.callbacks.register_rust(Box::new(callback)) else {
+            return false;
+        };
         let ok = self
             .command_producer
             .try_push(Command::PlayToBus {
@@ -145,12 +157,13 @@ impl SoundEngine {
         let index = self.buffer_pool.resolve(buffer)?;
         let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
 
-        let id = EntityId {
-            index: self.next_source_index,
-            generation: 0,
-        };
+        let id = self.source_slots.alloc()?;
+        // ライブパラメータスロットを priming（古い値・古い generation を上書き）。
+        // setter 経路がここに直接 atomic store するため、初期値も同じ場所に書く。
+        self.live_params.prime(id, vol, pitch);
 
-        self.command_producer
+        if self
+            .command_producer
             .try_push(Command::SpawnSource {
                 id,
                 audio_buffer_index: index,
@@ -160,9 +173,12 @@ impl SoundEngine {
                 token: 0,
                 looping,
             })
-            .ok()?;
-
-        self.next_source_index += 1;
+            .is_err()
+        {
+            // command 送信失敗 → スロットを即返却
+            self.source_slots.free(id);
+            return None;
+        }
         Some(id)
     }
 
@@ -185,12 +201,13 @@ impl SoundEngine {
         let index = self.buffer_pool.resolve(buffer)?;
         let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
 
-        let id = EntityId {
-            index: self.next_source_index,
-            generation: 0,
-        };
+        let id = self.source_slots.alloc()?;
+        self.live_params.prime(id, vol, pitch);
 
-        let token = self.callbacks.register(Box::new(callback));
+        let Some(token) = self.callbacks.register_rust(Box::new(callback)) else {
+            self.source_slots.free(id);
+            return None;
+        };
         let ok = self
             .command_producer
             .try_push(Command::SpawnSource {
@@ -205,10 +222,137 @@ impl SoundEngine {
             .is_ok();
         if !ok {
             self.callbacks.cancel(token);
+            self.source_slots.free(id);
             return None;
         }
+        Some(id)
+    }
 
-        self.next_source_index += 1;
+    /// マスターバスに C 関数コールバック付きで再生する（FFI 用、**alloc なし**）。
+    ///
+    /// 内部の `CallbackRegistry` に `Box<dyn FnOnce>` を生成せず、関数ポインタと
+    /// `user_data` を固定スロットに直接書き込む。FFI 越しに頻繁に発音される
+    /// シーン（ヒット音多用 等）でヒープアロケーションが発生しない。
+    ///
+    /// # Safety
+    /// `f` / `user_data` は `poll_events()` で発火するまで有効である必要がある。
+    #[must_use]
+    pub unsafe fn play_with_callback_native(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        looping: bool,
+        f: NativeFinishFn,
+        user_data: *mut c_void,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        let Some(token) = self.callbacks.register_native(f, user_data) else {
+            return false;
+        };
+        let ok = self
+            .command_producer
+            .try_push(Command::Play {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                token,
+                looping,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.cancel(token);
+        }
+        ok
+    }
+
+    /// 指定バスに C 関数コールバック付きで再生する（FFI 用、**alloc なし**）。
+    ///
+    /// # Safety
+    /// `f` / `user_data` は `poll_events()` で発火するまで有効である必要がある。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn play_to_bus_with_callback_native(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        looping: bool,
+        f: NativeFinishFn,
+        user_data: *mut c_void,
+    ) -> bool {
+        let Some(index) = self.buffer_pool.resolve(buffer) else {
+            return false;
+        };
+        let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
+            return false;
+        };
+        let Some(token) = self.callbacks.register_native(f, user_data) else {
+            return false;
+        };
+        let ok = self
+            .command_producer
+            .try_push(Command::PlayToBus {
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+                token,
+                looping,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.cancel(token);
+        }
+        ok
+    }
+
+    /// 制御ハンドル付き + C 関数コールバック付きで再生する（FFI 用、**alloc なし**）。
+    ///
+    /// # Safety
+    /// `f` / `user_data` は `poll_events()` で発火するまで有効である必要がある。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn play_with_handle_and_callback_native(
+        &mut self,
+        buffer: BufferId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        looping: bool,
+        f: NativeFinishFn,
+        user_data: *mut c_void,
+    ) -> Option<EntityId> {
+        let index = self.buffer_pool.resolve(buffer)?;
+        let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
+
+        let id = self.source_slots.alloc()?;
+        self.live_params.prime(id, vol, pitch);
+
+        let Some(token) = self.callbacks.register_native(f, user_data) else {
+            self.source_slots.free(id);
+            return None;
+        };
+        let ok = self
+            .command_producer
+            .try_push(Command::SpawnSource {
+                id,
+                audio_buffer_index: index,
+                vol,
+                pitch,
+                output_bus_dense,
+                token,
+                looping,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.cancel(token);
+            self.source_slots.free(id);
+            return None;
+        }
         Some(id)
     }
 
@@ -224,19 +368,21 @@ impl SoundEngine {
     // ── ライブソース制御 ──
 
     /// ソースの音量を設定する（spawn 後の動的変更）。
+    ///
+    /// SPSC コマンドキューを経由せず、共有 atomic スロットへ直接書き込む。
+    /// 反映は次のオーディオコールバックで（典型 5〜10 ms）。キュー満杯失敗は発生しない。
+    /// 戻り値は常に `true`（範囲外 index・stale generation でも silent に無視される）。
     #[must_use]
     pub fn set_source_volume(&mut self, id: EntityId, vol: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourceVolume { id, vol })
-            .is_ok()
+        self.live_params.store_volume(id, vol);
+        true
     }
 
-    /// ソースのピッチを設定する（spawn 後の動的変更）。
+    /// ソースのピッチを設定する（spawn 後の動的変更）。詳細は `set_source_volume` 参照。
     #[must_use]
     pub fn set_source_pitch(&mut self, id: EntityId, pitch: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourcePitch { id, pitch })
-            .is_ok()
+        self.live_params.store_pitch(id, pitch);
+        true
     }
 
     /// ソースの再生位置（フレーム単位）をシークする。

@@ -1,7 +1,7 @@
 use ringbuf::traits::Producer;
 
 use crate::command::Command;
-use crate::entity::EntityId;
+use crate::entity::{EntityId, SourcePositionUpdate};
 use crate::source::MAX_SOURCES;
 use crate::spatial::AttenuationModel;
 
@@ -40,11 +40,13 @@ impl SoundEngine {
     }
 
     /// ソースの空間演算を有効化・無効化する。
+    ///
+    /// 共有 atomic スロットへ直接書き込む（コマンドキュー非経由・キュー満杯失敗なし）。
+    /// 反映は次のオーディオコールバックで（典型 5〜10 ms）。
     #[must_use]
     pub fn set_source_spatial_enabled(&mut self, id: EntityId, enabled: bool) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourceSpatialEnabled { id, enabled })
-            .is_ok()
+        self.live_params.store_spatial_enabled(id, enabled);
+        true
     }
 
     /// SP-06: リスナーフォーカスを設定する（変更時のみ呼び出す）。
@@ -80,7 +82,7 @@ impl SoundEngine {
     /// `MAX_SOURCES` を超える分は切り捨てる（事前確保された容量を超えると
     /// メインスレッド側で realloc が発生し、リアルタイム制約とは関係ないが
     /// alloc コストが上がるため）。
-    pub fn batch_set_source_positions(&mut self, updates: &[(EntityId, [f32; 3])]) {
+    pub fn batch_set_source_positions(&mut self, updates: &[SourcePositionUpdate]) {
         let buf = self.position_updates_input.input_buffer_mut();
         buf.clear();
         let take = updates.len().min(MAX_SOURCES);

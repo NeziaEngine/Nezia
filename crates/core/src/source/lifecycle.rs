@@ -44,11 +44,15 @@ impl SourceLifecycleSystem {
                 natural_finish || matches!(world.state[source_i], SourceState::Stopped);
 
             if should_despawn {
+                let id = world.entity_at_dense(source_i);
                 if natural_finish {
                     let token = world.token[source_i];
                     if token != 0 {
                         emit_event(Event::SourceFinished { token });
                     }
+                }
+                if let Some(id) = id {
+                    emit_event(Event::SourceDespawned { id });
                 }
                 world.despawn_by_dense_index(source_i);
                 spatial.swap_remove(source_i);

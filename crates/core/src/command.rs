@@ -83,9 +83,7 @@ pub enum Command {
         max_distance: f32,
         rolloff: f32,
     },
-    /// ソースの空間演算を有効化・無効化する。
-    SetSourceSpatialEnabled { id: EntityId, enabled: bool },
-
+    // SetSourceSpatialEnabled は live_params の atomic スロット経由に変更されたため削除。
     /// SP-06: リスナーフォーカスを設定する（変更時のみ送信）。
     /// `*_focus_level` は内部で `[0.0, 1.0]` にクランプされる。
     /// 0.0 でフォーカス無効（リスナー位置のみ使用）。
@@ -96,10 +94,7 @@ pub enum Command {
     },
 
     // ── ライブソース制御（spawn 後の挙動変更） ──
-    /// ソースの音量を設定する。
-    SetSourceVolume { id: EntityId, vol: f32 },
-    /// ソースのピッチを設定する。
-    SetSourcePitch { id: EntityId, pitch: f32 },
+    // SetSourceVolume / SetSourcePitch は live_params の atomic スロット経由に変更されたため削除。
     /// ソースの再生位置（フレーム単位）を設定する。
     SeekSource { id: EntityId, frame_offset: f32 },
     /// ソースを一時停止する。

@@ -136,6 +136,22 @@ typedef void (*NeziaEventCallback)(const NeziaEvent* event, void* user_data);
 （`tag: u32` + `union { ... }`）として表現する。各言語側ラッパは生成された関数
 ポインタ型に対して、ランタイムが要求する形式の static コールバックを登録する。
 
+## 二層 ID と FFI 公開面
+
+[core/CONCEPT.md](../core/CONCEPT.md) で定義する論理 ID（Hash ID）→ 物理 ID（Entity ID）
+のマッピングは、**現時点では FFI 公開面に出さない**。理由は以下の通り。
+
+- 論理 ID は「オーサリングデータ（JSON 等）に紐づく不変識別子」として価値を持つため、
+  プロジェクトファイル方式（NEZIA 側で `.nezia` 等のアセット定義をロードする運用）が
+  確立されてから導入する方が、用途と整合する。
+- 現状の FFI はゲームエンジン側がランタイムでオブジェクトを spawn する想定で、
+  名前解決はゲームエンジン側 (`Dictionary<string, NeziaEntityId>` 等) で完結できる。
+  この段階で FFI に Hash ID 解決 API を出しても二重管理を生むだけで実利が薄い。
+
+プロジェクトファイル方式の導入時に、`nezia_resolve_hash_id(hash) -> NeziaEntityId` 等の
+ルックアップ API を追加する。それまで FFI が扱う ID は物理 ID（`NeziaEntityId` /
+`NeziaBufferId`）に限定する。
+
 ## ビルド成果物
 
 - `libnezia.dylib` / `libnezia.so` / `nezia.dll` （`cdylib`、デスクトップ・Android 等動的リンク向け）

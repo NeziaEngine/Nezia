@@ -17,7 +17,7 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{AttenuationModel, EntityId, SoundEngine};
+use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");
@@ -49,7 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for step in 0..=20 {
         let x = step as f32 * 1.2 - 12.0;
-        engine.batch_set_source_positions(&[(src, [x, 0.0, 5.0])]);
+        engine.batch_set_source_positions(&[SourcePositionUpdate {
+            source: src,
+            position: [x, 0.0, 5.0],
+        }]);
         print!(
             "\r  x={x:+5.1}m  [{}{}]",
             "█".repeat(step),
@@ -78,7 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for step in 0..=18 {
         let z = 40.0 - step as f32 * 2.5;
         let dist = z.abs();
-        engine.batch_set_source_positions(&[(src, [0.0, 0.0, z])]);
+        engine.batch_set_source_positions(&[SourcePositionUpdate {
+            source: src,
+            position: [0.0, 0.0, z],
+        }]);
         print!("\r  z={z:+5.1}m  距離={dist:.1}m");
         use std::io::Write as _;
         std::io::stdout().flush().ok();
@@ -130,7 +136,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(src, model, min, max, rolloff);
         let _ = engine.set_source_spatial_enabled(src, true);
-        engine.batch_set_source_positions(&[(src, [0.0, 0.0, 10.0])]);
+        engine.batch_set_source_positions(&[SourcePositionUpdate {
+            source: src,
+            position: [0.0, 0.0, 10.0],
+        }]);
         println!("\n  ▶ {label}");
         thread::sleep(Duration::from_millis(2400));
         let _ = engine.stop_all();
@@ -148,7 +157,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
     let _ = engine.set_source_spatial_enabled(src, true);
-    engine.batch_set_source_positions(&[(src, [8.0, 0.0, 0.0])]);
+    engine.batch_set_source_positions(&[SourcePositionUpdate {
+        source: src,
+        position: [8.0, 0.0, 0.0],
+    }]);
 
     // リスナーが +Z → +X へ 90° 回転
     for step in 0..=12 {
@@ -173,15 +185,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     section("シナリオ5: batch_set_source_positions 33件 (triple buffer 経由)");
     println!("  ▶ triple buffer に snapshot 公開 (音には影響なし)");
 
-    let big: Vec<(EntityId, [f32; 3])> = (0..33)
-        .map(|i| {
-            (
-                EntityId {
-                    index: i,
-                    generation: 0,
-                },
-                [i as f32 * 0.3, 0.0, 5.0],
-            )
+    let big: Vec<SourcePositionUpdate> = (0..33)
+        .map(|i| SourcePositionUpdate {
+            source: EntityId {
+                index: i,
+                generation: 0,
+            },
+            position: [i as f32 * 0.3, 0.0, 5.0],
         })
         .collect();
     engine.batch_set_source_positions(&big);
