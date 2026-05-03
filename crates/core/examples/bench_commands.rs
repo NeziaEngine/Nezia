@@ -201,7 +201,7 @@ fn bench_command(n: usize, frames: usize) -> BenchResult {
         let t = Instant::now();
         let _ = prod.try_push(Command::SetListener {
             position: [1.0, 2.0, 3.0],
-            forward: [0.0, 0.0, -1.0],
+            forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
         });
         let mut buf = [dummy; SPATIAL_BATCH_SIZE];
@@ -272,7 +272,7 @@ fn bench_arcswap(n: usize, frames: usize) -> BenchResult {
         let t = Instant::now();
         shared.listener.store(Arc::new(ListenerState {
             position: [1.0, 2.0, 3.0],
-            forward: [0.0, 0.0, -1.0],
+            forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
         }));
@@ -337,7 +337,7 @@ fn bench_direct(n: usize, frames: usize) -> BenchResult {
         let t = Instant::now();
         shared_listener = ListenerState {
             position: [1.0, 2.0, 3.0],
-            forward: [0.0, 0.0, -1.0],
+            forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
         };
@@ -476,7 +476,7 @@ fn bench_triple(n: usize, frames: usize) -> BenchResult {
             let l = listener_buf.back_mut();
             *l = ListenerState {
                 position: [1.0, 2.0, 3.0],
-                forward: [0.0, 0.0, -1.0],
+                forward: [0.0, 0.0, 1.0],
                 up: [0.0, 1.0, 0.0],
                 right: [1.0, 0.0, 0.0],
             };
@@ -544,7 +544,7 @@ fn bench_triple_crate(n: usize, frames: usize) -> BenchResult {
         let t = Instant::now();
         *listener_in.input_buffer_mut() = ListenerState {
             position: [1.0, 2.0, 3.0],
-            forward: [0.0, 0.0, -1.0],
+            forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
         };

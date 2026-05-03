@@ -32,13 +32,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let master = engine.master_bus();
 
-    // リスナーを原点、-Z 方向に向ける (右 = +X)
-    engine.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]);
+    // リスナーを原点、+Z 方向に向ける (左手系 Y-up: 右 = +X, 前 = +Z)
+    engine.set_listener([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
 
     // ─── シナリオ1: 左→右 横断 (パンニング確認) ──────────────
     section("シナリオ1: 左→右 横断 (パンニング)");
     println!("  ▶ 音が左耳 → 中央 → 右耳へと移動するはずです");
-    println!("  ▶ 音源: x=-12m → x=+12m  (正面 z=-5m, 20ステップ × 400ms)");
+    println!("  ▶ 音源: x=-12m → x=+12m  (正面 z=+5m, 20ステップ × 400ms)");
 
     let src = engine
         .play_with_handle(buf, 1.0, 1.0, master, false)
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for step in 0..=20 {
         let x = step as f32 * 1.2 - 12.0;
-        engine.batch_set_source_positions(&[(src, [x, 0.0, -5.0])]);
+        engine.batch_set_source_positions(&[(src, [x, 0.0, 5.0])]);
         print!(
             "\r  x={x:+5.1}m  [{}{}]",
             "█".repeat(step),
@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── シナリオ2: 接近 (距離減衰確認) ──────────────────────
     section("シナリオ2: 正面から接近 (距離減衰)");
     println!("  ▶ 音が遠くから近づき、通り過ぎるにつれて大きくなるはずです");
-    println!("  ▶ 音源: z=-40m → z=+5m  (18ステップ × 500ms)");
+    println!("  ▶ 音源: z=+40m → z=-5m  (18ステップ × 500ms)");
 
     let src = engine
         .play_with_handle(buf, 1.0, 1.0, master, false)
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = engine.set_source_spatial_enabled(src, true);
 
     for step in 0..=18 {
-        let z = step as f32 * 2.5 - 40.0;
+        let z = 40.0 - step as f32 * 2.5;
         let dist = z.abs();
         engine.batch_set_source_positions(&[(src, [0.0, 0.0, z])]);
         print!("\r  z={z:+5.1}m  距離={dist:.1}m");
@@ -130,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(src, model, min, max, rolloff);
         let _ = engine.set_source_spatial_enabled(src, true);
-        engine.batch_set_source_positions(&[(src, [0.0, 0.0, -10.0])]);
+        engine.batch_set_source_positions(&[(src, [0.0, 0.0, 10.0])]);
         println!("\n  ▶ {label}");
         thread::sleep(Duration::from_millis(2400));
         let _ = engine.stop_all();
@@ -150,10 +150,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = engine.set_source_spatial_enabled(src, true);
     engine.batch_set_source_positions(&[(src, [8.0, 0.0, 0.0])]);
 
-    // リスナーが -Z → +X へ 90° 回転
+    // リスナーが +Z → +X へ 90° 回転
     for step in 0..=12 {
         let angle = step as f32 * std::f32::consts::FRAC_PI_2 / 12.0; // 0 → π/2
-        let fwd = [angle.sin(), 0.0, -angle.cos()];
+        let fwd = [angle.sin(), 0.0, angle.cos()];
         let deg = (angle * 180.0 / std::f32::consts::PI) as u32;
         engine.set_listener([0.0, 0.0, 0.0], fwd, [0.0, 1.0, 0.0]);
         print!(
@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     index: i,
                     generation: 0,
                 },
-                [i as f32 * 0.3, 0.0, -5.0],
+                [i as f32 * 0.3, 0.0, 5.0],
             )
         })
         .collect();
