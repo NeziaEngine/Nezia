@@ -92,6 +92,11 @@ pub enum Command {
         distance_focus_level: f32,
         direction_focus_level: f32,
     },
+    /// SP-10: ソースの Doppler レベル `[0.0, 1.0]` を設定する。
+    /// 0.0 で Doppler 無効、1.0 で完全適用。値域外は内部でクランプされる。
+    SetSourceDopplerLevel { id: EntityId, level: f32 },
+    /// SP-10: 媒質中の音速 (m/s) を設定する。0 以下は無視される。既定値 343.0。
+    SetSoundSpeed { speed: f32 },
 
     // ── ライブソース制御（spawn 後の挙動変更） ──
     // SetSourceVolume / SetSourcePitch は live_params の atomic スロット経由に変更されたため削除。

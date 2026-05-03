@@ -1,7 +1,7 @@
 use ringbuf::traits::Producer;
 
 use crate::command::Command;
-use crate::entity::{EntityId, SourcePositionUpdate};
+use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::source::MAX_SOURCES;
 use crate::spatial::AttenuationModel;
 
@@ -15,6 +15,17 @@ impl SoundEngine {
     pub fn set_listener(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) {
         let buf = self.listener_input.input_buffer_mut();
         buf.update(position, forward, up);
+        self.listener_input.publish();
+    }
+
+    /// SP-10: リスナーの速度ベクトル (m/s) を更新する。Doppler 計算に使用される。
+    ///
+    /// `set_listener` と同じ triple buffer に乗るため、両者は順序を問わず
+    /// 同フレーム内で呼び出して構わない。最後の publish で 1 回まとめて反映される。
+    /// 既定値 `[0,0,0]` では Doppler 効果は発生しない。
+    pub fn set_listener_velocity(&mut self, velocity: [f32; 3]) {
+        let buf = self.listener_input.input_buffer_mut();
+        buf.velocity = velocity;
         self.listener_input.publish();
     }
 
@@ -88,5 +99,40 @@ impl SoundEngine {
         let take = updates.len().min(MAX_SOURCES);
         buf.extend_from_slice(&updates[..take]);
         self.position_updates_input.publish();
+    }
+
+    /// SP-10: 複数ソースの速度を一括更新する（毎フレーム用）。
+    ///
+    /// `batch_set_source_positions` と同じ triple buffer パターン。
+    /// 既定値 `[0,0,0]` では Doppler 効果は発生しないため、Doppler を使わない
+    /// プロジェクトでは呼び出す必要はない。
+    pub fn batch_set_source_velocities(&mut self, updates: &[SourceVelocityUpdate]) {
+        let buf = self.velocity_updates_input.input_buffer_mut();
+        buf.clear();
+        let take = updates.len().min(MAX_SOURCES);
+        buf.extend_from_slice(&updates[..take]);
+        self.velocity_updates_input.publish();
+    }
+
+    /// SP-10: ソースの Doppler 効果レベル `[0.0, 1.0]` を設定する。
+    ///
+    /// 0.0 で Doppler 完全無効、1.0 で物理計算をそのまま適用（Unity 既定値）。
+    /// 中間値は速度成分を線形スケールする。値域外は内部でクランプされる。
+    #[must_use]
+    pub fn set_source_doppler_level(&mut self, id: EntityId, level: f32) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourceDopplerLevel { id, level })
+            .is_ok()
+    }
+
+    /// SP-10: 媒質中の音速 (m/s) を設定する。0 以下は無視される。既定値 343.0（Unity 互換）。
+    ///
+    /// 用途例: 水中シーンで 1480 m/s 等に変更すると Doppler 効果が弱まる
+    /// （音速が大きいほど同じ相対速度でも周波数偏移が小さくなる）。
+    #[must_use]
+    pub fn set_sound_speed(&mut self, speed: f32) -> bool {
+        self.command_producer
+            .try_push(Command::SetSoundSpeed { speed })
+            .is_ok()
     }
 }

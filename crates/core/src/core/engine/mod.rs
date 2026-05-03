@@ -23,7 +23,7 @@ use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::command::Command;
 use crate::core::bus_routing::BusRoutingMirror;
-use crate::entity::{EntityId, SourcePositionUpdate};
+use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{MAX_SOURCES, SourceWorld};
 use crate::spatial::{ListenerState, SpatialWorld};
@@ -123,6 +123,9 @@ pub struct SoundEngine {
     /// ソース位置更新の triple buffer 入力側（newest-wins, alloc 無し）。
     /// 内部 Vec の容量は MAX_SOURCES で固定。clear + extend_from_slice で再確保なし。
     pub(super) position_updates_input: triple_buffer::Input<Vec<SourcePositionUpdate>>,
+    /// SP-10: ソース速度更新の triple buffer 入力側（newest-wins, alloc 無し）。
+    /// position_updates と同じ運用（容量 MAX_SOURCES 固定、clear + extend_from_slice）。
+    pub(super) velocity_updates_input: triple_buffer::Input<Vec<SourceVelocityUpdate>>,
     /// cpal のストリームハンドル。Drop 時に再生が停止される。
     _stream: Stream,
     /// AudioBuffer のスロット管理。
@@ -175,6 +178,7 @@ impl SoundEngine {
         let (listener_input, listener_output) =
             triple_buffer::triple_buffer(&ListenerState::default());
         let (position_updates_input, position_updates_output) = build_position_updates_buffer();
+        let (velocity_updates_input, velocity_updates_output) = build_velocity_updates_buffer();
         let (source_snapshots_input, source_snapshots_output) = build_source_snapshots_buffer();
 
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
@@ -195,6 +199,7 @@ impl SoundEngine {
             event_producer,
             listener_output,
             position_updates_output,
+            velocity_updates_output,
             source_snapshots_input,
             bus_world,
             source_world,
@@ -222,6 +227,7 @@ impl SoundEngine {
             event_consumer,
             listener_input,
             position_updates_input,
+            velocity_updates_input,
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
             bus_routing: BusRoutingMirror::new(master_bus_id),
@@ -339,6 +345,9 @@ impl SoundEngine {
 type PositionUpdatesIn = triple_buffer::Input<Vec<SourcePositionUpdate>>;
 type PositionUpdatesOut = triple_buffer::Output<Vec<SourcePositionUpdate>>;
 
+type VelocityUpdatesIn = triple_buffer::Input<Vec<SourceVelocityUpdate>>;
+type VelocityUpdatesOut = triple_buffer::Output<Vec<SourceVelocityUpdate>>;
+
 type SourceSnapshotsIn = triple_buffer::Input<Vec<SourceSnapshot>>;
 type SourceSnapshotsOut = triple_buffer::Output<Vec<SourceSnapshot>>;
 
@@ -374,6 +383,25 @@ fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
         MAX_SOURCES
     ];
     let (mut input, mut output) = triple_buffer::triple_buffer(&positions_initial);
+    input.input_buffer_mut().clear();
+    input.publish();
+    output.update();
+    (input, output)
+}
+
+/// SP-10: ソース速度更新用の triple buffer を初期化する。`build_position_updates_buffer` と同パターン。
+fn build_velocity_updates_buffer() -> (VelocityUpdatesIn, VelocityUpdatesOut) {
+    let velocities_initial: Vec<SourceVelocityUpdate> = vec![
+        SourceVelocityUpdate {
+            source: EntityId {
+                index: 0,
+                generation: 0,
+            },
+            velocity: [0.0; 3],
+        };
+        MAX_SOURCES
+    ];
+    let (mut input, mut output) = triple_buffer::triple_buffer(&velocities_initial);
     input.input_buffer_mut().clear();
     input.publish();
     output.update();

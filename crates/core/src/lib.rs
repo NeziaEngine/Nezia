@@ -30,5 +30,8 @@ pub use entity::EntityId;
 /// `SoundEngine::batch_set_source_positions()` の入力要素。
 pub use entity::SourcePositionUpdate;
 
+/// SP-10: `SoundEngine::batch_set_source_velocities()` の入力要素。
+pub use entity::SourceVelocityUpdate;
+
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;

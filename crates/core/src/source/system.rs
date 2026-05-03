@@ -49,8 +49,11 @@ impl SourceMixingSystem {
             };
 
             let pitch = world.pitch[source_i];
+            // SP-10: Doppler ピッチ倍率を再生レートに反映する。
+            // `spatial_enabled = false` または `doppler_level = 0.0` の場合は 1.0 で素通し。
+            let doppler = spatial.doppler_pitches[source_i];
             let rate_ratio = audio_buf.sample_rate as f32 / device_sample_rate;
-            let advance = pitch * rate_ratio;
+            let advance = pitch * doppler * rate_ratio;
             let src_channels = audio_buf.channels as usize;
             let src_frame_count = audio_buf.frame_count();
 

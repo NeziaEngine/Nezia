@@ -1,8 +1,25 @@
 //! リスナー位置・姿勢の設定。
 
+use core::slice;
+
 use crate::engine::NeziaEngine;
 use crate::panic::guard_result;
-use crate::types::{NeziaResult, NeziaVec3};
+use crate::types::{NeziaResult, NeziaSourceVelocityUpdate, NeziaVec3};
+use nezia_core::SourceVelocityUpdate;
+
+// `NeziaSourceVelocityUpdate` と `core::SourceVelocityUpdate` のレイアウト一致を保証する
+// （`batch_set_velocities` でゼロコピーキャストするため）。
+const _: () = {
+    assert!(
+        size_of::<NeziaSourceVelocityUpdate>() == size_of::<SourceVelocityUpdate>(),
+        "NeziaSourceVelocityUpdate と core::SourceVelocityUpdate のサイズが一致しない"
+    );
+    assert!(
+        align_of::<NeziaSourceVelocityUpdate>() == align_of::<SourceVelocityUpdate>(),
+        "NeziaSourceVelocityUpdate と core::SourceVelocityUpdate のアラインが一致しない"
+    );
+    assert!(size_of::<NeziaSourceVelocityUpdate>() == 20);
+};
 
 /// リスナーの位置・向きを更新する（毎フレーム呼び出し可）。
 ///
@@ -23,6 +40,101 @@ pub unsafe extern "C" fn nezia_listener_set(
             .inner
             .set_listener(position.to_array(), forward.to_array(), up.to_array());
         NeziaResult::Ok
+    })
+}
+
+/// SP-10: リスナーの速度ベクトル (m/s) を設定する。Doppler 計算に使用。
+///
+/// `nezia_listener_set` と同じ triple buffer に乗るため、両者は順序を問わず
+/// 同フレーム内で呼んで構わない。既定値 `(0,0,0)` では Doppler 効果は発生しない。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_listener_set_velocity(
+    engine: *mut NeziaEngine,
+    velocity: NeziaVec3,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        engine.inner.set_listener_velocity(velocity.to_array());
+        NeziaResult::Ok
+    })
+}
+
+/// SP-10: 媒質中の音速 (m/s) を設定する。0 以下は無視される。既定値 343.0（Unity 互換）。
+///
+/// 用途例: 水中シーンで 1480.0 等に変更。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_set_sound_speed(
+    engine: *mut NeziaEngine,
+    speed: f32,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.set_sound_speed(speed) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
+/// SP-10: 複数ソースの速度を一括更新する（毎フレーム想定）。
+///
+/// # 安全性
+/// `updates_ptr` は `updates_len` 要素分の有効領域を指すこと。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_batch_set_velocities(
+    engine: *mut NeziaEngine,
+    updates_ptr: *const NeziaSourceVelocityUpdate,
+    updates_len: usize,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if updates_len == 0 {
+            engine.inner.batch_set_source_velocities(&[]);
+            return NeziaResult::Ok;
+        }
+        if updates_ptr.is_null() {
+            return NeziaResult::NullPointer;
+        }
+        // SAFETY:
+        // - `updates_ptr` は呼出側契約により `updates_len` 要素分の有効領域。
+        // - `NeziaSourceVelocityUpdate` と `SourceVelocityUpdate` は上の const アサーションで
+        //   レイアウト一致を保証しているので、要素ごとの再解釈はトリビアルに安全。
+        let updates: &[SourceVelocityUpdate] = unsafe {
+            slice::from_raw_parts(updates_ptr.cast::<SourceVelocityUpdate>(), updates_len)
+        };
+        engine.inner.batch_set_source_velocities(updates);
+        NeziaResult::Ok
+    })
+}
+
+/// SP-10: ソースの Doppler 効果レベル `[0.0, 1.0]` を設定する。
+///
+/// 0.0 で Doppler 完全無効、1.0 で物理計算を完全適用。値域外は内部でクランプされる。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_set_doppler_level(
+    engine: *mut NeziaEngine,
+    source: crate::types::NeziaEntityId,
+    level: f32,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine
+            .inner
+            .set_source_doppler_level(source.to_core(), level)
+        {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
     })
 }
 
