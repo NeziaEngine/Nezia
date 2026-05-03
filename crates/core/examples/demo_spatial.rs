@@ -5,7 +5,7 @@
 //! ヘッドフォン推奨。
 //!
 //! カバー範囲:
-//!   - spawn_source / set_source_spatial_enabled
+//!   - play_with_handle / set_source_spatial_enabled
 //!   - set_source_spatial_params: 全4減衰モデル
 //!   - set_listener: 位置・向き
 //!   - batch_set_source_positions: フレームごとの移動
@@ -41,8 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: x=-12m → x=+12m  (正面 z=-5m, 20ステップ × 400ms)");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master, false)
-        .expect("spawn_source");
+        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
     let _ = engine.set_source_spatial_enabled(src, true);
@@ -69,8 +69,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: z=-40m → z=+5m  (18ステップ × 500ms)");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master, false)
-        .expect("spawn_source");
+        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 40.0, 1.0);
     let _ = engine.set_source_spatial_enabled(src, true);
@@ -126,8 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (label, model, min, max, rolloff) in models {
         let src = engine
-            .spawn_source(buf, 1.0, 1.0, master, false)
-            .expect("spawn_source");
+            .play_with_handle(buf, 1.0, 1.0, master, false)
+            .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(src, model, min, max, rolloff);
         let _ = engine.set_source_spatial_enabled(src, true);
         engine.batch_set_source_positions(&[(src, [0.0, 0.0, -10.0])]);
@@ -143,8 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 13ステップ × 400ms でリスナーが 90° 回転");
 
     let src = engine
-        .spawn_source(buf, 1.0, 1.0, master, false)
-        .expect("spawn_source");
+        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
     let _ = engine.set_source_spatial_enabled(src, true);

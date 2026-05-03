@@ -147,7 +147,7 @@ if position_updates_output.update() {
 }
 ```
 
-逆順にすると、メインスレッドが「`spawn_source` → 直後に `batch_set_source_positions`」と発行した場合に、
+逆順にすると、メインスレッドが「`play_with_handle` → 直後に `batch_set_source_positions`」と発行した場合に、
 
 1. triple buffer 反映: source 未生成 → `resolve(id)` が None → 位置更新が捨てられる
 2. コマンド処理: source 生成（デフォルト位置 [0,0,0]）

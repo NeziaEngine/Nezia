@@ -36,7 +36,8 @@
 | `play_with_callback(buf, vol, pitch, cb)` | `bool` | 自然終了でコールバック発火 |
 | `play_to_bus(buf, vol, pitch, bus)` | `bool` | 任意のバスへ再生 |
 | `play_to_bus_with_callback(buf, vol, pitch, bus, cb)` | `bool` | 同上 + コールバック |
-| `spawn_source(buf, vol, pitch, bus)` | `Option<EntityId>` | 制御可能な 3D ソースを生成 |
+| `play_with_handle(buf, vol, pitch, bus, looping)` | `Option<EntityId>` | ハンドル付き再生（音量・ピッチ・位置を後から制御可能。1 回の発音インスタンス） |
+| `play_with_handle_and_callback(buf, vol, pitch, bus, looping, cb)` | `Option<EntityId>` | 同上 + 自然終了コールバック |
 | `set_volume(v)` | `bool` | マスターバスのゲインを変更 |
 | `stop_all()` | `bool` | 全ソースを停止（コールバックは呼ばずに解放）|
 

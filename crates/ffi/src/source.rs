@@ -133,13 +133,17 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
     })
 }
 
-/// 3D ソースをスポーンし、EntityId を返す。失敗時は INVALID。
+/// 再生を開始し、制御用ハンドル（EntityId）を返す。失敗時は INVALID。
+///
+/// Source は 1 回の発音インスタンスを表す。バッファ末尾到達 (`looping = 0`) または
+/// `nezia_source_stop()` で despawn され、その時点で EntityId は無効化される。
+/// 再生し直す場合は再度この関数を呼んで新しい EntityId を取得する。
 ///
 /// `callback` が `Some` のとき、自然終了時に `nezia_engine_poll_events()` 経由で
 /// 1 度だけ呼ばれる（`looping != 0` の場合は呼ばれない）。`user_data` のライフタイムは
 /// コールバック発火まで呼出側が保証する。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nezia_source_spawn(
+pub unsafe extern "C" fn nezia_source_play_with_handle(
     engine: *mut NeziaEngine,
     buffer: NeziaBufferId,
     volume: f32,
@@ -156,7 +160,7 @@ pub unsafe extern "C" fn nezia_source_spawn(
         let result = if callback.is_some() {
             let ud = pack(user_data);
             let cb = callback;
-            engine.inner.spawn_source_with_callback(
+            engine.inner.play_with_handle_and_callback(
                 buffer.to_core(),
                 volume,
                 pitch,
@@ -170,9 +174,13 @@ pub unsafe extern "C" fn nezia_source_spawn(
                 },
             )
         } else {
-            engine
-                .inner
-                .spawn_source(buffer.to_core(), volume, pitch, bus.to_core(), looping != 0)
+            engine.inner.play_with_handle(
+                buffer.to_core(),
+                volume,
+                pitch,
+                bus.to_core(),
+                looping != 0,
+            )
         };
         result
             .map(NeziaEntityId::from_core)
