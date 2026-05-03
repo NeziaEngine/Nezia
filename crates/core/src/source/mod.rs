@@ -1,13 +1,23 @@
 mod lifecycle;
 mod system;
+mod virtualizer;
 mod world;
 
 pub use lifecycle::SourceLifecycleSystem;
 pub use system::SourceMixingSystem;
 pub use world::{SourceComponent, SourceState, SourceWorld};
 
-/// 最大同時発音数。
+/// 最大論理ソース数 (`SourceWorld` の上限)。
+///
+/// `MAX_PHYSICAL_VOICES` を超えるソースは spawn 直後の rebalance で `is_virtual = true`
+/// となり、ミキシング段でスキップされる (sample_offset は前進する)。
 pub const MAX_SOURCES: usize = 256;
+
+/// 物理ボイス数 (実 DSP / ミキシングを行うボイスの上限)。
+///
+/// この数を超えるソースは Voice Virtualization で仮想化され、ミキシング処理がスキップされる。
+/// Unity / Wwise / FMOD と同様、論理上限 (`MAX_SOURCES`) より小さく設定する。
+pub const MAX_PHYSICAL_VOICES: usize = 32;
 
 #[cfg(test)]
 mod tests {

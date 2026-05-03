@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::audio::AudioBuffer;
 use crate::spatial::{SpatialSystem, SpatialWorld};
 
+use super::virtualizer::VoiceVirtualizer;
 use super::world::{SourceState, SourceWorld};
 
 /// Source ミキシングシステム。
@@ -38,6 +39,10 @@ impl SourceMixingSystem {
         // Phase 1: 空間ゲインを計算（SpatialWorld に書き込む）。
         SpatialSystem::compute_gains(spatial, &world.vol, source_count);
 
+        // Phase 1.5: Voice Virtualization。空間ゲインを使って実効可聴度をスコアリングし、
+        // 上位 MAX_PHYSICAL_VOICES のみ物理化、残りを仮想化する。
+        VoiceVirtualizer::rebalance(world, spatial);
+
         // Phase 2: ミキシング。
         for source_i in 0..source_count {
             if world.state[source_i] != SourceState::Playing {
@@ -54,6 +59,19 @@ impl SourceMixingSystem {
             let doppler = spatial.doppler_pitches[source_i];
             let rate_ratio = audio_buf.sample_rate as f32 / device_sample_rate;
             let advance = pitch * doppler * rate_ratio;
+
+            // Voice Virtualization: 仮想ボイスは sample_offset だけ前進してミキシングをスキップ。
+            // 復帰時に再生位置が「正しい時点」になるよう時間同期を維持する。
+            if world.is_virtual[source_i] {
+                let frames_advanced = advance * (sample_count / device_channels.max(1)) as f32;
+                let mut offset = world.sample_offset[source_i] + frames_advanced;
+                let frame_count_f = audio_buf.frame_count() as f32;
+                if world.looping[source_i] && frame_count_f > 0.0 {
+                    offset = offset.rem_euclid(frame_count_f);
+                }
+                world.sample_offset[source_i] = offset;
+                continue;
+            }
             let src_channels = audio_buf.channels as usize;
             let src_frame_count = audio_buf.frame_count();
 

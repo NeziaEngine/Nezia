@@ -110,4 +110,6 @@ pub enum Command {
     StopSource { id: EntityId },
     /// ソースのループフラグを設定する（再生中の動的変更）。
     SetSourceLoop { id: EntityId, looping: bool },
+    /// Voice Virtualization 用優先度を設定する。Unity 互換 0..255、低いほど高優先。
+    SetSourcePriority { id: EntityId, priority: u8 },
 }

@@ -424,4 +424,17 @@ impl SoundEngine {
             .try_push(Command::SetSourceLoop { id, looping })
             .is_ok()
     }
+
+    /// Voice Virtualization 用優先度を設定する (Unity `AudioSource.priority` 互換)。
+    ///
+    /// 値域 `0..=255`、**低い値ほど高優先**。既定値 128。
+    /// 物理ボイス上限 (`MAX_PHYSICAL_VOICES`) を超えるアクティブソースが存在するとき、
+    /// 優先度・音量・距離減衰の総合スコアが下位のソースが仮想化される (ミキシングはスキップ、
+    /// `sample_offset` のみ前進して時間同期を維持)。
+    #[must_use]
+    pub fn set_source_priority(&mut self, id: EntityId, priority: u8) -> bool {
+        self.command_producer
+            .try_push(Command::SetSourcePriority { id, priority })
+            .is_ok()
+    }
 }

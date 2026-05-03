@@ -254,6 +254,7 @@ fn process_command(
                 output_bus: 0,
                 token,
                 looping,
+                priority: 128,
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
@@ -277,6 +278,7 @@ fn process_command(
                 output_bus: output_bus_dense,
                 token,
                 looping,
+                priority: 128,
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
@@ -303,6 +305,7 @@ fn process_command(
                     output_bus: output_bus_dense,
                     token,
                     looping,
+                    priority: 128,
                 },
             );
             if spawned {
@@ -401,6 +404,9 @@ fn process_command(
         }
         Command::SetSourceLoop { id, looping } => {
             source_world.set_looping(id, looping);
+        }
+        Command::SetSourcePriority { id, priority } => {
+            source_world.set_priority(id, priority);
         }
     }
 }
