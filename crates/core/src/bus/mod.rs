@@ -193,7 +193,18 @@ mod tests {
         world.set_gain(master, 0.5);
 
         let mut output = vec![0.0f32; sample_count];
-        BusSystem::update(&mut world, &mut output, 2, sample_count);
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut output,
+            2,
+            sample_count,
+        );
 
         for &s in &output {
             assert!((s - 0.5).abs() < 1e-6, "expected 0.5, got {s}");
@@ -217,7 +228,18 @@ mod tests {
         world.set_muted(master, true);
 
         let mut output = vec![0.0f32; sample_count];
-        BusSystem::update(&mut world, &mut output, 2, sample_count);
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut output,
+            2,
+            sample_count,
+        );
 
         for &s in &output {
             assert_eq!(s, 0.0, "muted bus should output silence");
@@ -252,7 +274,18 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        BusSystem::update(&mut world, &mut output, 2, sample_count);
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut output,
+            2,
+            sample_count,
+        );
 
         for &s in &output {
             assert!(
@@ -288,7 +321,18 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        BusSystem::update(&mut world, &mut output, 2, sample_count);
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut output,
+            2,
+            sample_count,
+        );
 
         for &s in &output {
             assert_eq!(s, 0.0, "muted child should not propagate");

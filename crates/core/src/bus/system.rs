@@ -1,22 +1,30 @@
+use crate::effect::{EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld};
+
 use super::{MAX_MIX_BUFFER_SIZE, world::BusWorld};
 
 /// バス処理システム。
 ///
-/// `BusWorld` の mix_buffer に対して gain・mute 処理を行い、
-/// 最終出力を output_buffer に書き出す。
+/// `BusWorld` の mix_buffer に対して `Pre-Fader → gain/mute → Post-Fader` の
+/// 3 ステージで処理を行い、最終出力を output_buffer に書き出す。
+/// チェーンが空のバスはエフェクト関数呼出を完全にスキップする (最速経路)。
 pub struct BusSystem;
 
 impl BusSystem {
     /// バス処理を行い、最終出力を `output_buffer` に書き出す。
     ///
     /// `process_order` 順（リーフ→ルート）に:
-    /// 1. mute されていれば当該バスのスライスをゼロ埋め、そうでなければ gain を乗算。
-    /// 2. マスターバス以外は親バスの mix_buffer に加算。
-    /// 3. マスターバスの mix_buffer を `output_buffer` にコピー。
+    /// 1. Pre-Fader エフェクトチェーンを適用。
+    /// 2. mute されていればゼロ埋め、そうでなければ gain を乗算 (Fader)。
+    /// 3. Post-Fader エフェクトチェーンを適用。
+    /// 4. マスターバス以外は親バスの mix_buffer に加算。
+    /// 5. マスターバスの mix_buffer を `output_buffer` にコピー。
     pub fn update(
         world: &mut BusWorld,
+        effect_world: &EffectWorld,
+        lpf_world: &mut LpfWorld,
+        hpf_world: &mut HpfWorld,
         output_buffer: &mut [f32],
-        _device_channels: usize,
+        device_channels: usize,
         sample_count: usize,
     ) {
         let sample_count = sample_count.min(MAX_MIX_BUFFER_SIZE);
@@ -29,6 +37,24 @@ impl BusSystem {
             let d = d as usize;
             let start = d * MAX_MIX_BUFFER_SIZE;
 
+            // Pre-Fader chain (空ならスキップ)。
+            if world.pre_count[d] > 0 {
+                let chain_len = world.pre_count[d] as usize;
+                let chain_copy: [crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_BUS] =
+                    world.pre_chain[d];
+                let buf = &mut world.mix_buffer[start..start + sample_count];
+                EffectSystem::apply_chain(
+                    effect_world,
+                    lpf_world,
+                    hpf_world,
+                    &chain_copy[..chain_len],
+                    buf,
+                    device_channels,
+                );
+            }
+            let _ = EffectPosition::Pre;
+
+            // Fader: mute / gain。
             if world.muted[d] {
                 world.mix_buffer[start..start + sample_count].fill(0.0);
             } else {
@@ -38,6 +64,22 @@ impl BusSystem {
                         *s *= g;
                     }
                 }
+            }
+
+            // Post-Fader chain (空ならスキップ)。
+            if world.post_count[d] > 0 {
+                let chain_len = world.post_count[d] as usize;
+                let chain_copy: [crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_BUS] =
+                    world.post_chain[d];
+                let buf = &mut world.mix_buffer[start..start + sample_count];
+                EffectSystem::apply_chain(
+                    effect_world,
+                    lpf_world,
+                    hpf_world,
+                    &chain_copy[..chain_len],
+                    buf,
+                    device_channels,
+                );
             }
 
             if d != master_dense {

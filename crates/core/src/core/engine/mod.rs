@@ -3,6 +3,8 @@ mod buffer_api;
 mod buffer_reader;
 mod bus_api;
 mod callback_registry;
+mod effect_alloc;
+mod effect_api;
 mod live_params;
 mod slot_allocator;
 mod source_api;
@@ -23,6 +25,7 @@ use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::command::Command;
 use crate::core::bus_routing::BusRoutingMirror;
+use crate::effect::{EffectWorld, HpfWorld, LpfWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{MAX_SOURCES, SourceWorld};
@@ -30,6 +33,7 @@ use crate::spatial::{ListenerState, SpatialWorld};
 
 use audio_thread::AudioThread;
 use callback_registry::{CallbackKind, CallbackRegistry};
+use effect_alloc::EffectIdAllocator;
 pub(crate) use live_params::SourceLiveParams;
 use slot_allocator::SourceSlotAllocator;
 
@@ -134,6 +138,8 @@ pub struct SoundEngine {
     pub(super) bus_routing: BusRoutingMirror,
     /// 3D ソース用 EntityId のスロット管理（再利用付き、上限 MAX_SOURCES）。
     pub(super) source_slots: SourceSlotAllocator,
+    /// DSP エフェクト用 EntityId のスロット管理（再利用付き、上限 MAX_EFFECTS）。
+    pub(super) effect_slots: EffectIdAllocator,
     /// メイン⇄サウンド両スレッドで共有する SoA ライブパラメータ。
     /// `set_source_volume` 等は SPSC コマンドではなくこちらに直接 atomic store する。
     pub(super) live_params: Arc<SourceLiveParams>,
@@ -190,6 +196,9 @@ impl SoundEngine {
 
         let source_world = SourceWorld::new();
         let spatial_world = SpatialWorld::new();
+        let effect_world = EffectWorld::new();
+        let lpf_world = LpfWorld::new();
+        let hpf_world = HpfWorld::new();
 
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
@@ -204,6 +213,9 @@ impl SoundEngine {
             bus_world,
             source_world,
             spatial_world,
+            effect_world,
+            lpf_world,
+            hpf_world,
             shared_buffers_clone,
             live_params_audio,
             master_bus_id,
@@ -232,6 +244,7 @@ impl SoundEngine {
             buffer_pool: AudioBufferPool::new(shared_buffers),
             bus_routing: BusRoutingMirror::new(master_bus_id),
             source_slots: SourceSlotAllocator::new(),
+            effect_slots: EffectIdAllocator::new(),
             live_params,
             callbacks: CallbackRegistry::new(),
             source_snapshots_output,

@@ -3,6 +3,7 @@ mod buffer_pool;
 mod bus;
 mod command;
 mod core;
+mod effect;
 mod entity;
 mod event;
 mod source;
@@ -35,3 +36,8 @@ pub use entity::SourceVelocityUpdate;
 
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;
+
+/// DSP エフェクト関連の公開型。
+pub use effect::{
+    EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget, HpfParam, LpfParam,
+};

@@ -1,4 +1,5 @@
 use crate::bus::MAX_BUSES;
+use crate::effect::{EffectId, EffectKind, EffectPosition, EffectTarget};
 use crate::entity::EntityId;
 use crate::spatial::AttenuationModel;
 
@@ -112,4 +113,22 @@ pub enum Command {
     SetSourceLoop { id: EntityId, looping: bool },
     /// Voice Virtualization 用優先度を設定する。Unity 互換 0..255、低いほど高優先。
     SetSourcePriority { id: EntityId, priority: u8 },
+
+    // ── DSP エフェクト (Phase 2-3) ──
+    /// 事前発行された EffectId でエフェクトを生成する。
+    /// `kind` の論理種別と `algo` の物理アルゴリズム index を渡す。
+    /// 初期パラメータは種別ごとに設定後 `SetEffectParam` を発行する。
+    SpawnEffect {
+        id: EffectId,
+        target: EffectTarget,
+        kind: EffectKind,
+        algo: u8,
+        position: EffectPosition,
+    },
+    /// エフェクトを削除する。
+    DespawnEffect { id: EffectId },
+    /// エフェクトを enable / disable する (状態は保持、apply_chain でスキップされる)。
+    SetEffectEnabled { id: EffectId, enabled: bool },
+    /// エフェクトパラメータを設定する。`param` は種別ごとの enum を `as u8` でキャスト。
+    SetEffectParam { id: EffectId, param: u8, value: f32 },
 }
