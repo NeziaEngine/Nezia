@@ -25,7 +25,7 @@ use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::command::Command;
 use crate::core::bus_routing::BusRoutingMirror;
-use crate::effect::{EffectWorld, HpfWorld, LpfWorld};
+use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{MAX_SOURCES, SourceWorld};
@@ -199,6 +199,7 @@ impl SoundEngine {
         let effect_world = EffectWorld::new();
         let lpf_world = LpfWorld::new();
         let hpf_world = HpfWorld::new();
+        let reverb_world = ReverbWorld::new();
 
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
@@ -216,6 +217,7 @@ impl SoundEngine {
             effect_world,
             lpf_world,
             hpf_world,
+            reverb_world,
             shared_buffers_clone,
             live_params_audio,
             master_bus_id,

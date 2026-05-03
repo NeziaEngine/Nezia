@@ -40,4 +40,5 @@ pub use spatial::AttenuationModel;
 /// DSP エフェクト関連の公開型。
 pub use effect::{
     EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget, HpfParam, LpfParam,
+    ReverbParam,
 };

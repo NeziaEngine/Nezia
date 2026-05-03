@@ -98,7 +98,9 @@ impl SparseSet {
 
     /// 事前割り当てされた EntityId でスロットを確保する。
     ///
-    /// 同じ index が既に使用中の場合は `None` を返す。
+    /// 同じ index が **現在 dense に存在する** (使用中) 場合は `None` を返す。
+    /// 過去に dealloc されてスロットが空いている場合は再利用する (generation は呼出側が
+    /// 提供する値で上書き; 呼出側 = メインスレッドの allocator が generation を管理する前提)。
     /// 成功時は密配列インデックスを返す。
     /// 呼び出し側はこのインデックスに合わせて全コンポーネント配列に `push` すること。
     pub fn alloc_with_id(&mut self, id: EntityId) -> Option<usize> {
@@ -108,7 +110,10 @@ impl SparseSet {
         if id.index as usize >= self.sparse.len() {
             self.sparse.resize(id.index as usize + 1, None);
         }
-        if self.sparse[id.index as usize].is_some() {
+        // sparse 上に古いエントリ (dealloc 済みの残骸) があっても、
+        // 現在 dense に居なければ (= 使用中でなければ) 再利用してよい。
+        // dense_to_sparse に index が登場するかで使用中判定する。
+        if self.dense_to_sparse.iter().any(|&i| i == id.index) {
             return None;
         }
 
@@ -118,6 +123,8 @@ impl SparseSet {
             generation: id.generation,
         });
         self.dense_to_sparse.push(id.index);
+        // free_list にあるかもしれないので除去 (重複 push 防止)。
+        self.free_list.retain(|&i| i != id.index);
 
         if id.index >= self.next_index {
             self.next_index = id.index + 1;
@@ -214,5 +221,54 @@ impl SparseSet {
             self.dense_to_sparse[dense_index] = moved_sparse_index;
         }
         self.dense_to_sparse.swap_remove(dense_index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alloc_with_id_can_reuse_freed_slot() {
+        // 回帰テスト: alloc_with_id が dealloc 済みスロットを再利用できること。
+        // メインスレッド allocator (例: EffectIdAllocator) は free_list で slot を再利用し
+        // generation を bump した ID を発行する。sound 側 alloc_with_id が拒否すると
+        // SoA 配列が空のまま resolve(id) は Some を返してしまい out-of-bounds する。
+        let mut s = SparseSet::new(8);
+        let id1 = EntityId {
+            index: 0,
+            generation: 0,
+        };
+        assert_eq!(s.alloc_with_id(id1), Some(0));
+        assert_eq!(s.dealloc(id1), Some(0));
+
+        // メイン側で generation を bump した ID を発行 (実際の運用と同等)。
+        let id2 = EntityId {
+            index: 0,
+            generation: 1,
+        };
+        assert_eq!(
+            s.alloc_with_id(id2),
+            Some(0),
+            "freed slot should be reusable with bumped generation"
+        );
+        assert_eq!(s.resolve(id2), Some(0));
+        assert_eq!(s.resolve(id1), None, "old id with stale gen should not resolve");
+    }
+
+    #[test]
+    fn alloc_with_id_rejects_currently_used_slot() {
+        // 使用中のスロットに同じ index で alloc_with_id を呼ぶと None を返すこと。
+        let mut s = SparseSet::new(8);
+        let id1 = EntityId {
+            index: 0,
+            generation: 0,
+        };
+        assert_eq!(s.alloc_with_id(id1), Some(0));
+        let id2 = EntityId {
+            index: 0,
+            generation: 5,
+        };
+        assert_eq!(s.alloc_with_id(id2), None);
     }
 }

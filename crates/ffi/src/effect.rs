@@ -121,7 +121,7 @@ pub unsafe extern "C" fn nezia_effect_set_enabled(
 ///
 /// `param` は種別ごとに以下を意味する:
 /// - LPF / HPF: 0=Cutoff (Hz), 1=Q
-/// - Reverb: PR 2 で実装
+/// - Reverb: 0=RoomSize, 1=Damping, 2=Wet, 3=Dry, 4=Width (すべて [0.0, 1.0] 正規化値)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_effect_set_param(
     engine: *mut NeziaEngine,

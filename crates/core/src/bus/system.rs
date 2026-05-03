@@ -1,4 +1,4 @@
-use crate::effect::{EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld};
+use crate::effect::{EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 
 use super::{MAX_MIX_BUFFER_SIZE, world::BusWorld};
 
@@ -18,11 +18,13 @@ impl BusSystem {
     /// 3. Post-Fader エフェクトチェーンを適用。
     /// 4. マスターバス以外は親バスの mix_buffer に加算。
     /// 5. マスターバスの mix_buffer を `output_buffer` にコピー。
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         world: &mut BusWorld,
         effect_world: &EffectWorld,
         lpf_world: &mut LpfWorld,
         hpf_world: &mut HpfWorld,
+        reverb_world: &mut ReverbWorld,
         output_buffer: &mut [f32],
         device_channels: usize,
         sample_count: usize,
@@ -47,6 +49,7 @@ impl BusSystem {
                     effect_world,
                     lpf_world,
                     hpf_world,
+                    reverb_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -76,6 +79,7 @@ impl BusSystem {
                     effect_world,
                     lpf_world,
                     hpf_world,
+                    reverb_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
+use crate::effect::{EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::spatial::{SpatialSystem, SpatialWorld};
 
 use super::virtualizer::VoiceVirtualizer;
@@ -10,20 +11,29 @@ use super::world::{SourceState, SourceWorld};
 ///
 /// `SourceWorld` のコンポーネントを読み出し、バスの mix_buffer に加算ミキシングする。
 /// 再生が完了した Source の despawn も担当する。
+///
+/// # Pre-Spatial エフェクトチェーン (Phase 2-3 PR 2)
+///
+/// `SourceWorld::pre_chain` に登録されたエフェクトを **resampler 後・Spatial 適用前** の
+/// モノラル信号に対して適用する。チェーン空のソースは関数呼出を完全にスキップする
+/// (最速経路)。スクラッチバッファは呼出側 (`AudioThread`) が事前確保したものを借用する。
 pub struct SourceMixingSystem;
 
 impl SourceMixingSystem {
     /// 毎オーディオコールバックで呼び出す update 処理。
     ///
-    /// 全アクティブ Source の AudioBuffer からサンプルを読み出し、
-    /// `bus_mix_buffer[output_bus * bus_stride ..]` に加算ミキシングする。
-    /// 再生が完了した Source は自動的に despawn される。
-    ///
     /// `bus_mix_buffer` は呼び出し前にゼロクリアされている前提。
+    /// `mono_scratch` は最低 `sample_count / device_channels` フレーム分の容量を持つ
+    /// 事前確保済みバッファ (Pre-Spatial chain 適用に使う)。
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         world: &mut SourceWorld,
         spatial: &mut SpatialWorld,
+        effect_world: &EffectWorld,
+        lpf_world: &mut LpfWorld,
+        hpf_world: &mut HpfWorld,
+        reverb_world: &mut ReverbWorld,
+        mono_scratch: &mut [f32],
         bus_mix_buffer: &mut [f32],
         bus_stride: usize,
         sample_count: usize,
@@ -55,13 +65,11 @@ impl SourceMixingSystem {
 
             let pitch = world.pitch[source_i];
             // SP-10: Doppler ピッチ倍率を再生レートに反映する。
-            // `spatial_enabled = false` または `doppler_level = 0.0` の場合は 1.0 で素通し。
             let doppler = spatial.doppler_pitches[source_i];
             let rate_ratio = audio_buf.sample_rate as f32 / device_sample_rate;
             let advance = pitch * doppler * rate_ratio;
 
             // Voice Virtualization: 仮想ボイスは sample_offset だけ前進してミキシングをスキップ。
-            // 復帰時に再生位置が「正しい時点」になるよう時間同期を維持する。
             if world.is_virtual[source_i] {
                 let frames_advanced = advance * (sample_count / device_channels.max(1)) as f32;
                 let mut offset = world.sample_offset[source_i] + frames_advanced;
@@ -85,44 +93,116 @@ impl SourceMixingSystem {
             let mut offset = world.sample_offset[source_i];
             let looping = world.looping[source_i];
             let frame_count_f = src_frame_count as f32;
+            let total_frames = process_len / device_channels.max(1);
 
-            for frame in bus_buf.chunks_mut(device_channels) {
-                if looping && offset >= frame_count_f {
-                    // 末尾を超えた分だけ巻き戻す。空バッファは spawn 時点で除外想定。
-                    offset = if frame_count_f > 0.0 {
-                        offset.rem_euclid(frame_count_f)
+            // ── Pre-Spatial チェーンが空でなければスクラッチに mono 信号を書き出してフィルタする。
+            //   その後、frame ごとに scratch[n] を L/R gain で加算する。
+            //   チェーン空なら従来どおり audio_buf から直接サンプリング (最速経路維持)。
+            let pre_count = world.pre_count[source_i] as usize;
+            if pre_count > 0 && total_frames <= mono_scratch.len() {
+                // resampler 段: scratch[..total_frames] にモノラル信号 (L+R 平均) を書き出す
+                let mut local_offset = offset;
+                for n in 0..total_frames {
+                    if looping && local_offset >= frame_count_f {
+                        local_offset = if frame_count_f > 0.0 {
+                            local_offset.rem_euclid(frame_count_f)
+                        } else {
+                            0.0
+                        };
+                    }
+                    let frame_idx = local_offset as usize;
+                    if frame_idx >= src_frame_count {
+                        // 末尾到達後は 0 で埋める (フィルタ状態は維持)。
+                        for s in mono_scratch[n..total_frames].iter_mut() {
+                            *s = 0.0;
+                        }
+                        break;
+                    }
+                    let frac = local_offset - local_offset.floor();
+                    let idx1 = if looping {
+                        (frame_idx + 1) % src_frame_count
                     } else {
-                        0.0
+                        (frame_idx + 1).min(src_frame_count - 1)
                     };
-                }
-                let frame_idx = offset as usize;
-                if frame_idx >= src_frame_count {
-                    break;
+                    // モノラル化: 全 src_channels の平均
+                    let mut acc = 0.0_f32;
+                    for c in 0..src_channels {
+                        let s0 = audio_buf.samples[frame_idx * src_channels + c];
+                        let s1 = audio_buf.samples[idx1 * src_channels + c];
+                        acc += s0 + (s1 - s0) * frac;
+                    }
+                    mono_scratch[n] = acc / src_channels.max(1) as f32;
+                    local_offset += advance;
                 }
 
-                let frac = offset - offset.floor();
-                let idx0 = frame_idx;
-                let idx1 = if looping {
-                    (idx0 + 1) % src_frame_count
-                } else {
-                    (idx0 + 1).min(src_frame_count - 1)
-                };
+                // Pre-Spatial chain を適用 (channels=1 のモノラル経路)。
+                let chain_copy: [crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_SOURCE] =
+                    world.pre_chain[source_i];
+                EffectSystem::apply_chain(
+                    effect_world,
+                    lpf_world,
+                    hpf_world,
+                    reverb_world,
+                    &chain_copy[..pre_count],
+                    &mut mono_scratch[..total_frames],
+                    1,
+                );
 
-                for (ch, out) in frame.iter_mut().enumerate() {
-                    let src_ch = ch % src_channels;
-                    let s0 = audio_buf.samples[idx0 * src_channels + src_ch];
-                    let s1 = audio_buf.samples[idx1 * src_channels + src_ch];
-                    let sample = s0 + (s1 - s0) * frac;
-                    // ch0=L, ch1=R, それ以外は中央（L+R の平均）。
-                    let gain = match ch {
-                        0 => left_gain,
-                        1 => right_gain,
-                        _ => (left_gain + right_gain) * 0.5,
+                // Spatial gain を掛けて bus mix_buffer に加算。
+                for (n, frame) in bus_buf
+                    .chunks_mut(device_channels)
+                    .take(total_frames)
+                    .enumerate()
+                {
+                    let s = mono_scratch[n];
+                    for (ch, out) in frame.iter_mut().enumerate() {
+                        let gain = match ch {
+                            0 => left_gain,
+                            1 => right_gain,
+                            _ => (left_gain + right_gain) * 0.5,
+                        };
+                        *out += s * gain;
+                    }
+                }
+                offset = local_offset;
+            } else {
+                // 既存の最速経路 (Pre-Spatial chain なし)。
+                for frame in bus_buf.chunks_mut(device_channels) {
+                    if looping && offset >= frame_count_f {
+                        offset = if frame_count_f > 0.0 {
+                            offset.rem_euclid(frame_count_f)
+                        } else {
+                            0.0
+                        };
+                    }
+                    let frame_idx = offset as usize;
+                    if frame_idx >= src_frame_count {
+                        break;
+                    }
+
+                    let frac = offset - offset.floor();
+                    let idx0 = frame_idx;
+                    let idx1 = if looping {
+                        (idx0 + 1) % src_frame_count
+                    } else {
+                        (idx0 + 1).min(src_frame_count - 1)
                     };
-                    *out += sample * gain;
-                }
 
-                offset += advance;
+                    for (ch, out) in frame.iter_mut().enumerate() {
+                        let src_ch = ch % src_channels;
+                        let s0 = audio_buf.samples[idx0 * src_channels + src_ch];
+                        let s1 = audio_buf.samples[idx1 * src_channels + src_ch];
+                        let sample = s0 + (s1 - s0) * frac;
+                        let gain = match ch {
+                            0 => left_gain,
+                            1 => right_gain,
+                            _ => (left_gain + right_gain) * 0.5,
+                        };
+                        *out += sample * gain;
+                    }
+
+                    offset += advance;
+                }
             }
 
             world.sample_offset[source_i] = offset;

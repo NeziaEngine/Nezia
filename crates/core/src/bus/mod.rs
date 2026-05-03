@@ -196,11 +196,13 @@ mod tests {
         let effect = crate::effect::EffectWorld::new();
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
+            &mut reverb,
             &mut output,
             2,
             sample_count,
@@ -231,11 +233,13 @@ mod tests {
         let effect = crate::effect::EffectWorld::new();
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
+            &mut reverb,
             &mut output,
             2,
             sample_count,
@@ -277,11 +281,13 @@ mod tests {
         let effect = crate::effect::EffectWorld::new();
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
+            &mut reverb,
             &mut output,
             2,
             sample_count,
@@ -324,11 +330,13 @@ mod tests {
         let effect = crate::effect::EffectWorld::new();
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
+            &mut reverb,
             &mut output,
             2,
             sample_count,
