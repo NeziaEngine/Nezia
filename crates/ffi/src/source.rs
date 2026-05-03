@@ -9,22 +9,37 @@ use crate::types::{
     NeziaAttenuationModel, NeziaBufferId, NeziaEntityId, NeziaFinishCallback, NeziaResult,
     NeziaSourcePositionUpdate,
 };
+use nezia_core::SourcePositionUpdate;
 
-/// 生ポインタを `Send` なクロージャに渡すための変換。
-///
-/// `*mut c_void` 自体は `!Send` であり、edition 2024 の disjoint capture では
-/// ラッパ構造体に対する `unsafe impl Send` も効かない（フィールドアクセスで
-/// ポインタ単体が捕捉されるため）。アドレスを `usize` として渡し、コールバック
-/// 直前で復元することで Send を満たす。呼出側が「コールバック発火時まで
-/// `user_data` を有効に保つ」契約を守ることが前提。
-#[inline]
-fn pack(ptr: *mut c_void) -> usize {
-    ptr as usize
-}
-#[inline]
-fn unpack(addr: usize) -> *mut c_void {
-    addr as *mut c_void
-}
+// `NeziaSourcePositionUpdate` と `core::SourcePositionUpdate` は両方 `#[repr(C)]` で
+// `{ EntityId index/generation: u32, position: [f32;3] }` という同一バイト並びを持つ。
+// 下記 const アサーションが通る限り、FFI から受け取った配列を変換コピーなしで
+// そのまま core に渡せる。レイアウトを崩す変更があればここでコンパイルエラーになる。
+const _: () = {
+    use core::mem::{align_of, size_of};
+    assert!(
+        size_of::<NeziaSourcePositionUpdate>() == size_of::<SourcePositionUpdate>(),
+        "NeziaSourcePositionUpdate と core::SourcePositionUpdate のサイズが一致しない"
+    );
+    assert!(
+        align_of::<NeziaSourcePositionUpdate>() == align_of::<SourcePositionUpdate>(),
+        "NeziaSourcePositionUpdate と core::SourcePositionUpdate のアラインが一致しない"
+    );
+    assert!(size_of::<NeziaSourcePositionUpdate>() == 20);
+
+    // `NeziaEntityId` と `core::EntityId` のレイアウト一致を保証する。
+    // batch query API（`nezia_source_batch_is_alive` 等）が `&[NeziaEntityId]` を
+    // `&[core::EntityId]` にゼロコピー cast するために必要。
+    assert!(
+        size_of::<NeziaEntityId>() == size_of::<nezia_core::EntityId>(),
+        "NeziaEntityId と core::EntityId のサイズが一致しない"
+    );
+    assert!(
+        align_of::<NeziaEntityId>() == align_of::<nezia_core::EntityId>(),
+        "NeziaEntityId と core::EntityId のアラインが一致しない"
+    );
+    assert!(size_of::<NeziaEntityId>() == 8);
+};
 
 /// マスターバスにボイスを再生する（fire-and-forget）。
 ///
@@ -66,16 +81,23 @@ pub unsafe extern "C" fn nezia_source_play_with_callback(
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return 0;
         };
-        let ud = pack(user_data);
-        let cb = callback;
-        engine
-            .inner
-            .play_with_callback(buffer.to_core(), volume, pitch, looping != 0, move || {
-                if let Some(f) = cb {
-                    // SAFETY: 呼出側契約により f / user_data は有効。
-                    unsafe { f(unpack(ud)) };
-                }
-            }) as u8
+        // callback が None の場合はコールバック無し再生にフォールバック（alloc ナシ）。
+        let Some(f) = callback else {
+            return engine
+                .inner
+                .play(buffer.to_core(), volume, pitch, looping != 0) as u8;
+        };
+        // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
+        unsafe {
+            engine.inner.play_with_callback_native(
+                buffer.to_core(),
+                volume,
+                pitch,
+                looping != 0,
+                f,
+                user_data,
+            ) as u8
+        }
     })
 }
 
@@ -115,21 +137,27 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return 0;
         };
-        let ud = pack(user_data);
-        let cb = callback;
-        engine.inner.play_to_bus_with_callback(
-            buffer.to_core(),
-            volume,
-            pitch,
-            bus.to_core(),
-            looping != 0,
-            move || {
-                if let Some(f) = cb {
-                    // SAFETY: 呼出側契約により f / user_data は有効。
-                    unsafe { f(unpack(ud)) };
-                }
-            },
-        ) as u8
+        let Some(f) = callback else {
+            return engine.inner.play_to_bus(
+                buffer.to_core(),
+                volume,
+                pitch,
+                bus.to_core(),
+                looping != 0,
+            ) as u8;
+        };
+        // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
+        unsafe {
+            engine.inner.play_to_bus_with_callback_native(
+                buffer.to_core(),
+                volume,
+                pitch,
+                bus.to_core(),
+                looping != 0,
+                f,
+                user_data,
+            ) as u8
+        }
     })
 }
 
@@ -157,30 +185,26 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return NeziaEntityId::INVALID;
         };
-        let result = if callback.is_some() {
-            let ud = pack(user_data);
-            let cb = callback;
-            engine.inner.play_with_handle_and_callback(
+        let result = match callback {
+            Some(f) => unsafe {
+                // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
+                engine.inner.play_with_handle_and_callback_native(
+                    buffer.to_core(),
+                    volume,
+                    pitch,
+                    bus.to_core(),
+                    looping != 0,
+                    f,
+                    user_data,
+                )
+            },
+            None => engine.inner.play_with_handle(
                 buffer.to_core(),
                 volume,
                 pitch,
                 bus.to_core(),
                 looping != 0,
-                move || {
-                    if let Some(f) = cb {
-                        // SAFETY: 呼出側契約により f / user_data は有効。
-                        unsafe { f(unpack(ud)) };
-                    }
-                },
-            )
-        } else {
-            engine.inner.play_with_handle(
-                buffer.to_core(),
-                volume,
-                pitch,
-                bus.to_core(),
-                looping != 0,
-            )
+            ),
         };
         result
             .map(NeziaEntityId::from_core)
@@ -223,6 +247,43 @@ pub unsafe extern "C" fn nezia_source_is_alive(
     })
 }
 
+/// 複数ソースの生存を一括判定する。
+///
+/// `out_alive_ptr[i]` には `ids_ptr[i]` が現在の最新スナップショットに存在し
+/// generation も一致する場合 `1`、それ以外は `0` が書き込まれる。
+/// 内部は単発 `nezia_source_is_alive` 呼び出しの繰り返しを 1 回の P/Invoke に
+/// 集約しつつ、メインスレッド側のスキャンも 1 ループで処理する（FFI 越境の
+/// オーバーヘッドが N 倍 → 1 倍）。
+///
+/// # 安全性
+/// - `ids_ptr` は `len` 要素分の有効領域を指すこと。
+/// - `out_alive_ptr` は `len` 要素分の書き込み可能領域を指すこと。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_batch_is_alive(
+    engine: *mut NeziaEngine,
+    ids_ptr: *const NeziaEntityId,
+    len: usize,
+    out_alive_ptr: *mut u8,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_ref() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if len == 0 {
+            return NeziaResult::Ok;
+        }
+        if ids_ptr.is_null() || out_alive_ptr.is_null() {
+            return NeziaResult::NullPointer;
+        }
+        // SAFETY: 呼出側契約 + NeziaEntityId と core::EntityId の repr(C) レイアウト一致。
+        let ids: &[nezia_core::EntityId] =
+            unsafe { slice::from_raw_parts(ids_ptr.cast::<nezia_core::EntityId>(), len) };
+        let out: &mut [u8] = unsafe { slice::from_raw_parts_mut(out_alive_ptr, len) };
+        engine.inner.batch_is_source_alive(ids, out);
+        NeziaResult::Ok
+    })
+}
+
 /// 現在のソース再生位置（フレーム単位）を取得する。
 ///
 /// 取得タイミングはサウンドスレッドからスナップショットされた共有状態に依存し、
@@ -248,6 +309,50 @@ pub unsafe extern "C" fn nezia_source_get_position(
             }
             None => NeziaResult::InvalidHandle,
         }
+    })
+}
+
+/// 複数ソースの再生位置を一括取得する。
+///
+/// alive でないソースは `out_positions_ptr[i] = NaN` / `out_alive_ptr[i] = 0`。
+/// `out_alive_ptr` を不要なら NULL を渡してもよい（その場合 alive 判定は
+/// `out_positions_ptr[i]` が NaN かで代替できる）。
+///
+/// # 安全性
+/// - `ids_ptr` は `len` 要素分の有効領域を指すこと。
+/// - `out_positions_ptr` は `len` 要素分の書き込み可能領域を指すこと。
+/// - `out_alive_ptr` は NULL か、`len` 要素分の書き込み可能領域を指すこと。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_batch_get_positions(
+    engine: *mut NeziaEngine,
+    ids_ptr: *const NeziaEntityId,
+    len: usize,
+    out_positions_ptr: *mut f32,
+    out_alive_ptr: *mut u8,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_ref() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if len == 0 {
+            return NeziaResult::Ok;
+        }
+        if ids_ptr.is_null() || out_positions_ptr.is_null() {
+            return NeziaResult::NullPointer;
+        }
+        // SAFETY: 呼出側契約 + NeziaEntityId と core::EntityId の repr(C) レイアウト一致。
+        let ids: &[nezia_core::EntityId] =
+            unsafe { slice::from_raw_parts(ids_ptr.cast::<nezia_core::EntityId>(), len) };
+        let out_pos: &mut [f32] = unsafe { slice::from_raw_parts_mut(out_positions_ptr, len) };
+        // out_alive は NULL 許容。
+        let mut empty: [u8; 0] = [];
+        let out_alive: &mut [u8] = if out_alive_ptr.is_null() {
+            &mut empty
+        } else {
+            unsafe { slice::from_raw_parts_mut(out_alive_ptr, len) }
+        };
+        engine.inner.batch_source_positions(ids, out_pos, out_alive);
+        NeziaResult::Ok
     })
 }
 
@@ -435,16 +540,15 @@ pub unsafe extern "C" fn nezia_source_batch_set_positions(
         if updates_ptr.is_null() {
             return NeziaResult::NullPointer;
         }
-        // SAFETY: 呼出側契約。
-        let raw = unsafe { slice::from_raw_parts(updates_ptr, updates_len) };
-        // ABI 型から core 型へ変換した一時配列を作る。
-        // MAX_SOURCES でクランプはコア側がやるが、alloc 削減のため小さい入力ならスタック相当でも
-        // よい。現状は素直に Vec で渡す。
-        let converted: Vec<(nezia_core::EntityId, [f32; 3])> = raw
-            .iter()
-            .map(|u| (u.source.to_core(), u.position.to_array()))
-            .collect();
-        engine.inner.batch_set_source_positions(&converted);
+        // SAFETY:
+        // - `updates_ptr` は呼出側契約により `updates_len` 要素分の有効領域。
+        // - `NeziaSourcePositionUpdate` と `SourcePositionUpdate` は上の const アサーションで
+        //   レイアウト一致を保証しているので、要素ごとの再解釈はトリビアルに安全。
+        // これにより毎フレームの Vec alloc / 要素コピーがゼロになる（純粋なポインタ読み替え）。
+        let updates: &[SourcePositionUpdate] = unsafe {
+            slice::from_raw_parts(updates_ptr.cast::<SourcePositionUpdate>(), updates_len)
+        };
+        engine.inner.batch_set_source_positions(updates);
         NeziaResult::Ok
     })
 }

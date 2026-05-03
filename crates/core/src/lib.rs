@@ -27,5 +27,8 @@ pub use buffer_pool::BufferId;
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;
 
+/// `SoundEngine::batch_set_source_positions()` の入力要素。
+pub use entity::SourcePositionUpdate;
+
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;

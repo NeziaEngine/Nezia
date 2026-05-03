@@ -6,13 +6,14 @@ use ringbuf::traits::{Consumer, Producer};
 use crate::audio::AudioBuffer;
 use crate::bus::{BusComponent, BusSystem, BusWorld};
 use crate::command::Command;
-use crate::entity::EntityId;
+use crate::entity::{EntityId, SourcePositionUpdate};
 use crate::event::Event;
 use crate::source::{
     SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceState, SourceWorld,
 };
 use crate::spatial::{ListenerState, SpatialWorld};
 
+use super::SourceLiveParams;
 use super::SourceSnapshot;
 
 /// オーディオスレッド側の所有状態を一括で持つ構造体。
@@ -23,12 +24,15 @@ pub(super) struct AudioThread {
     command_consumer: ringbuf::HeapCons<Command>,
     event_producer: ringbuf::HeapProd<Event>,
     listener_output: triple_buffer::Output<ListenerState>,
-    position_updates_output: triple_buffer::Output<Vec<(EntityId, [f32; 3])>>,
+    position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
     source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
     bus_world: BusWorld,
     source_world: SourceWorld,
     spatial_world: SpatialWorld,
     shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
+    /// メインスレッドと共有する SoA ライブパラメータ。
+    /// コールバック冒頭で全アクティブソースに対して atomic load → dense 配列へ反映する。
+    live_params: Arc<SourceLiveParams>,
     master_bus_id: EntityId,
     device_sample_rate: f32,
     device_channels: usize,
@@ -40,12 +44,13 @@ impl AudioThread {
         command_consumer: ringbuf::HeapCons<Command>,
         event_producer: ringbuf::HeapProd<Event>,
         listener_output: triple_buffer::Output<ListenerState>,
-        position_updates_output: triple_buffer::Output<Vec<(EntityId, [f32; 3])>>,
+        position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
         source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
         bus_world: BusWorld,
         source_world: SourceWorld,
         spatial_world: SpatialWorld,
         shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
+        live_params: Arc<SourceLiveParams>,
         master_bus_id: EntityId,
         device_sample_rate: f32,
         device_channels: usize,
@@ -60,6 +65,7 @@ impl AudioThread {
             source_world,
             spatial_world,
             shared_buffers,
+            live_params,
             master_bus_id,
             device_sample_rate,
             device_channels,
@@ -99,12 +105,21 @@ impl AudioThread {
         }
         if self.position_updates_output.update() {
             let updates = self.position_updates_output.output_buffer_mut();
-            for (id, pos) in updates.iter() {
-                if let Some(dense) = self.source_world.resolve(*id) {
-                    self.spatial_world.set_position(dense, *pos);
+            for update in updates.iter() {
+                if let Some(dense) = self.source_world.resolve(update.source) {
+                    self.spatial_world.set_position(dense, update.position);
                 }
             }
         }
+
+        // ライブパラメータ（volume / pitch / spatial_enabled）を atomic から dense へ反映。
+        // generation 一致しないスロット（古い設定 or 未初期化）は無視する。
+        // dense 配列をシーケンシャルに走査するため L1 キャッシュ親和的。
+        apply_live_params(
+            &self.live_params,
+            &mut self.source_world,
+            &mut self.spatial_world,
+        );
 
         // mix_buffer をゼロクリア。
         self.bus_world.clear_mix_buffers(sample_count);
@@ -148,6 +163,33 @@ impl AudioThread {
 
         // 生存ソースのスナップショットを publish する（メインスレッドのクエリ用）。
         publish_source_snapshots(&mut self.source_snapshots_input, &self.source_world);
+    }
+}
+
+/// 共有 atomic スロットから dense 配列へライブパラメータを反映する。
+///
+/// 全アクティブソースを 1 ループで走査し、各スロットを atomic load する。
+/// generation が EntityId と一致しないスロットはスキップ（新スロット reuse 直後の
+/// 古い値や、メイン側がまだ priming していないスロットを誤適用しないため）。
+fn apply_live_params(
+    live: &SourceLiveParams,
+    source_world: &mut SourceWorld,
+    spatial_world: &mut SpatialWorld,
+) {
+    let count = source_world.len();
+    for dense in 0..count {
+        let Some(id) = source_world.entity_at_dense(dense) else {
+            continue;
+        };
+        if let Some(v) = live.load_volume(id) {
+            source_world.write_vol(dense, v);
+        }
+        if let Some(p) = live.load_pitch(id) {
+            source_world.write_pitch(dense, p);
+        }
+        if let Some(e) = live.load_spatial_enabled(id) {
+            spatial_world.set_enabled(dense, e);
+        }
     }
 }
 
@@ -257,6 +299,12 @@ fn process_command(
             }
         }
         Command::StopAll => {
+            // 既存ソースぶんの despawn 通知をメインスレッドへ送る（slot 解放のため）。
+            for dense in 0..source_world.len() {
+                if let Some(id) = source_world.entity_at_dense(dense) {
+                    let _ = event_producer.try_push(Event::SourceDespawned { id });
+                }
+            }
             *source_world = SourceWorld::new();
             *spatial_world = SpatialWorld::new();
         }
@@ -303,11 +351,6 @@ fn process_command(
                 spatial_world.set_params(dense, model, min_distance, max_distance, rolloff);
             }
         }
-        Command::SetSourceSpatialEnabled { id, enabled } => {
-            if let Some(dense) = source_world.resolve(id) {
-                spatial_world.set_enabled(dense, enabled);
-            }
-        }
         Command::SetListenerFocus {
             focus_point,
             distance_focus_level,
@@ -321,12 +364,8 @@ fn process_command(
         }
 
         // ── ライブソース制御 ──
-        Command::SetSourceVolume { id, vol } => {
-            source_world.set_vol(id, vol);
-        }
-        Command::SetSourcePitch { id, pitch } => {
-            source_world.set_pitch(id, pitch);
-        }
+        // SetSourceVolume / SetSourcePitch / SetSourceSpatialEnabled は live_params 経由で
+        // 反映するため、コマンド経路は廃止された。
         Command::SeekSource { id, frame_offset } => {
             source_world.set_sample_offset(id, frame_offset);
         }
