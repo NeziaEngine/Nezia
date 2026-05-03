@@ -21,9 +21,18 @@ impl SpatialSystem {
             return;
         }
 
-        let lx = world.listener.position[0];
-        let ly = world.listener.position[1];
-        let lz = world.listener.position[2];
+        // SP-06: 距離計算用とパンニング計算用の仮想リスナー位置を
+        // フレーム頭で 1 回だけ計算（ホットループ内で lerp しない）。
+        let vpos_dist = world.listener.virtual_position_for_distance();
+        let vpos_pan = world.listener.virtual_position_for_direction();
+
+        let ldx = vpos_dist[0];
+        let ldy = vpos_dist[1];
+        let ldz = vpos_dist[2];
+        let lpx = vpos_pan[0];
+        let lpy = vpos_pan[1];
+        let lpz = vpos_pan[2];
+
         let rx = world.listener.right[0];
         let ry = world.listener.right[1];
         let rz = world.listener.right[2];
@@ -55,15 +64,20 @@ impl SpatialSystem {
                 world.positions_z[i + 3],
             ]);
 
-            let dx = px - f32x4::splat(lx);
-            let dy = py - f32x4::splat(ly);
-            let dz = pz - f32x4::splat(lz);
+            // 距離は vpos_dist 基準。
+            let ddx = px - f32x4::splat(ldx);
+            let ddy = py - f32x4::splat(ldy);
+            let ddz = pz - f32x4::splat(ldz);
+            let dist: [f32; 4] = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt().into();
 
-            let dist: [f32; 4] = (dx * dx + dy * dy + dz * dz).sqrt().into();
+            // パンニングは vpos_pan 基準。
+            let pdx = px - f32x4::splat(lpx);
+            let pdy = py - f32x4::splat(lpy);
+            let pdz = pz - f32x4::splat(lpz);
             let local_x: [f32; 4] =
-                (dx * f32x4::splat(rx) + dy * f32x4::splat(ry) + dz * f32x4::splat(rz)).into();
+                (pdx * f32x4::splat(rx) + pdy * f32x4::splat(ry) + pdz * f32x4::splat(rz)).into();
             let local_z: [f32; 4] =
-                (dx * f32x4::splat(fx) + dy * f32x4::splat(fy) + dz * f32x4::splat(fz)).into();
+                (pdx * f32x4::splat(fx) + pdy * f32x4::splat(fy) + pdz * f32x4::splat(fz)).into();
 
             for j in 0..4 {
                 apply_gains(world, vols, i + j, dist[j], local_x[j], local_z[j]);
@@ -74,12 +88,17 @@ impl SpatialSystem {
 
         // スカラーパス: 端数（n % 4 件）。
         while i < n {
-            let dx = world.positions_x[i] - lx;
-            let dy = world.positions_y[i] - ly;
-            let dz = world.positions_z[i] - lz;
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            let local_x = dx * rx + dy * ry + dz * rz;
-            let local_z = dx * fx + dy * fy + dz * fz;
+            let ddx = world.positions_x[i] - ldx;
+            let ddy = world.positions_y[i] - ldy;
+            let ddz = world.positions_z[i] - ldz;
+            let dist = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt();
+
+            let pdx = world.positions_x[i] - lpx;
+            let pdy = world.positions_y[i] - lpy;
+            let pdz = world.positions_z[i] - lpz;
+            let local_x = pdx * rx + pdy * ry + pdz * rz;
+            let local_z = pdx * fx + pdy * fy + pdz * fz;
+
             apply_gains(world, vols, i, dist, local_x, local_z);
             i += 1;
         }

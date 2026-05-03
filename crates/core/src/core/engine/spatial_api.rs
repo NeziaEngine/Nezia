@@ -47,6 +47,33 @@ impl SoundEngine {
             .is_ok()
     }
 
+    /// SP-06: リスナーフォーカスを設定する（変更時のみ呼び出す）。
+    ///
+    /// `focus_point` はワールド空間の補助座標。
+    /// `distance_focus_level` / `direction_focus_level` は `[0.0, 1.0]` 範囲で、
+    /// それぞれ距離減衰計算とパンニング計算に使う仮想リスナー位置の補間係数。
+    /// 0.0 でリスナー位置のみ使用（フォーカス無効）、1.0 でフォーカス点完全採用、
+    /// 0.5 で中点。値域外は内部でクランプされる。
+    ///
+    /// 用途:
+    /// - カメラはプレイヤー背後、聴取点はキャラクター寄りに引き寄せる
+    /// - 距離はカメラ基準のまま、定位だけキャラクター基準にする（TPS 演出）
+    #[must_use]
+    pub fn set_listener_focus(
+        &mut self,
+        focus_point: [f32; 3],
+        distance_focus_level: f32,
+        direction_focus_level: f32,
+    ) -> bool {
+        self.command_producer
+            .try_push(Command::SetListenerFocus {
+                focus_point,
+                distance_focus_level,
+                direction_focus_level,
+            })
+            .is_ok()
+    }
+
     /// 複数ソースの位置を一括更新する（毎フレーム用）。
     ///
     /// triple buffer 経由で publish するため、リングバッファ詰まりで失敗しない。
