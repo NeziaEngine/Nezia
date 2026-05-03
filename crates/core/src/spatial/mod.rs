@@ -61,7 +61,7 @@ mod tests {
     fn update_pose_preserves_focus() {
         let mut listener = ListenerState::default();
         listener.set_focus([4.0, 5.0, 6.0], 0.7, 0.3);
-        listener.update([1.0, 1.0, 1.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]);
+        listener.update([1.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
         assert_eq!(listener.focus_point, [4.0, 5.0, 6.0]);
         assert!(approx_eq(listener.distance_focus_level, 0.7, 1e-6));
         assert!(approx_eq(listener.direction_focus_level, 0.3, 1e-6));
@@ -79,7 +79,7 @@ mod tests {
         world.set_enabled(0, true);
         world
             .listener
-            .update([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]);
+            .update([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
 
         let vols = [1.0_f32];
 
@@ -112,7 +112,7 @@ mod tests {
         world.set_enabled(0, true);
         world
             .listener
-            .update([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]);
+            .update([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
 
         let vols = [1.0_f32];
 

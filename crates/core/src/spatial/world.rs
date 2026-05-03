@@ -17,7 +17,7 @@ pub enum AttenuationModel {
 
 /// リスナーの状態。
 ///
-/// `right` は `forward` と `up` から派生する。
+/// `right` は `up` と `forward` から派生する（左手系 Y-up）。
 /// `update()` を呼ぶと同時に再計算される。
 ///
 /// SP-06: フォーカスポイント補間係数を持つ。距離減衰用とパンニング用で
@@ -30,7 +30,7 @@ pub struct ListenerState {
     pub forward: [f32; 3],
     /// 正規化済み上方ベクトル。
     pub up: [f32; 3],
-    /// 派生値: `normalize(cross(forward, up))`。`update()` 時に自動更新。
+    /// 派生値: `normalize(cross(up, forward))`（左手系）。`update()` 時に自動更新。
     pub right: [f32; 3],
 
     /// SP-06: フォーカスポイント（ワールド空間）。
@@ -47,7 +47,7 @@ impl Default for ListenerState {
     fn default() -> Self {
         Self {
             position: [0.0, 0.0, 0.0],
-            forward: [0.0, 0.0, -1.0],
+            forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
             focus_point: [0.0, 0.0, 0.0],
@@ -64,7 +64,7 @@ impl ListenerState {
         self.position = position;
         self.forward = vec3_normalize(forward);
         self.up = vec3_normalize(up);
-        self.right = vec3_normalize(vec3_cross(self.forward, self.up));
+        self.right = vec3_normalize(vec3_cross(self.up, self.forward));
     }
 
     /// SP-06: フォーカスポイントと補間係数を設定する。
