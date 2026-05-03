@@ -16,6 +16,9 @@ pub struct SourceComponent {
     pub token: u32,
     /// ループ再生フラグ。`true` の場合、バッファ末尾到達時に先頭へ巻き戻す。
     pub looping: bool,
+    /// Voice Virtualization 用優先度。Unity `AudioSource.priority` 互換 (0..255、低いほど高優先)。
+    /// 既定値 128 (Unity と一致)。
+    pub priority: u8,
 }
 
 impl Default for SourceComponent {
@@ -28,6 +31,7 @@ impl Default for SourceComponent {
             output_bus: 0,
             token: 0,
             looping: false,
+            priority: 128,
         }
     }
 }
@@ -70,6 +74,12 @@ pub struct SourceWorld {
     pub(super) token: Vec<u32>,
     /// ループ再生フラグ。
     pub(super) looping: Vec<bool>,
+    /// Voice Virtualization 用優先度 (0..255, 低いほど高優先, Unity 互換)。
+    pub(super) priority: Vec<u8>,
+    /// Voice Virtualization タグ。`true` のソースはミキシング段でスキップされ、
+    /// `sample_offset` だけ前進する (時間同期維持)。
+    /// 毎フレーム冒頭の rebalance で再評価される。
+    pub(super) is_virtual: Vec<bool>,
 }
 
 impl Default for SourceWorld {
@@ -91,6 +101,8 @@ impl SourceWorld {
             output_bus: Vec::with_capacity(MAX_SOURCES),
             token: Vec::with_capacity(MAX_SOURCES),
             looping: Vec::with_capacity(MAX_SOURCES),
+            priority: Vec::with_capacity(MAX_SOURCES),
+            is_virtual: Vec::with_capacity(MAX_SOURCES),
         }
     }
 
@@ -107,6 +119,9 @@ impl SourceWorld {
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
         self.looping.push(params.looping);
+        self.priority.push(params.priority);
+        // 仮想化判定は次のフレーム冒頭で行う。spawn 時点では物理として登録。
+        self.is_virtual.push(false);
         Some(id)
     }
 
@@ -126,6 +141,8 @@ impl SourceWorld {
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
         self.looping.push(params.looping);
+        self.priority.push(params.priority);
+        self.is_virtual.push(false);
         true
     }
 
@@ -147,6 +164,8 @@ impl SourceWorld {
         self.output_bus.swap_remove(dense_index);
         self.token.swap_remove(dense_index);
         self.looping.swap_remove(dense_index);
+        self.priority.swap_remove(dense_index);
+        self.is_virtual.swap_remove(dense_index);
         true
     }
 
@@ -286,5 +305,46 @@ impl SourceWorld {
         self.output_bus.swap_remove(dense_index);
         self.token.swap_remove(dense_index);
         self.looping.swap_remove(dense_index);
+        self.priority.swap_remove(dense_index);
+        self.is_virtual.swap_remove(dense_index);
+    }
+
+    // ── Voice Virtualization アクセサ ────────────────────────────────
+
+    pub fn priority(&self, id: EntityId) -> Option<u8> {
+        self.resolve(id).map(|i| self.priority[i])
+    }
+
+    pub fn set_priority(&mut self, id: EntityId, value: u8) -> bool {
+        if let Some(i) = self.resolve(id) {
+            self.priority[i] = value;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_virtual(&self, id: EntityId) -> Option<bool> {
+        self.resolve(id).map(|i| self.is_virtual[i])
+    }
+
+    /// SoA 一括アクセス (`SourceMixingSystem` / rebalance 用)。
+    pub fn priorities(&self) -> &[u8] {
+        &self.priority
+    }
+    pub fn is_virtuals(&self) -> &[bool] {
+        &self.is_virtual
+    }
+    pub fn is_virtuals_mut(&mut self) -> &mut [bool] {
+        &mut self.is_virtual
+    }
+    pub fn states(&self) -> &[SourceState] {
+        &self.state
+    }
+    pub fn pitches(&self) -> &[f32] {
+        &self.pitch
+    }
+    pub fn output_buses(&self) -> &[u32] {
+        &self.output_bus
     }
 }

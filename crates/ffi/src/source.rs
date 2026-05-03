@@ -231,6 +231,27 @@ pub unsafe extern "C" fn nezia_source_set_loop(
     })
 }
 
+/// Voice Virtualization 用優先度を設定する (Unity `AudioSource.priority` 互換)。
+///
+/// 0..255、低いほど高優先。既定 128。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_set_priority(
+    engine: *mut NeziaEngine,
+    source: NeziaEntityId,
+    priority: u8,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaResult::NullPointer;
+        };
+        if engine.inner.set_source_priority(source.to_core(), priority) {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
 /// ソースが現在 SourceWorld に存在するか確認する。
 ///
 /// 1 = 存在、0 = 不在 / generation 不一致 / NULL ポインタ。
