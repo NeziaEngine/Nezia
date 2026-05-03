@@ -1,4 +1,5 @@
 use crate::core::sparse_set::SparseSet;
+use crate::effect::{EffectId, MAX_EFFECTS_PER_BUS};
 use crate::entity::EntityId;
 
 use super::{MAX_BUSES, MAX_MIX_BUFFER_SIZE};
@@ -28,6 +29,14 @@ pub struct BusWorld {
     /// 出力先バスの密配列インデックス。ホットループでの EntityId 解決を避けるため密配列インデックスで保持。
     pub(super) output_bus_dense: Vec<u32>,
 
+    // ── DSP エフェクトチェーン (Phase 2-3) ──
+    /// Pre-Fader エフェクトチェーン (gain 適用前)。
+    pub(super) pre_chain: Vec<[EffectId; MAX_EFFECTS_PER_BUS]>,
+    pub(super) pre_count: Vec<u8>,
+    /// Post-Fader エフェクトチェーン (gain 適用後)。
+    pub(super) post_chain: Vec<[EffectId; MAX_EFFECTS_PER_BUS]>,
+    pub(super) post_count: Vec<u8>,
+
     // ── ミキシング ──
     /// フラットな中間ミキシングバッファ。
     /// レイアウト: `mix_buffer[dense_index * MAX_MIX_BUFFER_SIZE .. (dense_index + 1) * MAX_MIX_BUFFER_SIZE]`
@@ -55,6 +64,10 @@ impl BusWorld {
             gain: Vec::with_capacity(MAX_BUSES),
             muted: Vec::with_capacity(MAX_BUSES),
             output_bus_dense: Vec::with_capacity(MAX_BUSES),
+            pre_chain: Vec::with_capacity(MAX_BUSES),
+            pre_count: Vec::with_capacity(MAX_BUSES),
+            post_chain: Vec::with_capacity(MAX_BUSES),
+            post_count: Vec::with_capacity(MAX_BUSES),
             mix_buffer: vec![0.0; MAX_BUSES * MAX_MIX_BUFFER_SIZE],
             process_order: Vec::with_capacity(MAX_BUSES),
             master_entity,
@@ -75,7 +88,7 @@ impl BusWorld {
     }
 
     /// EntityId を検証し、有効なら密配列インデックスを返す。
-    pub(super) fn resolve(&self, id: EntityId) -> Option<usize> {
+    pub fn resolve(&self, id: EntityId) -> Option<usize> {
         self.entities.resolve(id)
     }
 
@@ -84,6 +97,20 @@ impl BusWorld {
         self.gain.push(gain);
         self.muted.push(false);
         self.output_bus_dense.push(output_bus_dense_val);
+        self.pre_chain.push(
+            [EffectId {
+                index: 0,
+                generation: 0,
+            }; MAX_EFFECTS_PER_BUS],
+        );
+        self.pre_count.push(0);
+        self.post_chain.push(
+            [EffectId {
+                index: 0,
+                generation: 0,
+            }; MAX_EFFECTS_PER_BUS],
+        );
+        self.post_count.push(0);
     }
 
     /// 指定した EntityId でバスを生成する（サウンドスレッド用）。
@@ -97,6 +124,10 @@ impl BusWorld {
             self.gain.pop();
             self.muted.pop();
             self.output_bus_dense.pop();
+            self.pre_chain.pop();
+            self.pre_count.pop();
+            self.post_chain.pop();
+            self.post_count.pop();
             return false;
         };
         true
@@ -110,6 +141,10 @@ impl BusWorld {
             self.gain.pop();
             self.muted.pop();
             self.output_bus_dense.pop();
+            self.pre_chain.pop();
+            self.pre_count.pop();
+            self.post_chain.pop();
+            self.post_count.pop();
             return None;
         };
         Some(id)
@@ -146,6 +181,10 @@ impl BusWorld {
         self.gain.swap_remove(dense_index);
         self.muted.swap_remove(dense_index);
         self.output_bus_dense.swap_remove(dense_index);
+        self.pre_chain.swap_remove(dense_index);
+        self.pre_count.swap_remove(dense_index);
+        self.post_chain.swap_remove(dense_index);
+        self.post_count.swap_remove(dense_index);
 
         true
     }
@@ -222,6 +261,81 @@ impl BusWorld {
             let start = d * MAX_MIX_BUFFER_SIZE;
             self.mix_buffer[start..start + clear_len].fill(0.0);
         }
+    }
+
+    // ── DSP エフェクトチェーン操作 ──
+
+    /// バスチェーン (pre/post) の末尾に EffectId を追加する。
+    /// 戻り値: 挿入された slot index。チェーン満杯時は `None`。
+    pub fn push_effect(
+        &mut self,
+        bus_dense: usize,
+        position: crate::effect::EffectPosition,
+        eff: EffectId,
+    ) -> Option<u8> {
+        if bus_dense >= self.gain.len() {
+            return None;
+        }
+        let (chain, count) = match position {
+            crate::effect::EffectPosition::Pre => (
+                &mut self.pre_chain[bus_dense],
+                &mut self.pre_count[bus_dense],
+            ),
+            crate::effect::EffectPosition::Post => (
+                &mut self.post_chain[bus_dense],
+                &mut self.post_count[bus_dense],
+            ),
+        };
+        let idx = *count as usize;
+        if idx >= MAX_EFFECTS_PER_BUS {
+            return None;
+        }
+        chain[idx] = eff;
+        *count += 1;
+        Some(idx as u8)
+    }
+
+    /// `eff` をチェーン中から探して削除し、後続要素を詰める。slot_index 整合のため shift.
+    /// 戻り値: 見つかって削除できたら `true`。
+    pub fn remove_effect(
+        &mut self,
+        bus_dense: usize,
+        position: crate::effect::EffectPosition,
+        eff: EffectId,
+    ) -> bool {
+        if bus_dense >= self.gain.len() {
+            return false;
+        }
+        let (chain, count) = match position {
+            crate::effect::EffectPosition::Pre => (
+                &mut self.pre_chain[bus_dense],
+                &mut self.pre_count[bus_dense],
+            ),
+            crate::effect::EffectPosition::Post => (
+                &mut self.post_chain[bus_dense],
+                &mut self.post_count[bus_dense],
+            ),
+        };
+        let n = *count as usize;
+        for i in 0..n {
+            if chain[i] == eff {
+                for j in i..n - 1 {
+                    chain[j] = chain[j + 1];
+                }
+                *count -= 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn pre_chain_slice(&self, bus_dense: usize) -> &[EffectId] {
+        let n = self.pre_count[bus_dense] as usize;
+        &self.pre_chain[bus_dense][..n]
+    }
+    pub fn post_chain_slice(&self, bus_dense: usize) -> &[EffectId] {
+        let n = self.post_count[bus_dense] as usize;
+        &self.post_chain[bus_dense][..n]
     }
 }
 

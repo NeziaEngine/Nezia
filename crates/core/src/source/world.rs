@@ -1,4 +1,5 @@
 use crate::core::sparse_set::SparseSet;
+use crate::effect::{EffectId, MAX_EFFECTS_PER_SOURCE};
 use crate::entity::EntityId;
 
 use super::MAX_SOURCES;
@@ -80,6 +81,11 @@ pub struct SourceWorld {
     /// `sample_offset` だけ前進する (時間同期維持)。
     /// 毎フレーム冒頭の rebalance で再評価される。
     pub(super) is_virtual: Vec<bool>,
+
+    // ── DSP Pre-Spatial エフェクトチェーン (Phase 2-3) ──
+    /// Pre-Spatial エフェクトチェーン (resampler 後、Spatial 適用前のモノラル信号に作用)。
+    pub(super) pre_chain: Vec<[EffectId; MAX_EFFECTS_PER_SOURCE]>,
+    pub(super) pre_count: Vec<u8>,
 }
 
 impl Default for SourceWorld {
@@ -103,6 +109,8 @@ impl SourceWorld {
             looping: Vec::with_capacity(MAX_SOURCES),
             priority: Vec::with_capacity(MAX_SOURCES),
             is_virtual: Vec::with_capacity(MAX_SOURCES),
+            pre_chain: Vec::with_capacity(MAX_SOURCES),
+            pre_count: Vec::with_capacity(MAX_SOURCES),
         }
     }
 
@@ -122,6 +130,13 @@ impl SourceWorld {
         self.priority.push(params.priority);
         // 仮想化判定は次のフレーム冒頭で行う。spawn 時点では物理として登録。
         self.is_virtual.push(false);
+        self.pre_chain.push(
+            [EffectId {
+                index: 0,
+                generation: 0,
+            }; MAX_EFFECTS_PER_SOURCE],
+        );
+        self.pre_count.push(0);
         Some(id)
     }
 
@@ -166,6 +181,8 @@ impl SourceWorld {
         self.looping.swap_remove(dense_index);
         self.priority.swap_remove(dense_index);
         self.is_virtual.swap_remove(dense_index);
+        self.pre_chain.swap_remove(dense_index);
+        self.pre_count.swap_remove(dense_index);
         true
     }
 
@@ -307,6 +324,8 @@ impl SourceWorld {
         self.looping.swap_remove(dense_index);
         self.priority.swap_remove(dense_index);
         self.is_virtual.swap_remove(dense_index);
+        self.pre_chain.swap_remove(dense_index);
+        self.pre_count.swap_remove(dense_index);
     }
 
     // ── Voice Virtualization アクセサ ────────────────────────────────
@@ -346,5 +365,46 @@ impl SourceWorld {
     }
     pub fn output_buses(&self) -> &[u32] {
         &self.output_bus
+    }
+
+    // ── DSP Pre-Spatial エフェクトチェーン操作 (Phase 2-3) ──
+
+    /// ソースの Pre-Spatial チェーン末尾に EffectId を追加する。
+    /// 戻り値: 挿入された slot index。チェーン満杯時は `None`。
+    pub fn push_pre_effect(&mut self, source_dense: usize, eff: EffectId) -> Option<u8> {
+        if source_dense >= self.pre_count.len() {
+            return None;
+        }
+        let idx = self.pre_count[source_dense] as usize;
+        if idx >= MAX_EFFECTS_PER_SOURCE {
+            return None;
+        }
+        self.pre_chain[source_dense][idx] = eff;
+        self.pre_count[source_dense] += 1;
+        Some(idx as u8)
+    }
+
+    /// `eff` をチェーンから削除し後続を詰める。見つかれば `true`。
+    pub fn remove_pre_effect(&mut self, source_dense: usize, eff: EffectId) -> bool {
+        if source_dense >= self.pre_count.len() {
+            return false;
+        }
+        let n = self.pre_count[source_dense] as usize;
+        let chain = &mut self.pre_chain[source_dense];
+        for i in 0..n {
+            if chain[i] == eff {
+                for j in i..n - 1 {
+                    chain[j] = chain[j + 1];
+                }
+                self.pre_count[source_dense] -= 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn pre_chain_slice(&self, source_dense: usize) -> &[EffectId] {
+        let n = self.pre_count[source_dense] as usize;
+        &self.pre_chain[source_dense][..n]
     }
 }
