@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -9,24 +10,78 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-/// デコード済みの PCM データ。
+use crate::streaming::StreamingState;
+
+/// オーディオバッファ。静的にデコード済みの PCM、または進行中のストリーミング供給を表す。
 ///
-/// 全サンプルをインターリーブ形式でメモリ上に展開して保持する。
-/// ストリーミング再生ではなく、効果音のように全体をメモリに載せるユースケース向け。
+/// **公開 API は静的・streaming で同形** (`channels` / `sample_rate` / `frame_count` /
+/// `is_streaming`)。内部表現は `AudioBufferInner` で分離する。
+///
+/// ## 静的バッファ
+/// 全 PCM をインターリーブ形式で保持する。効果音などフルロードするユースケース向け。
+///
+/// ## ストリーミングバッファ
+/// 部分デコードされた PCM をミラーリングバッファ経由で供給する。
+/// デコードはバックグラウンドワーカが担当 (`crate::streaming::worker`)。
+/// 詳細は `docs/design/core/streaming.md` を参照。
 pub struct AudioBuffer {
-    /// インターリーブされた PCM サンプル（f32）。
-    /// ステレオの場合: [L0, R0, L1, R1, ...]
-    pub samples: Vec<f32>,
-    /// チャンネル数（1 = モノラル, 2 = ステレオ）。
+    /// チャンネル数 (1 = モノラル, 2 = ステレオ)。
     pub channels: u16,
-    /// サンプルレート（Hz）。
+    /// サンプルレート (Hz)。
     pub sample_rate: u32,
+    inner: AudioBufferInner,
+}
+
+enum AudioBufferInner {
+    /// インターリーブされた PCM サンプル (f32) を全保持。
+    Static(Vec<f32>),
+    /// ストリーミング: ワーカが供給するミラーバッファへのハンドル。
+    Streaming(Arc<StreamingState>),
 }
 
 impl AudioBuffer {
-    /// 総フレーム数（= samples.len() / channels）。
+    /// 静的バッファ: 総フレーム数 (= samples.len() / channels)。
+    /// ストリーミングバッファ: 0 を返す (総フレーム数は不明、worker 側で管理)。
+    #[must_use]
     pub fn frame_count(&self) -> usize {
-        self.samples.len() / self.channels as usize
+        match &self.inner {
+            AudioBufferInner::Static(s) => {
+                if self.channels == 0 {
+                    0
+                } else {
+                    s.len() / self.channels as usize
+                }
+            }
+            AudioBufferInner::Streaming(_) => 0,
+        }
+    }
+
+    /// ストリーミングバッファかどうか。
+    #[inline]
+    #[must_use]
+    pub fn is_streaming(&self) -> bool {
+        matches!(self.inner, AudioBufferInner::Streaming(_))
+    }
+
+    /// 静的バッファのサンプル列への参照。streaming の場合は None。
+    ///
+    /// ミキシングシステムが random access (looping wrap) を行うために使う。
+    /// streaming は `streaming_state()` 経由でリングから読む。
+    #[must_use]
+    pub(crate) fn static_samples(&self) -> Option<&[f32]> {
+        match &self.inner {
+            AudioBufferInner::Static(s) => Some(s),
+            AudioBufferInner::Streaming(_) => None,
+        }
+    }
+
+    /// ストリーミング状態への参照。静的の場合は None。
+    #[must_use]
+    pub(crate) fn streaming_state(&self) -> Option<&Arc<StreamingState>> {
+        match &self.inner {
+            AudioBufferInner::Streaming(s) => Some(s),
+            AudioBufferInner::Static(_) => None,
+        }
     }
 
     /// 既にデコード済みの PCM サンプル列から `AudioBuffer` を構築する。
@@ -34,20 +89,33 @@ impl AudioBuffer {
     /// Unity の `AudioClip.GetData()` 結果のような、ホスト側で既にデコード済みの
     /// データを Nezia バッファに取り込む経路で利用する。
     ///
-    /// `samples` はインターリーブ形式（ステレオなら `[L0, R0, L1, R1, ...]`）。
+    /// `samples` はインターリーブ形式 (ステレオなら `[L0, R0, L1, R1, ...]`)。
     /// `channels` は 1 以上、`sample_rate` も 1 以上を想定する。
     pub fn from_pcm(samples: Vec<f32>, channels: u16, sample_rate: u32) -> Self {
         Self {
-            samples,
             channels,
             sample_rate,
+            inner: AudioBufferInner::Static(samples),
+        }
+    }
+
+    /// ストリーミング用 `AudioBuffer` を構築する (内部 API)。
+    pub(crate) fn from_streaming(
+        state: Arc<StreamingState>,
+        channels: u16,
+        sample_rate: u32,
+    ) -> Self {
+        Self {
+            channels,
+            sample_rate,
+            inner: AudioBufferInner::Streaming(state),
         }
     }
 }
 
 /// オーディオファイルを読み込み、デコードして `AudioBuffer` を返す。
 ///
-/// Symphonia が対応するフォーマット（MP3, WAV, FLAC, OGG Vorbis 等）を
+/// Symphonia が対応するフォーマット (MP3, WAV, FLAC, OGG Vorbis 等) を
 /// 自動判別してデコードする。
 pub fn load<P: AsRef<Path>>(path: P) -> Result<AudioBuffer, Box<dyn std::error::Error>> {
     let file = File::open(path.as_ref())?;
@@ -75,12 +143,12 @@ pub fn load_from_memory(bytes: &[u8]) -> Result<AudioBuffer, Box<dyn std::error:
 pub struct AudioMetadata {
     pub sample_rate: u32,
     pub channels: u16,
-    /// 総フレーム数（チャンネル数で割る前のサンプル数）。
+    /// 総フレーム数 (チャンネル数で割る前のサンプル数)。
     /// コンテナがフレーム数を持たない場合は 0。
     pub total_frames: u64,
 }
 
-/// メモリ上のバイト列からオーディオメタデータのみを取得する（フルデコードしない）。
+/// メモリ上のバイト列からオーディオメタデータのみを取得する (フルデコードしない)。
 ///
 /// `NeziaAudioImporter` が ScriptableObject 化する際に sample rate / channels /
 /// total frames を埋めるために使う。`AudioBuffer::create_audio_clip_proxy()` 相当の
@@ -169,9 +237,5 @@ fn decode(
         all_samples.extend_from_slice(sample_buf.samples());
     }
 
-    Ok(AudioBuffer {
-        samples: all_samples,
-        channels,
-        sample_rate,
-    })
+    Ok(AudioBuffer::from_pcm(all_samples, channels, sample_rate))
 }

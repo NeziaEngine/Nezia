@@ -8,6 +8,7 @@ mod entity;
 mod event;
 mod source;
 mod spatial;
+mod streaming;
 
 // ── 公開 API ──────────────────────────────────────────────────────────────────
 // 外部クレートが必要とする型だけをここで再エクスポートする。
@@ -24,6 +25,9 @@ pub use core::engine::BufferReader;
 
 /// ロード済みオーディオバッファへのハンドル。
 pub use buffer_pool::BufferId;
+
+/// ストリーミング再生オプション (Phase 2-4)。
+pub use streaming::StreamingOpts;
 
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;

@@ -38,14 +38,18 @@ impl BufferReader {
         if channels == 0 {
             return 0;
         }
+        // BufferReader は静的バッファ (`load_from_pcm` 等で確保された Vec<f32>) を前提とする。
+        // streaming バッファ向けには別途 streaming reader を提供する想定 (Phase 2-4 では未対応)。
+        let Some(samples) = self.buffer.static_samples() else {
+            return 0;
+        };
         let requested_frames = dst.len() / channels;
         let total_frames = self.buffer.frame_count();
         let available = total_frames.saturating_sub(frame_offset);
         let frames = requested_frames.min(available);
         let sample_offset = frame_offset * channels;
         let sample_count = frames * channels;
-        dst[..sample_count]
-            .copy_from_slice(&self.buffer.samples[sample_offset..sample_offset + sample_count]);
+        dst[..sample_count].copy_from_slice(&samples[sample_offset..sample_offset + sample_count]);
         frames
     }
 }

@@ -279,6 +279,11 @@ impl SoundEngine {
                     // スロット index を再利用キューに戻す。
                     self.source_slots.free(id);
                 }
+                Event::StreamingUnderrun { buffer } => {
+                    // 現状は通知のみ。アプリ側がコールバック経由で観測するための
+                    // 公開 API を Phase 2-4 後半で追加予定。
+                    let _ = buffer;
+                }
             }
         }
 

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::buffer_pool::BufferId;
+use crate::streaming::StreamingOpts;
 
 use super::SoundEngine;
 use super::buffer_reader::BufferReader;
@@ -43,6 +44,36 @@ impl SoundEngine {
     /// バッファをアンロードする。
     pub fn unload(&mut self, id: BufferId) -> bool {
         self.buffer_pool.unload(id)
+    }
+
+    /// オーディオファイルを **ストリーミング再生用** にロードする (Phase 2-4)。
+    ///
+    /// バックグラウンドのデコードワーカが起動し、再生位置に応じて部分デコードを行う。
+    /// 戻り値の `BufferId` は静的バッファと同じ ID 空間で、`play_with_handle` 等の
+    /// 既存 API がそのまま利用できる。長尺 BGM 用途を想定。
+    pub fn load_streaming<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        opts: StreamingOpts,
+    ) -> Result<BufferId, Box<dyn std::error::Error>> {
+        self.buffer_pool.load_streaming(path, opts)
+    }
+
+    /// ストリーミングバッファをシークする (worker に転送)。
+    ///
+    /// 静的バッファ ID に対しては no-op。`seek_source(EntityId)` と異なり、
+    /// streaming はデコーダ側の cursor を移動するためバッファ単位で指定する。
+    pub fn seek_streaming(&self, id: BufferId, frame_offset: u64) {
+        self.buffer_pool.seek_streaming(id, frame_offset);
+    }
+
+    /// ストリーミングバッファのループフラグを設定する (worker に転送)。
+    ///
+    /// `true` で worker が EOF 到達時にファイル先頭へ巻き戻す (全体ループ)。
+    /// 部分ループ (loop start/end) は将来フェーズで対応。
+    /// 静的バッファ ID に対しては no-op。
+    pub fn set_streaming_loop(&self, id: BufferId, looping: bool) {
+        self.buffer_pool.set_streaming_loop(id, looping);
     }
 
     /// 指定バッファに対する読み取り専用ハンドルを開く。

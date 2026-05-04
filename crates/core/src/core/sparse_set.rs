@@ -253,7 +253,11 @@ mod tests {
             "freed slot should be reusable with bumped generation"
         );
         assert_eq!(s.resolve(id2), Some(0));
-        assert_eq!(s.resolve(id1), None, "old id with stale gen should not resolve");
+        assert_eq!(
+            s.resolve(id1),
+            None,
+            "old id with stale gen should not resolve"
+        );
     }
 
     #[test]
