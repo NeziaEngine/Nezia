@@ -132,9 +132,16 @@ impl ActiveSnapshot {
     }
 
     /// 進行中の補間があれば true。
+    ///
+    /// fade_remaining が 0 でも未書き込みエントリがある場合 (fade_samples=0 の即時適用ケース) は
+    /// true を返す必要がある。`tick_snapshot_interpolation` が 1 度呼ばれてターゲット値を書き、
+    /// `clear()` で全 Vec が空になった次の callback 以降に false を返す。
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.fade_remaining_samples > 0 || self.has_pending_bool_changes()
+        self.fade_remaining_samples > 0
+            || !self.bus_gain_dense.is_empty()
+            || !self.effect_kind.is_empty()
+            || self.has_pending_bool_changes()
     }
 
     #[inline]
@@ -163,5 +170,68 @@ impl ActiveSnapshot {
 impl Default for ActiveSnapshot {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_active_false_on_empty_snapshot() {
+        let active = ActiveSnapshot::new();
+        assert!(!active.is_active());
+    }
+
+    #[test]
+    fn is_active_true_with_bus_gain_entry_even_fade_zero() {
+        // fade=0 即時適用ケース: fade_remaining=0 だが bus_gain エントリがあれば
+        // tick が呼ばれる必要がある。
+        let mut active = ActiveSnapshot::new();
+        active.bus_gain_dense.push(0);
+        active.bus_gain_from.push(1.0);
+        active.bus_gain_to.push(0.5);
+        // fade_total=0, fade_remaining=0 のまま
+        assert!(active.is_active());
+    }
+
+    #[test]
+    fn is_active_true_with_effect_param_entry_even_fade_zero() {
+        let mut active = ActiveSnapshot::new();
+        active.effect_kind.push(SnapshotEffectKind::Lpf);
+        active.effect_state_dense.push(0);
+        active.effect_param.push(0);
+        active.effect_from.push(1000.0);
+        active.effect_to.push(500.0);
+        assert!(active.is_active());
+    }
+
+    #[test]
+    fn is_active_true_during_fade() {
+        let mut active = ActiveSnapshot::new();
+        active.fade_total_samples = 100;
+        active.fade_remaining_samples = 50;
+        assert!(active.is_active());
+    }
+
+    #[test]
+    fn is_active_false_after_clear() {
+        let mut active = ActiveSnapshot::new();
+        active.bus_gain_dense.push(0);
+        active.bus_gain_from.push(1.0);
+        active.bus_gain_to.push(0.5);
+        active.fade_remaining_samples = 100;
+        assert!(active.is_active());
+        active.clear();
+        assert!(!active.is_active());
+    }
+
+    #[test]
+    fn is_active_true_with_pending_bool() {
+        let mut active = ActiveSnapshot::new();
+        active.bus_muted_dense.push(0);
+        active.bus_muted_to.push(true);
+        active.bus_muted_applied.push(false);
+        assert!(active.is_active());
     }
 }
