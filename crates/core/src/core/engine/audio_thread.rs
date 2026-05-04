@@ -212,6 +212,27 @@ impl AudioThread {
             sample_count,
         );
 
+        // streaming バッファの underrun フラグをドレインしてイベント発火。
+        // BufferId は `StreamingState::buffer_id_packed` (load_streaming 時に書き込み済み)
+        // から読み出すことで slot 再利用後も正しい generation 付きで通知できる。
+        // 連続発火を抑える簡易抑制 (per-buffer last-emitted カウンタ) は Phase 2-4 では未実装。
+        for slot in buffers.iter() {
+            let Some(buf) = slot.as_ref() else { continue };
+            let Some(state) = buf.streaming_state() else {
+                continue;
+            };
+            if state
+                .underrun_flag
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                if let Some(id) = state.buffer_id() {
+                    let _ = self
+                        .event_producer
+                        .try_push(Event::StreamingUnderrun { buffer: id });
+                }
+            }
+        }
+
         // 生存ソースのスナップショットを publish する（メインスレッドのクエリ用）。
         publish_source_snapshots(&mut self.source_snapshots_input, &self.source_world);
     }

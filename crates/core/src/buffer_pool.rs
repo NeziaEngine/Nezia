@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use crate::audio::{self, AudioBuffer};
+use crate::streaming::{StreamCmd, StreamingHandle, StreamingOpts, spawn_streaming_worker};
 
 /// バッファスロットの最大数。
 const MAX_BUFFERS: usize = 1024;
@@ -29,6 +30,9 @@ pub struct AudioBufferPool {
     slots: Vec<BufferSlot>,
     buffers: Vec<Option<Arc<AudioBuffer>>>,
     shared: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
+    /// streaming スロットの worker handle (index = buffer slot index)。
+    /// 静的バッファのスロットは None。`unload` 時に worker を join する。
+    streaming_handles: Vec<Option<StreamingHandle>>,
     free_list: Vec<u32>,
     next_index: u32,
 }
@@ -45,8 +49,58 @@ impl AudioBufferPool {
             slots: Vec::with_capacity(MAX_BUFFERS),
             buffers: Vec::with_capacity(MAX_BUFFERS),
             shared,
+            streaming_handles: Vec::with_capacity(MAX_BUFFERS),
             free_list: Vec::new(),
             next_index: 0,
+        }
+    }
+
+    /// オーディオファイルをストリーミング再生用にロードする (Phase 2-4)。
+    ///
+    /// バックグラウンドのデコードワーカを spawn し、`AudioBuffer::Streaming` を
+    /// 同じ `BufferId` 空間のスロットに格納する。`play_with_handle` 等の既存 API は
+    /// 静的・streaming の区別なく利用できる。
+    /// 詳細は `docs/design/core/streaming.md` を参照。
+    pub fn load_streaming<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        opts: StreamingOpts,
+    ) -> Result<BufferId, Box<dyn std::error::Error>> {
+        let handle = spawn_streaming_worker(path, opts)?;
+        let channels = handle.channels;
+        let sample_rate = handle.sample_rate;
+        let state = Arc::clone(&handle.state);
+        let buffer = Arc::new(AudioBuffer::from_streaming(state, channels, sample_rate));
+        let id = self.insert_with_streaming(buffer, Some(handle));
+        Ok(id)
+    }
+
+    /// streaming source の seek (worker に転送)。
+    pub fn seek_streaming(&self, id: BufferId, frame_offset: u64) {
+        let Some(index) = self.resolve(id) else {
+            return;
+        };
+        if let Some(Some(h)) = self.streaming_handles.get(index as usize) {
+            h.send(StreamCmd::Seek(frame_offset));
+        }
+    }
+
+    /// streaming source のループ region を更新する。`looping=true` で全体ループ、
+    /// `false` でループ無効。Phase 2-4 では全体ループのみ実装。
+    pub fn set_streaming_loop(&self, id: BufferId, looping: bool) {
+        let Some(index) = self.resolve(id) else {
+            return;
+        };
+        if let Some(Some(h)) = self.streaming_handles.get(index as usize) {
+            let region = if looping {
+                Some(crate::streaming::LoopRegion {
+                    start: 0,
+                    end: u64::MAX,
+                })
+            } else {
+                None
+            };
+            h.send(StreamCmd::SetLoopRegion(region));
         }
     }
 
@@ -89,15 +143,26 @@ impl AudioBufferPool {
     ///
     /// 再生中のボイスがこのバッファを参照していた場合、
     /// 次の update で自動的に despawn される。
+    /// streaming バッファの場合はワーカに Stop を送り join する (数十 ms ブロックする可能性あり)。
     pub fn unload(&mut self, id: BufferId) -> bool {
-        let Some(slot) = self.slots.get_mut(id.index as usize) else {
-            return false;
-        };
-        if slot.generation != id.generation || !slot.occupied {
-            return false;
+        // 検証 (slot 借用は最小範囲)。
+        {
+            let Some(slot) = self.slots.get(id.index as usize) else {
+                return false;
+            };
+            if slot.generation != id.generation || !slot.occupied {
+                return false;
+            }
         }
 
         self.buffers[id.index as usize] = None;
+        // streaming worker を停止 (取り出して shutdown 経由で join)。
+        if let Some(slot) = self.streaming_handles.get_mut(id.index as usize)
+            && let Some(handle) = slot.take()
+        {
+            handle.shutdown();
+        }
+        let slot = &mut self.slots[id.index as usize];
         slot.generation += 1;
         slot.occupied = false;
         self.free_list.push(id.index);
@@ -124,10 +189,27 @@ impl AudioBufferPool {
 
     /// デコード済みバッファをスロットに格納してハンドルを返す内部実装。
     fn insert(&mut self, buffer: Arc<AudioBuffer>) -> BufferId {
+        self.insert_with_streaming(buffer, None)
+    }
+
+    /// streaming worker handle 付きでバッファを格納する内部実装。
+    fn insert_with_streaming(
+        &mut self,
+        buffer: Arc<AudioBuffer>,
+        streaming: Option<StreamingHandle>,
+    ) -> BufferId {
         let (index, generation) = self.allocate_slot();
+        let id = BufferId { index, generation };
+        // streaming の場合、サウンドスレッドが Event::StreamingUnderrun 発火時に
+        // 正しい BufferId (index + generation) を載せられるよう、状態に書き込んでおく。
+        // sync_shared でサウンドスレッドから可視になる前にここで書き込むこと。
+        if let Some(state) = buffer.streaming_state() {
+            state.set_buffer_id(id);
+        }
         self.buffers[index as usize] = Some(buffer);
+        self.streaming_handles[index as usize] = streaming;
         self.sync_shared();
-        BufferId { index, generation }
+        id
     }
 
     fn allocate_slot(&mut self) -> (u32, u32) {
@@ -137,6 +219,8 @@ impl AudioBufferPool {
                 generation,
                 occupied: true,
             };
+            // 旧 streaming handle が残っていることはない (unload で take 済み) が念のため。
+            self.streaming_handles[index as usize] = None;
             (index, generation)
         } else {
             let index = self.next_index;
@@ -146,6 +230,7 @@ impl AudioBufferPool {
                 occupied: true,
             });
             self.buffers.push(None);
+            self.streaming_handles.push(None);
             (index, 0)
         }
     }

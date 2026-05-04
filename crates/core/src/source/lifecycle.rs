@@ -33,7 +33,24 @@ impl SourceLifecycleSystem {
                     } else {
                         let buf_idx = world.audio_buffer_index[source_i] as usize;
                         match buffers.get(buf_idx).and_then(|b| b.as_ref()) {
-                            Some(ab) => world.sample_offset[source_i] as usize >= ab.frame_count(),
+                            Some(ab) => {
+                                if ab.is_streaming() {
+                                    // streaming: worker の EOF + ring 空 (= read_available_frames == 0
+                                    // かつ status == EOF) で natural finish。
+                                    if let Some(state) = ab.streaming_state() {
+                                        let status =
+                                            state.status.load(std::sync::atomic::Ordering::Acquire);
+                                        let empty = state.ring.read_available_frames() == 0;
+                                        empty
+                                            && (status == crate::streaming::status::EOF
+                                                || status == crate::streaming::status::STOPPED)
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    world.sample_offset[source_i] as usize >= ab.frame_count()
+                                }
+                            }
                             None => true,
                         }
                     }

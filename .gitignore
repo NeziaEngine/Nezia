@@ -7,3 +7,6 @@ Sandbox/
 
 # csbindgen が build.rs で再生成する成果物（CI でのみ artifact 化する）
 crates/ffi/bindings/
+
+# 個人作業メモ (quiz スキル等の出力先)
+docs/quiz/
