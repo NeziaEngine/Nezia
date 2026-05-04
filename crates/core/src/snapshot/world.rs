@@ -4,6 +4,7 @@
 //! - `ActiveSnapshot`: ミュータブル。サウンドスレッドが保持する進行中の補間状態。
 //!   `Snapshot` を apply 時に展開し、各エントリの from/to/dense_index を resolve した形で持つ。
 
+use crate::bus::SendId;
 use crate::effect::EffectId;
 use crate::entity::EntityId;
 
@@ -14,6 +15,8 @@ pub enum SnapshotEffectKind {
     Lpf = 0,
     Hpf = 1,
     Reverb = 2,
+    /// Phase 3-3: Compressor。
+    Compressor = 3,
 }
 
 /// バスゲインの target 指定。
@@ -28,6 +31,13 @@ pub struct BusGainEntry {
 pub struct BusMutedEntry {
     pub bus: EntityId,
     pub muted: bool,
+}
+
+/// Phase 3-3: Send gain の target 指定。dB 空間で線形補間する (バスゲインと同じ)。
+#[derive(Debug, Clone, Copy)]
+pub struct SendGainEntry {
+    pub send: SendId,
+    pub gain: f32,
 }
 
 /// エフェクトパラメータの target 指定。
@@ -49,6 +59,8 @@ pub struct Snapshot {
     pub bus_gains: Vec<BusGainEntry>,
     pub bus_muted: Vec<BusMutedEntry>,
     pub effect_params: Vec<EffectParamEntry>,
+    /// Phase 3-3: Send gain。
+    pub send_gains: Vec<SendGainEntry>,
 }
 
 impl Snapshot {
@@ -57,6 +69,7 @@ impl Snapshot {
             bus_gains: Vec::new(),
             bus_muted: Vec::new(),
             effect_params: Vec::new(),
+            send_gains: Vec::new(),
         }
     }
 }
@@ -105,6 +118,16 @@ pub struct ActiveSnapshot {
     /// ターゲット値。
     pub effect_to: Vec<f32>,
 
+    // ── Send gain (Phase 3-3) ──
+    /// Send 元バス dense (apply 時に resolve_send で取得した bus_dense)。
+    pub send_gain_bus_dense: Vec<u32>,
+    /// 当該バス内 send slot (apply 時に resolve_send で取得)。
+    pub send_gain_slot: Vec<u8>,
+    /// fade 開始時点の send gain。
+    pub send_gain_from: Vec<f32>,
+    /// ターゲット send gain。
+    pub send_gain_to: Vec<f32>,
+
     // ── fade 進行 ──
     /// fade 全長 (サンプル単位)。0 のときは即時適用 + ActiveSnapshot::clear。
     pub fade_total_samples: u64,
@@ -126,6 +149,10 @@ impl ActiveSnapshot {
             effect_param: Vec::new(),
             effect_from: Vec::new(),
             effect_to: Vec::new(),
+            send_gain_bus_dense: Vec::new(),
+            send_gain_slot: Vec::new(),
+            send_gain_from: Vec::new(),
+            send_gain_to: Vec::new(),
             fade_total_samples: 0,
             fade_remaining_samples: 0,
         }
@@ -141,6 +168,7 @@ impl ActiveSnapshot {
         self.fade_remaining_samples > 0
             || !self.bus_gain_dense.is_empty()
             || !self.effect_kind.is_empty()
+            || !self.send_gain_bus_dense.is_empty()
             || self.has_pending_bool_changes()
     }
 
@@ -162,6 +190,10 @@ impl ActiveSnapshot {
         self.effect_param.clear();
         self.effect_from.clear();
         self.effect_to.clear();
+        self.send_gain_bus_dense.clear();
+        self.send_gain_slot.clear();
+        self.send_gain_from.clear();
+        self.send_gain_to.clear();
         self.fade_total_samples = 0;
         self.fade_remaining_samples = 0;
     }

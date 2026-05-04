@@ -1,10 +1,12 @@
 mod biquad;
+mod compressor;
 mod hpf;
 mod lpf;
 mod reverb;
 mod system;
 mod world;
 
+pub use compressor::CompressorWorld;
 pub use hpf::HpfWorld;
 pub use lpf::LpfWorld;
 pub use reverb::ReverbWorld;
@@ -29,6 +31,9 @@ pub const MAX_HPF: usize = 256;
 
 /// Reverb プール上限 (Bus 専用、遅延ラインメモリが大きいため少数)。
 pub const MAX_REVERBS: usize = 16;
+
+/// Phase 3-3: Compressor プール上限 (Bus 専用)。1 体あたり 32KB の sidechain buffer を持つ。
+pub const MAX_COMPRESSORS: usize = 16;
 
 /// EffectId は EntityId を再利用する (sparse-set ベースで二層 ID を踏襲)。
 pub type EffectId = EntityId;
@@ -60,6 +65,24 @@ pub enum ReverbParam {
     Width = 4,
 }
 
+/// Phase 3-3: Compressor パラメータインデックス。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressorParam {
+    /// 圧縮開始 dB (例: -20.0)。
+    ThresholdDb = 0,
+    /// 圧縮比。1.0 で無効、無限大で limiter。
+    Ratio = 1,
+    /// アタック ms (反応速度)。
+    AttackMs = 2,
+    /// リリース ms (回復速度)。
+    ReleaseMs = 3,
+    /// ソフトニー幅 dB (0 でハードニー)。
+    KneeDb = 4,
+    /// メイクアップゲイン dB。
+    MakeupDb = 5,
+}
+
 /// 型安全パラメータ ID トレイト。種別ごとの enum がこれを実装する。
 pub trait EffectParamId: Copy {
     const KIND: EffectKind;
@@ -82,6 +105,13 @@ impl EffectParamId for HpfParam {
 
 impl EffectParamId for ReverbParam {
     const KIND: EffectKind = EffectKind::Reverb;
+    fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl EffectParamId for CompressorParam {
+    const KIND: EffectKind = EffectKind::Compressor;
     fn as_u8(self) -> u8 {
         self as u8
     }
@@ -143,7 +173,17 @@ mod tests {
             .map(|k| (2.0 * std::f32::consts::PI * 10_000.0 * k as f32 / 44100.0).sin())
             .collect();
         let mut reverb = ReverbWorld::new();
-        EffectSystem::apply_chain(&meta, &mut lpf, &mut hpf, &mut reverb, &[id], &mut buf, 1);
+        let mut compressor = CompressorWorld::new();
+        EffectSystem::apply_chain(
+            &meta,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut compressor,
+            &[id],
+            &mut buf,
+            1,
+        );
         let max_abs = buf[2048..].iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
         assert!(
             max_abs < 0.2,
@@ -176,7 +216,17 @@ mod tests {
         let mut buf = vec![0.5_f32; 256];
         let original = buf.clone();
         let mut reverb = ReverbWorld::new();
-        EffectSystem::apply_chain(&meta, &mut lpf, &mut hpf, &mut reverb, &[id], &mut buf, 1);
+        let mut compressor = CompressorWorld::new();
+        EffectSystem::apply_chain(
+            &meta,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut compressor,
+            &[id],
+            &mut buf,
+            1,
+        );
         assert_eq!(buf, original, "disabled effect must pass through");
     }
 }

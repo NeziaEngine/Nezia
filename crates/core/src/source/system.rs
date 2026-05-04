@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
-use crate::effect::{EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::effect::{CompressorWorld, EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::spatial::{AttenuationCurve, SpatialSystem, SpatialWorld};
 
 use super::virtualizer::VoiceVirtualizer;
@@ -40,6 +40,7 @@ impl SourceMixingSystem {
         lpf_world: &mut LpfWorld,
         hpf_world: &mut HpfWorld,
         reverb_world: &mut ReverbWorld,
+        compressor_world: &mut CompressorWorld,
         mono_scratch: &mut [f32],
         bus_mix_buffer: &mut [f32],
         bus_stride: usize,
@@ -125,6 +126,7 @@ impl SourceMixingSystem {
                     lpf_world,
                     hpf_world,
                     reverb_world,
+                    compressor_world,
                 );
                 world.sample_offset[source_i] = new_offset;
             } else if let Some(stream) = audio_buf.streaming_state() {
@@ -144,6 +146,7 @@ impl SourceMixingSystem {
                     lpf_world,
                     hpf_world,
                     reverb_world,
+                    compressor_world,
                 );
                 // streaming の sample_offset は累積消費フレーム数 (file-frame ではない)。
                 world.sample_offset[source_i] += consumed as f32;
@@ -174,6 +177,7 @@ fn mix_static(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) -> f32 {
     let frame_count_f = src_frame_count as f32;
     let mut offset = initial_offset;
@@ -215,6 +219,7 @@ fn mix_static(
             lpf_world,
             hpf_world,
             reverb_world,
+            compressor_world,
             &chain_copy[..pre_count],
             &mut mono_scratch[..total_frames],
             1,
@@ -294,6 +299,7 @@ fn mix_streaming(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) -> usize {
     // ring から最大限の contiguous slice を peek (lookahead +2 frame で線形補間用)。
     let needed = ((total_frames as f32 * advance.abs()).ceil() as usize).saturating_add(2);
@@ -344,6 +350,7 @@ fn mix_streaming(
             lpf_world,
             hpf_world,
             reverb_world,
+            compressor_world,
             &chain_copy[..pre_count],
             &mut mono_scratch[..total_frames],
             1,

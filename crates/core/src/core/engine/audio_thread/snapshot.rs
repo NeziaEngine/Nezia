@@ -9,7 +9,8 @@ use arc_swap::ArcSwap;
 
 use crate::bus::BusWorld;
 use crate::effect::{
-    EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld, ReverbParam, ReverbWorld,
+    CompressorParam, CompressorWorld, EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld,
+    ReverbParam, ReverbWorld,
 };
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
@@ -25,6 +26,7 @@ pub(super) fn apply_snapshot(
     lpf_world: &LpfWorld,
     hpf_world: &HpfWorld,
     reverb_world: &ReverbWorld,
+    compressor_world: &CompressorWorld,
 ) {
     let snapshots = shared_snapshots.load();
     let Some(snapshot) = snapshots
@@ -56,6 +58,17 @@ pub(super) fn apply_snapshot(
             active.bus_muted_applied.push(false);
         }
     }
+    // ── Send gain (Phase 3-3) ──
+    for entry in &snapshot.send_gains {
+        if let Some((bus_dense, slot)) = bus_world.resolve_send(entry.send) {
+            // 現在値を from にキャプチャ。
+            let from = bus_world.send_gain_at(bus_dense, slot).unwrap_or(0.0);
+            active.send_gain_bus_dense.push(bus_dense as u32);
+            active.send_gain_slot.push(slot as u8);
+            active.send_gain_from.push(from);
+            active.send_gain_to.push(entry.gain);
+        }
+    }
     // ── エフェクトパラメータ ──
     for entry in &snapshot.effect_params {
         let Some(meta_dense) = effect_world.resolve(entry.effect) else {
@@ -74,6 +87,10 @@ pub(super) fn apply_snapshot(
             (crate::effect::EffectKind::Reverb, crate::snapshot::SnapshotEffectKind::Reverb) => {
                 read_reverb_param(reverb_world, state_index, entry.param)
             }
+            (
+                crate::effect::EffectKind::Compressor,
+                crate::snapshot::SnapshotEffectKind::Compressor,
+            ) => read_compressor_param(compressor_world, state_index, entry.param),
             _ => continue,
         };
         active.effect_kind.push(entry.kind);
@@ -96,6 +113,7 @@ pub(super) fn tick_snapshot_interpolation(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) {
     // 進行率 t を計算。fade_total_samples == 0 のときは即時 (t = 1.0)。
     let t = if active.fade_total_samples == 0 {
@@ -125,6 +143,16 @@ pub(super) fn tick_snapshot_interpolation(
         let to = active.bus_gain_to[i];
         let v = lerp_db_gain(from, to, t);
         bus_world.write_gain_by_dense(dense, v);
+    }
+
+    // ── Send gain lerp (Phase 3-3、dB 空間でバスゲインと同じ補間) ──
+    for i in 0..active.send_gain_bus_dense.len() {
+        let bus_dense = active.send_gain_bus_dense[i] as usize;
+        let slot = active.send_gain_slot[i] as usize;
+        let from = active.send_gain_from[i];
+        let to = active.send_gain_to[i];
+        let v = lerp_db_gain(from, to, t);
+        bus_world.write_send_gain_by_dense(bus_dense, slot, v);
     }
 
     // ── バスミュート ──
@@ -168,6 +196,21 @@ pub(super) fn tick_snapshot_interpolation(
                     reverb_world.set_dry(state_dense, v);
                 } else if param == ReverbParam::Width as u8 {
                     reverb_world.set_width(state_dense, v);
+                }
+            }
+            crate::snapshot::SnapshotEffectKind::Compressor => {
+                if param == CompressorParam::ThresholdDb as u8 {
+                    compressor_world.set_threshold_db(state_dense, v);
+                } else if param == CompressorParam::Ratio as u8 {
+                    compressor_world.set_ratio(state_dense, v);
+                } else if param == CompressorParam::AttackMs as u8 {
+                    compressor_world.set_attack_ms(state_dense, v);
+                } else if param == CompressorParam::ReleaseMs as u8 {
+                    compressor_world.set_release_ms(state_dense, v);
+                } else if param == CompressorParam::KneeDb as u8 {
+                    compressor_world.set_knee_db(state_dense, v);
+                } else if param == CompressorParam::MakeupDb as u8 {
+                    compressor_world.set_makeup_db(state_dense, v);
                 }
             }
         }
@@ -226,6 +269,28 @@ fn read_hpf_param(world: &HpfWorld, state_dense: u32, param: u8) -> f32 {
         world.cutoffs()[state_dense as usize]
     } else if param == HpfParam::Q as u8 {
         world.qs()[state_dense as usize]
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn read_compressor_param(world: &CompressorWorld, state_dense: u32, param: u8) -> f32 {
+    let Some((th, ratio, atk, rel, knee, makeup)) = world.params_at(state_dense) else {
+        return 0.0;
+    };
+    if param == CompressorParam::ThresholdDb as u8 {
+        th
+    } else if param == CompressorParam::Ratio as u8 {
+        ratio
+    } else if param == CompressorParam::AttackMs as u8 {
+        atk
+    } else if param == CompressorParam::ReleaseMs as u8 {
+        rel
+    } else if param == CompressorParam::KneeDb as u8 {
+        knee
+    } else if param == CompressorParam::MakeupDb as u8 {
+        makeup
     } else {
         0.0
     }

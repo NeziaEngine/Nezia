@@ -2,7 +2,7 @@ mod send;
 mod system;
 mod world;
 
-pub use send::{SendId, SendPosition};
+pub use send::{SendDestKind, SendId, SendPosition};
 pub use system::BusSystem;
 pub use world::{BusComponent, BusWorld};
 
@@ -206,12 +206,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -243,12 +245,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -291,12 +295,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -340,12 +346,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -421,9 +429,9 @@ mod tests {
             index: 0,
             generation: 0,
         };
-        assert!(world.add_send(dense, sid, 0, 0.5, SendPosition::Post));
+        assert!(world.add_send(dense, sid, 0, SendDestKind::Bus, 0.5, SendPosition::Post));
         assert_eq!(world.send_count_at(dense), 1);
-        let (dest, gain, pos) = world.send_at(dense, 0);
+        let (dest, gain, pos, _kind) = world.send_at(dense, 0);
         assert_eq!(dest, 0);
         assert!((gain - 0.5).abs() < 1e-6);
         assert_eq!(pos, SendPosition::Post as u8);
@@ -443,7 +451,7 @@ mod tests {
             index: 7,
             generation: 3,
         };
-        world.add_send(dense, sid, 0, 0.5, SendPosition::Pre);
+        world.add_send(dense, sid, 0, SendDestKind::Bus, 0.5, SendPosition::Pre);
         assert_eq!(world.resolve_send(sid), Some((dense, 0)));
 
         // Stale generation は弾く。
@@ -476,9 +484,9 @@ mod tests {
             index: 2,
             generation: 0,
         };
-        world.add_send(dense, s0, 0, 0.1, SendPosition::Pre);
-        world.add_send(dense, s1, 0, 0.2, SendPosition::Pre);
-        world.add_send(dense, s2, 0, 0.3, SendPosition::Pre);
+        world.add_send(dense, s0, 0, SendDestKind::Bus, 0.1, SendPosition::Pre);
+        world.add_send(dense, s1, 0, SendDestKind::Bus, 0.2, SendPosition::Pre);
+        world.add_send(dense, s2, 0, SendDestKind::Bus, 0.3, SendPosition::Pre);
         assert_eq!(world.send_count_at(dense), 3);
 
         // 中間 (s1) を削除。s2 が slot 1 に詰められる。
@@ -504,13 +512,20 @@ mod tests {
                 index: i as u32,
                 generation: 0,
             };
-            assert!(world.add_send(dense, sid, 0, 0.5, SendPosition::Post));
+            assert!(world.add_send(dense, sid, 0, SendDestKind::Bus, 0.5, SendPosition::Post));
         }
         let overflow = SendId {
             index: 100,
             generation: 0,
         };
-        assert!(!world.add_send(dense, overflow, 0, 0.5, SendPosition::Post));
+        assert!(!world.add_send(
+            dense,
+            overflow,
+            0,
+            SendDestKind::Bus,
+            0.5,
+            SendPosition::Post
+        ));
     }
 
     #[test]
@@ -527,7 +542,7 @@ mod tests {
             index: 0,
             generation: 0,
         };
-        world.add_send(dense, sid, 0, 0.5, SendPosition::Post);
+        world.add_send(dense, sid, 0, SendDestKind::Bus, 0.5, SendPosition::Post);
         assert!(world.despawn(bus));
         // Send は消滅、resolve も None。
         assert!(world.resolve_send(sid).is_none());
@@ -555,7 +570,14 @@ mod tests {
             generation: 0,
         };
         // A から B への Send。
-        world.add_send(dense_a, sid, dense_b as u32, 0.5, SendPosition::Post);
+        world.add_send(
+            dense_a,
+            sid,
+            dense_b as u32,
+            SendDestKind::Bus,
+            0.5,
+            SendPosition::Post,
+        );
         assert_eq!(world.send_count_at(dense_a), 1);
 
         // B を despawn → A の Send もクリーンアップされる。
@@ -588,7 +610,14 @@ mod tests {
             index: 0,
             generation: 0,
         };
-        world.add_send(dense_bgm, sid, dense_aux as u32, 0.5, SendPosition::Post);
+        world.add_send(
+            dense_bgm,
+            sid,
+            dense_aux as u32,
+            SendDestKind::Bus,
+            0.5,
+            SendPosition::Post,
+        );
 
         // Process order: BGM, Aux, Master (どちらが先でも入力先行順なら OK)。
         // BGM は input が無い + Aux への Send。
@@ -609,12 +638,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -654,7 +685,14 @@ mod tests {
             index: 0,
             generation: 0,
         };
-        world.add_send(dense_bgm, sid, dense_aux as u32, 1.0, SendPosition::Pre);
+        world.add_send(
+            dense_bgm,
+            sid,
+            dense_aux as u32,
+            SendDestKind::Bus,
+            1.0,
+            SendPosition::Pre,
+        );
 
         world.set_process_order(&[dense_bgm as u32, dense_aux as u32, 0]);
 
@@ -670,12 +708,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -715,7 +755,14 @@ mod tests {
             index: 0,
             generation: 0,
         };
-        world.add_send(dense_bgm, sid, dense_aux as u32, 1.0, SendPosition::Post);
+        world.add_send(
+            dense_bgm,
+            sid,
+            dense_aux as u32,
+            SendDestKind::Bus,
+            1.0,
+            SendPosition::Post,
+        );
 
         world.set_process_order(&[dense_bgm as u32, dense_aux as u32, 0]);
 
@@ -731,12 +778,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,
@@ -776,12 +825,14 @@ mod tests {
         let mut lpf = crate::effect::LpfWorld::new();
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
+        let mut compressor = crate::effect::CompressorWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
             &mut lpf,
             &mut hpf,
             &mut reverb,
+            &mut compressor,
             &mut output,
             2,
             sample_count,

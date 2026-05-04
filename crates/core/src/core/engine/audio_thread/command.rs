@@ -6,9 +6,9 @@
 
 use ringbuf::traits::Producer;
 
-use crate::bus::{BusComponent, BusWorld};
-use crate::command::Command;
-use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::bus::{BusComponent, BusWorld, SendDestKind};
+use crate::command::{Command, SendDestination};
+use crate::effect::{CompressorWorld, EffectKind, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::EntityId;
 use crate::event::Event;
 use crate::source::{SourceComponent, SourceState, SourceWorld};
@@ -27,6 +27,7 @@ pub(super) fn process_command(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
     event_producer: &mut ringbuf::HeapProd<Event>,
     master_bus_id: EntityId,
 ) {
@@ -235,6 +236,7 @@ pub(super) fn process_command(
                 lpf_world,
                 hpf_world,
                 reverb_world,
+                compressor_world,
             );
         }
         Command::DespawnEffect { id } => {
@@ -246,6 +248,7 @@ pub(super) fn process_command(
                 lpf_world,
                 hpf_world,
                 reverb_world,
+                compressor_world,
             );
         }
         Command::SetEffectEnabled { id, enabled } => {
@@ -260,6 +263,7 @@ pub(super) fn process_command(
                 lpf_world,
                 hpf_world,
                 reverb_world,
+                compressor_world,
             );
         }
 
@@ -267,11 +271,27 @@ pub(super) fn process_command(
         Command::AddSend {
             id,
             src_dense,
-            dst_dense,
+            dst,
             position,
             gain,
         } => {
-            bus_world.add_send(src_dense as usize, id, dst_dense, gain, position);
+            // dst を resolve: Bus はそのまま、CompressorSidechain は effect_id → state_dense。
+            let (dst_dense, dest_kind) = match dst {
+                SendDestination::Bus { dense } => (dense, SendDestKind::Bus),
+                SendDestination::CompressorSidechain { effect } => {
+                    let Some(meta_dense) = effect_world.resolve(effect) else {
+                        return;
+                    };
+                    if effect_world.kinds()[meta_dense] != EffectKind::Compressor {
+                        return;
+                    }
+                    let state_dense = effect_world.state_indices()[meta_dense];
+                    // Sidechain mode を自動で有効化 (`bind_compressor_sidechain` の暗黙呼出)。
+                    compressor_world.set_use_sidechain(state_dense, true);
+                    (state_dense, SendDestKind::CompressorSidechain)
+                }
+            };
+            bus_world.add_send(src_dense as usize, id, dst_dense, dest_kind, gain, position);
         }
         Command::RemoveSend { id } => {
             bus_world.remove_send(id);
@@ -281,6 +301,14 @@ pub(super) fn process_command(
         }
         Command::SetSendPosition { id, position } => {
             bus_world.set_send_position(id, position);
+        }
+        Command::SetCompressorSidechainEnabled { id, enabled } => {
+            if let Some(meta_dense) = effect_world.resolve(id)
+                && effect_world.kinds()[meta_dense] == EffectKind::Compressor
+            {
+                let state_dense = effect_world.state_indices()[meta_dense];
+                compressor_world.set_use_sidechain(state_dense, enabled);
+            }
         }
     }
 }

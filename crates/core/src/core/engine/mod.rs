@@ -13,6 +13,7 @@ mod snapshot_api;
 mod source_api;
 mod spatial_api;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -28,7 +29,7 @@ use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::command::Command;
 use crate::core::bus_routing::BusRoutingMirror;
-use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::snapshot::{Snapshot, SnapshotRegistry};
@@ -153,6 +154,10 @@ pub struct SoundEngine {
     pub(super) effect_slots: EffectIdAllocator,
     /// Phase 3-3: Send ハンドル発行。
     pub(super) send_slots: SendIdAllocator,
+    /// Phase 3-3 PR2: Compressor EffectId → 所属バス EntityId のマッピング。
+    /// `add_send_to_compressor` で sidechain Send を貼る際、メインスレッドが
+    /// 所属バスを resolve して DAG topological sort のエッジに反映するために使う。
+    pub(super) compressor_owners: HashMap<crate::effect::EffectId, EntityId>,
     /// メイン⇄サウンド両スレッドで共有する SoA ライブパラメータ。
     /// `set_source_volume` 等は SPSC コマンドではなくこちらに直接 atomic store する。
     pub(super) live_params: Arc<SourceLiveParams>,
@@ -223,6 +228,7 @@ impl SoundEngine {
         let lpf_world = LpfWorld::new();
         let hpf_world = HpfWorld::new();
         let reverb_world = ReverbWorld::new();
+        let compressor_world = CompressorWorld::new();
 
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
@@ -241,6 +247,7 @@ impl SoundEngine {
             lpf_world,
             hpf_world,
             reverb_world,
+            compressor_world,
             shared_buffers_clone,
             shared_curves_clone,
             shared_snapshots_clone,
@@ -276,6 +283,7 @@ impl SoundEngine {
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),
             send_slots: SendIdAllocator::new(),
+            compressor_owners: HashMap::new(),
             live_params,
             callbacks: CallbackRegistry::new(),
             source_snapshots_output,
