@@ -55,7 +55,7 @@ impl SoundEngine {
             })
             .is_err()
         {
-            self.bus_routing.remove(new_index);
+            let _ = self.bus_routing.remove(new_index);
             self.bus_routing.next_index -= 1;
             return None;
         }
@@ -74,7 +74,11 @@ impl SoundEngine {
             return false;
         }
 
-        self.bus_routing.remove(id.index);
+        // バス削除に伴って関連する Send が一括除去される。SendIdAllocator も解放する。
+        let freed_sends = self.bus_routing.remove(id.index);
+        for sid in freed_sends {
+            self.send_slots.free(sid);
+        }
 
         let order = self.bus_routing.compute_process_order();
 

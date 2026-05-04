@@ -262,5 +262,25 @@ pub(super) fn process_command(
                 reverb_world,
             );
         }
+
+        // ── Send (Phase 3-3) ──
+        Command::AddSend {
+            id,
+            src_dense,
+            dst_dense,
+            position,
+            gain,
+        } => {
+            bus_world.add_send(src_dense as usize, id, dst_dense, gain, position);
+        }
+        Command::RemoveSend { id } => {
+            bus_world.remove_send(id);
+        }
+        Command::SetSendGain { id, gain } => {
+            bus_world.set_send_gain(id, gain);
+        }
+        Command::SetSendPosition { id, position } => {
+            bus_world.set_send_position(id, position);
+        }
     }
 }

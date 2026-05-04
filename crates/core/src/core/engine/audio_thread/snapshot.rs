@@ -8,7 +8,9 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use crate::bus::BusWorld;
-use crate::effect::{EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld, ReverbParam, ReverbWorld};
+use crate::effect::{
+    EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld, ReverbParam, ReverbWorld,
+};
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
 /// 現在値キャプチャして `ActiveSnapshot` に展開する。
@@ -282,7 +284,8 @@ mod tests {
             mid < 0.75,
             "dB lerp midpoint should be < linear (0.75), got {mid}"
         );
-        assert!(approx(mid, 0.7071, 1e-3));
+        // -3 dB ≈ 1/√2
+        assert!(approx(mid, std::f32::consts::FRAC_1_SQRT_2, 1e-3));
     }
 
     #[test]
