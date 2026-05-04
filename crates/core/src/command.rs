@@ -1,4 +1,4 @@
-use crate::bus::MAX_BUSES;
+use crate::bus::{MAX_BUSES, SendId, SendPosition};
 use crate::effect::{EffectId, EffectKind, EffectPosition, EffectTarget};
 use crate::entity::EntityId;
 use crate::spatial::AttenuationModel;
@@ -144,4 +144,22 @@ pub enum Command {
     SetEffectEnabled { id: EffectId, enabled: bool },
     /// エフェクトパラメータを設定する。`param` は種別ごとの enum を `as u8` でキャスト。
     SetEffectParam { id: EffectId, param: u8, value: f32 },
+
+    // ── Send (Phase 3-3) ──
+    /// バス間 Send を追加する。`id` はメインスレッドが事前発行。
+    /// `src_dense` / `dst_dense` はメインスレッドで解決済み。
+    /// メインスレッドでサイクル検出 + 容量確認済みの前提。
+    AddSend {
+        id: SendId,
+        src_dense: u32,
+        dst_dense: u32,
+        position: SendPosition,
+        gain: f32,
+    },
+    /// Send を削除する。
+    RemoveSend { id: SendId },
+    /// Send の gain を設定する。
+    SetSendGain { id: SendId, gain: f32 },
+    /// Send のタップ位置 (Pre/Post-Fader) を変更する。
+    SetSendPosition { id: SendId, position: SendPosition },
 }

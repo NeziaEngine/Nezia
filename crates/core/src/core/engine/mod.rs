@@ -6,6 +6,8 @@ mod callback_registry;
 mod effect_alloc;
 mod effect_api;
 mod live_params;
+mod send_alloc;
+mod send_api;
 mod slot_allocator;
 mod snapshot_api;
 mod source_api;
@@ -37,6 +39,7 @@ use audio_thread::AudioThread;
 use callback_registry::{CallbackKind, CallbackRegistry};
 use effect_alloc::EffectIdAllocator;
 pub(crate) use live_params::SourceLiveParams;
+use send_alloc::SendIdAllocator;
 use slot_allocator::SourceSlotAllocator;
 
 pub use buffer_reader::BufferReader;
@@ -148,6 +151,8 @@ pub struct SoundEngine {
     pub(super) source_slots: SourceSlotAllocator,
     /// DSP エフェクト用 EntityId のスロット管理（再利用付き、上限 MAX_EFFECTS）。
     pub(super) effect_slots: EffectIdAllocator,
+    /// Phase 3-3: Send ハンドル発行。
+    pub(super) send_slots: SendIdAllocator,
     /// メイン⇄サウンド両スレッドで共有する SoA ライブパラメータ。
     /// `set_source_volume` 等は SPSC コマンドではなくこちらに直接 atomic store する。
     pub(super) live_params: Arc<SourceLiveParams>,
@@ -270,6 +275,7 @@ impl SoundEngine {
             bus_routing: BusRoutingMirror::new(master_bus_id),
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),
+            send_slots: SendIdAllocator::new(),
             live_params,
             callbacks: CallbackRegistry::new(),
             source_snapshots_output,

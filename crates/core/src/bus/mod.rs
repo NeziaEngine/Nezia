@@ -1,6 +1,8 @@
+mod send;
 mod system;
 mod world;
 
+pub use send::{SendId, SendPosition};
 pub use system::BusSystem;
 pub use world::{BusComponent, BusWorld};
 
@@ -10,6 +12,13 @@ pub const MAX_BUSES: usize = 64;
 /// バスの mix_buffer のサイズ上限（バスあたり）。
 /// 4096 フレーム × 2ch = 8192 サンプル。
 pub const MAX_MIX_BUFFER_SIZE: usize = 8192;
+
+/// Phase 3-3: バスあたりの最大 Send 数。
+pub const MAX_SENDS_PER_BUS: usize = 4;
+
+/// Phase 3-3: 全バス合計の最大 Send 数 (SendId プール上限)。
+/// 理論最大は `MAX_BUSES × MAX_SENDS_PER_BUS = 256` だが、実運用で全バス満杯にはならない。
+pub const MAX_SENDS: usize = 128;
 
 #[cfg(test)]
 mod tests {
@@ -393,5 +402,392 @@ mod tests {
         assert!(ok);
         assert!(world.contains(id));
         assert_eq!(world.gain(id), Some(0.7));
+    }
+
+    // ── Send (Phase 3-3) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn add_send_basic() {
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        assert!(world.add_send(dense, sid, 0, 0.5, SendPosition::Post));
+        assert_eq!(world.send_count_at(dense), 1);
+        let (dest, gain, pos) = world.send_at(dense, 0);
+        assert_eq!(dest, 0);
+        assert!((gain - 0.5).abs() < 1e-6);
+        assert_eq!(pos, SendPosition::Post as u8);
+    }
+
+    #[test]
+    fn add_send_resolves_back() {
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+        let sid = SendId {
+            index: 7,
+            generation: 3,
+        };
+        world.add_send(dense, sid, 0, 0.5, SendPosition::Pre);
+        assert_eq!(world.resolve_send(sid), Some((dense, 0)));
+
+        // Stale generation は弾く。
+        let stale = SendId {
+            index: 7,
+            generation: 2,
+        };
+        assert!(world.resolve_send(stale).is_none());
+    }
+
+    #[test]
+    fn remove_send_swap_compacts() {
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+        let s0 = SendId {
+            index: 0,
+            generation: 0,
+        };
+        let s1 = SendId {
+            index: 1,
+            generation: 0,
+        };
+        let s2 = SendId {
+            index: 2,
+            generation: 0,
+        };
+        world.add_send(dense, s0, 0, 0.1, SendPosition::Pre);
+        world.add_send(dense, s1, 0, 0.2, SendPosition::Pre);
+        world.add_send(dense, s2, 0, 0.3, SendPosition::Pre);
+        assert_eq!(world.send_count_at(dense), 3);
+
+        // 中間 (s1) を削除。s2 が slot 1 に詰められる。
+        assert!(world.remove_send(s1));
+        assert_eq!(world.send_count_at(dense), 2);
+        assert_eq!(world.resolve_send(s2), Some((dense, 1)));
+        assert_eq!(world.resolve_send(s0), Some((dense, 0)));
+        assert!(world.resolve_send(s1).is_none());
+    }
+
+    #[test]
+    fn add_send_at_capacity_returns_false() {
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+        for i in 0..MAX_SENDS_PER_BUS {
+            let sid = SendId {
+                index: i as u32,
+                generation: 0,
+            };
+            assert!(world.add_send(dense, sid, 0, 0.5, SendPosition::Post));
+        }
+        let overflow = SendId {
+            index: 100,
+            generation: 0,
+        };
+        assert!(!world.add_send(dense, overflow, 0, 0.5, SendPosition::Post));
+    }
+
+    #[test]
+    fn despawn_removes_sends_originating_from_bus() {
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        world.add_send(dense, sid, 0, 0.5, SendPosition::Post);
+        assert!(world.despawn(bus));
+        // Send は消滅、resolve も None。
+        assert!(world.resolve_send(sid).is_none());
+    }
+
+    #[test]
+    fn despawn_removes_sends_targeting_bus() {
+        let mut world = BusWorld::new();
+        let bus_a = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let bus_b = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense_a = world.resolve(bus_a).unwrap();
+        let dense_b = world.resolve(bus_b).unwrap();
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        // A から B への Send。
+        world.add_send(dense_a, sid, dense_b as u32, 0.5, SendPosition::Post);
+        assert_eq!(world.send_count_at(dense_a), 1);
+
+        // B を despawn → A の Send もクリーンアップされる。
+        assert!(world.despawn(bus_b));
+        let dense_a_now = world.resolve(bus_a).unwrap();
+        assert_eq!(world.send_count_at(dense_a_now), 0);
+        assert!(world.resolve_send(sid).is_none());
+    }
+
+    #[test]
+    fn send_tap_post_fader_routes_to_aux_bus() {
+        // BGM (master 直結) から Aux Bus への Post-Fader Send を貼り、
+        // Aux Bus 側の mix_buffer に gain 乗算で加算されることを確認する。
+        let mut world = BusWorld::new();
+        let aux = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let bgm = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense_aux = world.resolve(aux).unwrap();
+        let dense_bgm = world.resolve(bgm).unwrap();
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        world.add_send(dense_bgm, sid, dense_aux as u32, 0.5, SendPosition::Post);
+
+        // Process order: BGM, Aux, Master (どちらが先でも入力先行順なら OK)。
+        // BGM は input が無い + Aux への Send。
+        // Aux は BGM からの Send + Master 本線へ。
+        // Master は BGM 本線 + Aux 本線。
+        // → BGM, Aux, Master の順。
+        world.set_process_order(&[dense_bgm as u32, dense_aux as u32, 0]);
+
+        let sample_count = 4;
+        world.clear_mix_buffers(sample_count);
+        let bgm_start = dense_bgm * MAX_MIX_BUFFER_SIZE;
+        for s in &mut world.mix_buffer_mut()[bgm_start..bgm_start + sample_count] {
+            *s = 1.0;
+        }
+
+        let mut output = vec![0.0f32; sample_count];
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut output,
+            2,
+            sample_count,
+        );
+
+        // Master 出力 = BGM 本線 (1.0) + Aux 本線 (BGM Send 経由 0.5) = 1.5。
+        for &s in &output {
+            assert!(
+                (s - 1.5).abs() < 1e-5,
+                "expected 1.5 (BGM + 0.5 * BGM via Aux), got {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_fader_send_bypasses_mute() {
+        // Pre-Fader Send は本線 mute を貫通する (sidechain trigger 用途で重要)。
+        let mut world = BusWorld::new();
+        let aux = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let bgm = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense_aux = world.resolve(aux).unwrap();
+        let dense_bgm = world.resolve(bgm).unwrap();
+
+        // BGM を mute、Pre-Fader Send で Aux に流す。
+        world.set_muted(bgm, true);
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        world.add_send(dense_bgm, sid, dense_aux as u32, 1.0, SendPosition::Pre);
+
+        world.set_process_order(&[dense_bgm as u32, dense_aux as u32, 0]);
+
+        let sample_count = 4;
+        world.clear_mix_buffers(sample_count);
+        let bgm_start = dense_bgm * MAX_MIX_BUFFER_SIZE;
+        for s in &mut world.mix_buffer_mut()[bgm_start..bgm_start + sample_count] {
+            *s = 1.0;
+        }
+
+        let mut output = vec![0.0f32; sample_count];
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut output,
+            2,
+            sample_count,
+        );
+
+        // BGM 本線 = mute で 0、Pre-Send は mute 前に tap されるため Aux に 1.0 流れる。
+        // Master = 0 + 1.0 = 1.0。
+        for &s in &output {
+            assert!(
+                (s - 1.0).abs() < 1e-5,
+                "Pre-Fader send should bypass mute; expected 1.0, got {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn post_fader_send_respects_mute() {
+        // Post-Fader Send は本線 mute なら 0 (mute 後の信号を tap)。
+        let mut world = BusWorld::new();
+        let aux = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let bgm = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense_aux = world.resolve(aux).unwrap();
+        let dense_bgm = world.resolve(bgm).unwrap();
+
+        world.set_muted(bgm, true);
+        let sid = SendId {
+            index: 0,
+            generation: 0,
+        };
+        world.add_send(dense_bgm, sid, dense_aux as u32, 1.0, SendPosition::Post);
+
+        world.set_process_order(&[dense_bgm as u32, dense_aux as u32, 0]);
+
+        let sample_count = 4;
+        world.clear_mix_buffers(sample_count);
+        let bgm_start = dense_bgm * MAX_MIX_BUFFER_SIZE;
+        for s in &mut world.mix_buffer_mut()[bgm_start..bgm_start + sample_count] {
+            *s = 1.0;
+        }
+
+        let mut output = vec![0.0f32; sample_count];
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut output,
+            2,
+            sample_count,
+        );
+
+        for &s in &output {
+            assert!(
+                s.abs() < 1e-5,
+                "Post-Fader send should respect mute; expected 0, got {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_send_count_skips_apply() {
+        // send_count == 0 のバスは hot path が完全スキップされる (回帰確認)。
+        let mut world = BusWorld::new();
+        let bus = world
+            .spawn(BusComponent {
+                gain: 1.0,
+                output_bus_dense: 0,
+            })
+            .unwrap();
+        let dense = world.resolve(bus).unwrap();
+        assert_eq!(world.send_count_at(dense), 0);
+
+        world.set_process_order(&[dense as u32, 0]);
+        let sample_count = 4;
+        world.clear_mix_buffers(sample_count);
+        let start = dense * MAX_MIX_BUFFER_SIZE;
+        for s in &mut world.mix_buffer_mut()[start..start + sample_count] {
+            *s = 0.5;
+        }
+
+        let mut output = vec![0.0f32; sample_count];
+        let effect = crate::effect::EffectWorld::new();
+        let mut lpf = crate::effect::LpfWorld::new();
+        let mut hpf = crate::effect::HpfWorld::new();
+        let mut reverb = crate::effect::ReverbWorld::new();
+        BusSystem::update(
+            &mut world,
+            &effect,
+            &mut lpf,
+            &mut hpf,
+            &mut reverb,
+            &mut output,
+            2,
+            sample_count,
+        );
+        for &s in &output {
+            assert!((s - 0.5).abs() < 1e-6);
+        }
     }
 }

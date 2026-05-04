@@ -33,6 +33,9 @@ pub use streaming::StreamingOpts;
 /// Mixer Snapshot のハンドル (Phase 3-2)。
 pub use snapshot::SnapshotId;
 
+/// Phase 3-3: Send (副ルート) のハンドルとタップ位置。
+pub use bus::{SendId, SendPosition};
+
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;
 
