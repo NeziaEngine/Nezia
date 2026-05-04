@@ -31,6 +31,8 @@ NEZIA ENGINE の Mixer Snapshot 機能設計。Unity AudioMixer の Snapshot 互
 | サウンドスレッドへの配信 | **`Arc<ArcSwap<Vec<Option<Arc<Snapshot>>>>>`** | triple buffer | apply 時に 1 度だけ load する稀パスのため triple buffer のメリットなし。`AudioBufferPool` / `CurveRegistry` と同パターンで揃える |
 | 補間タイミング | **サウンドスレッド per-callback で lerp** | メインスレッドで `set_bus_gain` を毎フレーム呼ぶ | リアルタイム精度 (sample 単位)、メインがフレームレートを変動させても影響なし、コマンドキュー圧迫を回避 |
 | 補間状態の表現 | **`ActiveSnapshot` (SoA `Vec<...>`)** をサウンドスレッドが所有 | snapshot data 直接補間 | apply 時に ID resolve + from キャプチャ を 1 回行い、以降は dense 配列の lerp ループ。DoD 整合 |
+| バスゲインの補間空間 | **dB 空間で線形補間** (`lerp_db_gain`) | linear 空間で線形補間 | 人間の聴覚は対数。Unity AudioMixer も同じ。線形補間は「終盤で急減」と感じる |
+| エフェクトパラメータの補間空間 | **線形** (cutoff Hz / Q / wet / dry など) | dB 空間 | UI スライダーで弄る値であり、線形が直感的。LPF cutoff の対数感は将来 ParamEQ で別途検討 |
 | from 値の決定 | **apply 時点の現在値をキャプチャ** | snapshot に from を埋め込む | from を埋めると「snapshot A から snapshot B へ」のような遷移しかできず、任意状態からの apply ができない |
 | 中断時の挙動 | **interrupt-and-restart**: 進行中 fade を破棄、現在値を新 from にして再開 | キューイング (順次実行) | クロスフェード中の再切替が自然 (BGM が「Normal → Battle 中の途中で Boss」のようなケース) |
 | bool パラメータ (muted) | **fade 完了時 (`fade_remaining == 0`) に snap** | 中点 (`t >= 0.5`) snap / 開始時 snap | gain など f32 パラメータの最終状態と timing が一致。Unity AudioMixer も同じ仕様。「フェードアウトしてからミュート」は同 snapshot に `set_bus_gain(0.0)` を併記することで実現できる |
@@ -159,16 +161,37 @@ fade_remaining_samples -= samples_this_callback;
 
 `fade_total_samples = 0` の場合は `t = 1.0` で即時適用。
 
-### 線形補間
+### バスゲインは dB 空間で補間 (Phase 3-2)
+
+線形ゲイン空間で `lerp(from, to, t)` を行うと、人間の聴覚が対数特性のため
+**「序盤ほぼ変化なし → 終盤で急減」** と感じてしまう。Unity AudioMixer や
+業界標準のミキサーは Volume パラメータを **dB 空間で線形補間** する。NEZIA も同じ。
 
 ```rust
-for i in 0..bus_gain_dense.len() {
-    let v = bus_gain_from[i] + (bus_gain_to[i] - bus_gain_from[i]) * t;
-    bus_world.write_gain_by_dense(bus_gain_dense[i] as usize, v);
+fn lerp_db_gain(from: f32, to: f32, t: f32) -> f32 {
+    if t >= 1.0 { return to; }   // 端点は exact (snap)
+    if t <= 0.0 { return from; }
+    if from == to { return from; }
+    const MIN_LIN: f32 = 1e-5;   // -100 dB floor (聴感上 silence と区別不能)
+    let from_db = 20.0 * from.max(MIN_LIN).log10();
+    let to_db   = 20.0 * to.max(MIN_LIN).log10();
+    let v_db = from_db + (to_db - from_db) * t;
+    10.0_f32.powf(v_db / 20.0)
 }
 ```
 
-エフェクトパラメータも同様。LPF / HPF の `set_cutoff` は dirty フラグを立てるため、次の `flush_dirty` で biquad 係数が再計算される (5ms ごとの fade 更新で毎回 recalc されるが、計算は数 op で軽量)。
+- 端点 (`t = 0` / `t = 1`) では **正確に from / to を返す**。`from = 1.0, to = 0.0` の
+  fade が完了したとき gain は厳密に 0 になる (フロアの `MIN_LIN` には張り付かない)。
+- 0 = -∞ dB は数値的に扱えないので `MIN_LIN = 1e-5` (= -100 dB) でフロアする。
+  -100 dB は人間の聴覚閾値より低く、聴感上 silence と区別不能。
+- コスト: `log10` + `powf` 各 1 回 / エントリ / callback。dense ループ内の数 op で軽量。
+
+### エフェクトパラメータは線形補間
+
+LPF cutoff (Hz) / Q / Reverb の各パラメータ (room_size / damping / wet / dry / width) は
+**線形補間**。これらは UI スライダーで直接弄る値であり、線形が直感的。LPF / HPF の
+`set_cutoff` は dirty フラグを立てるため、次の `flush_dirty` で biquad 係数が再計算
+される (callback ごとに recalc されるが計算は数 op で軽量)。
 
 ### bool 補間 (= 完了時 snap)
 
@@ -200,6 +223,30 @@ gain の時間変化と muted の bool 変化が **完了 timing で揃う** た
 - **エントリが空のときコストゼロ**: `is_active()` が false なら `tick_snapshot_interpolation` を呼ばない。snapshot 未使用時の overhead は `is_active()` 1 命令のみ。
 - **apply は cold path**: ID resolve + キャプチャは apply 時に 1 度だけ。callback ごとの hot path は dense ループのみ。
 - **ロックフリー**: `Arc<ArcSwap<...>>` の load は lock-free atomic (1 命令)。registry destroy は ActiveSnapshot に影響しない。
+
+---
+
+## 制限事項 (Phase 3-2 時点)
+
+### Bus / Effect が fade 中に destroy されるケース
+
+`ActiveSnapshot` は apply 時に **dense index をキャプチャ** して以降 re-resolve しない。
+fade 中に bus / effect が destroy されると swap_remove で dense が詰まり、当該エントリ
+の書き込み先が **別の bus / effect になる** 可能性がある。
+
+```text
+apply 時:    bus A (dense=5) → ActiveSnapshot.bus_gain_dense=5
+fade 中:     bus A destroy → bus C (last) が dense=5 に移動
+次の tick:   write_gain_by_dense(5, ..) → bus C を誤上書き
+```
+
+**現状の対処**: なし (fade 中の bus / effect destroy は非サポート、未定義動作)。
+業界標準 (Unity / FMOD など) も transition 中の bus 削除を保証しない。実害が見えてから
+EntityId / EffectId キャッシュ + 毎 callback re-resolve を導入する。
+
+回避策:
+- 本番運用では bus / effect の destroy は scene 切替などの非リアルタイム境界で行う
+- fade の終了を `engine.poll_events()` 経由で確認してから destroy する
 
 ---
 

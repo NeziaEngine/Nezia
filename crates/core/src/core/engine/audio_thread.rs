@@ -872,12 +872,15 @@ fn tick_snapshot_interpolation(
         active.fade_remaining_samples = 0;
     }
 
-    // ── バスゲイン lerp ──
+    // ── バスゲイン lerp (dB 空間で線形補間) ──
+    // 線形ゲイン空間で lerp すると人間の聴覚 (対数) と一致せず、
+    // 「序盤ほぼ変化なし → 終盤急減」と感じる。dB 空間で lerp することで
+    // 聴感的に一様なフェードになる (Unity AudioMixer と互換)。
     for i in 0..active.bus_gain_dense.len() {
         let dense = active.bus_gain_dense[i] as usize;
         let from = active.bus_gain_from[i];
         let to = active.bus_gain_to[i];
-        let v = from + (to - from) * t;
+        let v = lerp_db_gain(from, to, t);
         bus_world.write_gain_by_dense(dense, v);
     }
 
@@ -940,6 +943,29 @@ fn tick_snapshot_interpolation(
     }
 }
 
+/// dB 空間で線形補間してから linear gain に戻す (Phase 3-2)。
+/// 端点 (`t <= 0` / `t >= 1`) では正確に from / to を返す。
+/// `from` / `to` が 0 (= -∞ dB) のとき内部で `1e-5` (= -100 dB) に floor して計算するが、
+/// 端点では正確な 0 を返すため、フェード完了時は厳密に 0 になる。
+#[inline]
+fn lerp_db_gain(from: f32, to: f32, t: f32) -> f32 {
+    if t >= 1.0 {
+        return to;
+    }
+    if t <= 0.0 {
+        return from;
+    }
+    if from == to {
+        return from;
+    }
+    // -100 dB をフロアとして扱う (聴感上は完全な silence と区別不能)。
+    const MIN_LIN: f32 = 1e-5;
+    let from_db = 20.0 * from.max(MIN_LIN).log10();
+    let to_db = 20.0 * to.max(MIN_LIN).log10();
+    let v_db = from_db + (to_db - from_db) * t;
+    10.0_f32.powf(v_db / 20.0)
+}
+
 #[inline]
 fn read_lpf_param(world: &LpfWorld, state_dense: u32, param: u8) -> f32 {
     if param == LpfParam::Cutoff as u8 {
@@ -979,5 +1005,73 @@ fn read_reverb_param(world: &ReverbWorld, state_dense: u32, param: u8) -> f32 {
         width
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lerp_db_gain;
+
+    fn approx(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[test]
+    fn db_lerp_returns_exact_endpoints() {
+        assert!(approx(lerp_db_gain(1.0, 0.0, 0.0), 1.0, 1e-6));
+        assert!(approx(lerp_db_gain(1.0, 0.0, 1.0), 0.0, 1e-6));
+        assert!(approx(lerp_db_gain(0.5, 0.25, 0.0), 0.5, 1e-6));
+        assert!(approx(lerp_db_gain(0.5, 0.25, 1.0), 0.25, 1e-6));
+    }
+
+    #[test]
+    fn db_lerp_no_change_when_from_eq_to() {
+        assert!(approx(lerp_db_gain(0.7, 0.7, 0.0), 0.7, 1e-6));
+        assert!(approx(lerp_db_gain(0.7, 0.7, 0.5), 0.7, 1e-6));
+        assert!(approx(lerp_db_gain(0.7, 0.7, 1.0), 0.7, 1e-6));
+    }
+
+    #[test]
+    fn db_lerp_midpoint_below_linear() {
+        // 1.0 (= 0 dB) → 0.5 (= -6.02 dB) の中点。
+        // 線形空間: 0.75。dB 空間: 約 0.707 (= -3 dB)。
+        // dB 空間補間は線形より小さい値になる (聴感的に半分まで下がる timing が早い)。
+        let mid = lerp_db_gain(1.0, 0.5, 0.5);
+        assert!(
+            mid < 0.75,
+            "dB lerp midpoint should be < linear (0.75), got {mid}"
+        );
+        assert!(approx(mid, 0.7071, 1e-3));
+    }
+
+    #[test]
+    fn db_lerp_to_zero_floors_then_snaps_at_endpoint() {
+        // from=1.0, to=0.0 で fade。
+        // 中盤は MIN_LIN floor に従い -∞ ではなく -100 dB へ向かうが、
+        // t=1.0 では厳密に 0.0 を返す (snap)。
+        let mid = lerp_db_gain(1.0, 0.0, 0.5);
+        assert!(
+            mid > 0.0 && mid < 0.01,
+            "midpoint should be near silence, got {mid}"
+        );
+        assert_eq!(lerp_db_gain(1.0, 0.0, 1.0), 0.0, "endpoint must be exact 0");
+    }
+
+    #[test]
+    fn db_lerp_from_zero_starts_at_silence() {
+        // fade-in: 0.0 → 1.0。
+        // 開始は厳密に 0.0、終端は厳密に 1.0、中盤は対数的に立ち上がる。
+        assert_eq!(lerp_db_gain(0.0, 1.0, 0.0), 0.0);
+        assert_eq!(lerp_db_gain(0.0, 1.0, 1.0), 1.0);
+        let mid = lerp_db_gain(0.0, 1.0, 0.5);
+        // dB lerp from -100 to 0 at t=0.5 → -50 dB ≈ 0.00316
+        assert!(mid > 0.0 && mid < 0.01);
+    }
+
+    #[test]
+    fn db_lerp_clamps_t_out_of_range() {
+        // t < 0 / t > 1 でも端点に clamp される。
+        assert_eq!(lerp_db_gain(1.0, 0.0, -0.5), 1.0);
+        assert_eq!(lerp_db_gain(1.0, 0.0, 1.5), 0.0);
     }
 }
