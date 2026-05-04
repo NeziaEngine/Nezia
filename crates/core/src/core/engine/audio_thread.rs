@@ -15,7 +15,7 @@ use crate::event::Event;
 use crate::source::{
     SourceComponent, SourceLifecycleSystem, SourceMixingSystem, SourceState, SourceWorld,
 };
-use crate::spatial::{ListenerState, SpatialWorld};
+use crate::spatial::{AttenuationCurve, ListenerState, SpatialWorld};
 
 use super::SourceLiveParams;
 use super::SourceSnapshot;
@@ -42,6 +42,9 @@ pub(super) struct AudioThread {
     /// 容量は `MAX_MIX_BUFFER_SIZE / 1ch` でフレーム単位。サウンドスレッド alloc 0。
     mono_scratch: Vec<f32>,
     shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
+    /// Phase 3-1: Custom Attenuation Curve のレジストリ snapshot。
+    /// `compute_gains` が `AttenuationModel::Custom` 指定ソースで参照する。
+    shared_curves: Arc<ArcSwap<Vec<Option<Arc<AttenuationCurve>>>>>,
     /// メインスレッドと共有する SoA ライブパラメータ。
     /// コールバック冒頭で全アクティブソースに対して atomic load → dense 配列へ反映する。
     live_params: Arc<SourceLiveParams>,
@@ -67,6 +70,7 @@ impl AudioThread {
         hpf_world: HpfWorld,
         reverb_world: ReverbWorld,
         shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
+        shared_curves: Arc<ArcSwap<Vec<Option<Arc<AttenuationCurve>>>>>,
         live_params: Arc<SourceLiveParams>,
         master_bus_id: EntityId,
         device_sample_rate: f32,
@@ -88,6 +92,7 @@ impl AudioThread {
             reverb_world,
             mono_scratch: vec![0.0; crate::bus::MAX_MIX_BUFFER_SIZE],
             shared_buffers,
+            shared_curves,
             live_params,
             master_bus_id,
             device_sample_rate,
@@ -168,6 +173,8 @@ impl AudioThread {
 
         // ロックフリーでバッファリストのスナップショットを取得。
         let buffers = self.shared_buffers.load();
+        // Phase 3-1: Custom Attenuation Curve のレジストリも snapshot 取得。
+        let curves = self.shared_curves.load();
 
         // Source ミキシング → BusWorld の mix_buffer に加算。
         {
@@ -186,6 +193,7 @@ impl AudioThread {
                 self.device_channels,
                 self.device_sample_rate,
                 &buffers,
+                &curves,
             );
         }
 
@@ -449,6 +457,11 @@ fn process_command(
         }
         Command::SetSoundSpeed { speed } => {
             spatial_world.set_sound_speed(speed);
+        }
+        Command::SetSourceAttenuationCurve { id, curve_index } => {
+            if let Some(dense) = source_world.resolve(id) {
+                spatial_world.set_curve_index(dense, curve_index);
+            }
         }
 
         // ── ライブソース制御 ──

@@ -251,6 +251,13 @@ pub enum AttenuationModel {
     /// gain = (dist / min) ^ (-rolloff)
     /// dist をまず [min, max] にクランプしてから適用
     Exponential,
+
+    /// Custom Attenuation Curve (Phase 3-1 で追加)。
+    /// `SpatialWorld.curve_indices[i]` で curve registry slot を参照し、
+    /// `t = (dist - min) / (max - min)` の正規化距離から固定長 LUT を線形補間
+    /// サンプリングしてゲインを得る。`rolloff` は使用しない。
+    /// 詳細は[後述](#custom-attenuation-curve-phase-3-1)。
+    Custom,
 }
 ```
 
@@ -272,6 +279,79 @@ gain
 - **FPS / アクション** → `InverseDistance`（現実に近い）
 - **パズル / UI** → `Linear`（直感的）
 - **環境音** → `Exponential`（遠方で急激に消える）
+- **任意形状が必要** → `Custom`（[後述](#custom-attenuation-curve-phase-3-1)）
+
+---
+
+## Custom Attenuation Curve (Phase 3-1)
+
+Unity `AudioSource` の `Custom Rolloff` 互換機能。距離→ゲインの対応を任意のコントロールポイント列で定義し、4 種の数式モデルでは表現できない減衰特性 (例: 「特定距離帯だけ強調」「途中で平坦になる」) を実現する。
+
+### 設計判断
+
+| 判断点 | 採用 | 不採用 | 理由 |
+|---|---|---|---|
+| カーブ表現 | **固定長 64 sample LUT** (`[f32; 64]`) | パラメトリック (Bezier / spline) / 可変長 | 1 カーブ 256 byte = 4 cache line。hot loop は線形補間 1 回で済み分岐ゼロ |
+| オーナーシップ | **共有レジストリ** (1 カーブ : N ソース) | 各ソース所有 | 同じ「銃声の距離特性」を 100 体の弾丸ソースで共有する用途。所有重複でメモリと API 操作が膨らむのを避ける |
+| ID 空間 | **`AttenuationCurveId` を新設** (`BufferId` と分離) | 既存 ID で兼用 | 責務分離。AudioBuffer と Curve はライフサイクルが独立 |
+| `min/max` の意味 | **正規化距離 `t = (dist - min) / (max - min)` の写像のみ** | カーブ末端を `max` で打ち切る等の追加意味付け | カーブ自体が形状を完全に決める。`min/max` は単に LUT のドメイン正規化 |
+| `rolloff` の扱い | **無視** (Custom 専用 curve が形状を決める) | curve 出力に rolloff を乗算 | API のシンプル化。曲線形状を変えたければ別 curve を作るのが筋 |
+| 不正参照のフォールバック | **silent fallback (gain = 0)** | デフォルトモデルへ自動切替 | misconfig が即座に audible に → デバッグが容易。「気づかぬ間に Linear で鳴ってる」を回避 |
+| サウンドスレッド供給経路 | **`Arc<ArcSwap<Vec<Option<Arc<AttenuationCurve>>>>>`** | per-source LUT コピー | `AudioBufferPool` と同一パターン。lock-free snapshot |
+
+### データ構造
+
+```rust
+pub const CURVE_SAMPLES: usize = 64;
+pub const MAX_CURVES: usize = 256;
+
+pub struct AttenuationCurve {
+    pub samples: [f32; CURVE_SAMPLES],
+}
+
+pub struct AttenuationCurveId {
+    pub index: u32,
+    pub generation: u32,
+}
+
+// SpatialWorld 側
+pub(super) curve_indices: Vec<u32>,  // u32::MAX (= CURVE_INDEX_NONE) で未指定
+```
+
+### サンプリング (hot loop)
+
+`apply_gains()` 内で、`AttenuationModel::Custom` のソースは以下の経路を通る:
+
+```rust
+let t = ((dist - min) / (max - min)).clamp(0.0, 1.0);
+let pos = t * (CURVE_SAMPLES - 1) as f32;
+let i0 = pos as usize;
+let i1 = (i0 + 1).min(CURVE_SAMPLES - 1);
+let frac = pos - i0 as f32;
+let gain = lerp(curve.samples[i0], curve.samples[i1], frac);
+```
+
+LUT 線形補間 1 回 (~5 ns)。N=64 は 1 m 単位の距離変化を解像度として十分 (`min=1, max=64` のとき 1 m 刻み)。
+
+### API
+
+```rust
+// メインスレッド
+let curve = engine.create_attenuation_curve(&[1.0, 0.5, 0.0])?;
+engine.set_source_spatial_params(src, AttenuationModel::Custom, 1.0, 100.0, 1.0);
+engine.set_source_attenuation_curve(src, Some(curve));
+
+// 不要になったら
+engine.destroy_attenuation_curve(curve);
+```
+
+`from_points` は任意サンプル数の制御点を受け取り、内部で `CURVE_SAMPLES=64` の LUT に再サンプリングする。
+
+### DoD 観点での注記
+
+- `curve_indices: Vec<u32>` は `SpatialWorld` の他 SoA 列と同じ dense レイアウト (`MAX_SOURCES × 4 byte = 1 KB` 増)。
+- カーブ参照は `AttenuationModel::Custom` のソースだけが行うため、Linear / InverseDistance 主体のシーンでは追加コストゼロ。
+- 大量カーブ参照ソースの SIMD 化は **Phase 5+ の `AttenuationModel` グループ化バッチ処理**にまとめて実装する余地を残す (現状はスカラーパスのみ)。
 
 ---
 

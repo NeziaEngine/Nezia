@@ -41,6 +41,9 @@ pub use entity::SourceVelocityUpdate;
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;
 
+/// Phase 3-1: Custom Attenuation Curve のハンドル。
+pub use spatial::AttenuationCurveId;
+
 /// DSP エフェクト関連の公開型。
 pub use effect::{
     EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget, HpfParam, LpfParam,

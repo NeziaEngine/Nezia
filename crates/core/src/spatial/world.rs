@@ -13,6 +13,11 @@ pub enum AttenuationModel {
     InverseDistance = 2,
     /// 指数減衰: `gain = (dist / min) ^ (-rolloff)`
     Exponential = 3,
+    /// Custom Attenuation Curve (Phase 3-1)。
+    /// `SpatialWorld.curve_indices[i]` の curve registry slot を参照し、
+    /// `t = (dist - min) / (max - min)` で正規化距離をカーブから線形補間サンプリングしてゲインを得る。
+    /// `rolloff` は使用しない (Custom 専用に定義された curve が形状を完全に決める)。
+    Custom = 4,
 }
 
 /// リスナーの状態。
@@ -141,6 +146,10 @@ pub struct SpatialWorld {
     pub(super) min_distances: Vec<f32>,
     pub(super) max_distances: Vec<f32>,
     pub(super) rolloff_factors: Vec<f32>,
+    /// Phase 3-1: `AttenuationModel::Custom` のときに参照する curve registry の slot index。
+    /// `CURVE_INDEX_NONE` (= u32::MAX) のとき未指定 (Custom 指定時はゲイン 0 にフォールバック)。
+    /// 他のモデルでは無視される。
+    pub(super) curve_indices: Vec<u32>,
     pub(super) spatial_enabled: Vec<bool>,
 
     // ── SP-10 Doppler: 速度 SoA (m/s)。既定値は [0,0,0]（効果なし） ──
@@ -186,6 +195,7 @@ impl SpatialWorld {
             min_distances: Vec::with_capacity(MAX_SOURCES),
             max_distances: Vec::with_capacity(MAX_SOURCES),
             rolloff_factors: Vec::with_capacity(MAX_SOURCES),
+            curve_indices: Vec::with_capacity(MAX_SOURCES),
             spatial_enabled: Vec::with_capacity(MAX_SOURCES),
             velocities_x: Vec::with_capacity(MAX_SOURCES),
             velocities_y: Vec::with_capacity(MAX_SOURCES),
@@ -211,6 +221,7 @@ impl SpatialWorld {
         self.min_distances.push(1.0);
         self.max_distances.push(500.0);
         self.rolloff_factors.push(1.0);
+        self.curve_indices.push(super::CURVE_INDEX_NONE);
         self.spatial_enabled.push(false);
         self.velocities_x.push(0.0);
         self.velocities_y.push(0.0);
@@ -233,6 +244,7 @@ impl SpatialWorld {
         self.min_distances.swap_remove(dense_index);
         self.max_distances.swap_remove(dense_index);
         self.rolloff_factors.swap_remove(dense_index);
+        self.curve_indices.swap_remove(dense_index);
         self.spatial_enabled.swap_remove(dense_index);
         self.velocities_x.swap_remove(dense_index);
         self.velocities_y.swap_remove(dense_index);
@@ -246,6 +258,8 @@ impl SpatialWorld {
     // ── 空間コンポーネント setter ──
 
     /// 距離減衰パラメータを設定する（密配列インデックスで指定）。
+    /// `model = Custom` の場合 `rolloff` は無視され、`set_curve_index` で別途指定した
+    /// curve registry slot からゲインを読む。
     pub fn set_params(
         &mut self,
         dense_index: usize,
@@ -258,6 +272,12 @@ impl SpatialWorld {
         self.min_distances[dense_index] = min_distance;
         self.max_distances[dense_index] = max_distance;
         self.rolloff_factors[dense_index] = rolloff;
+    }
+
+    /// Phase 3-1: Custom Attenuation Curve を参照する curve registry slot index を設定する。
+    /// `super::CURVE_INDEX_NONE` で「未指定」(Custom 指定時はゲイン 0 にフォールバック)。
+    pub fn set_curve_index(&mut self, dense_index: usize, curve_index: u32) {
+        self.curve_indices[dense_index] = curve_index;
     }
 
     /// 空間演算の有効/無効を設定する（密配列インデックスで指定）。
