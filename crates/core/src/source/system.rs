@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
 use crate::effect::{EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
-use crate::spatial::{SpatialSystem, SpatialWorld};
+use crate::spatial::{AttenuationCurve, SpatialSystem, SpatialWorld};
 
 use super::virtualizer::VoiceVirtualizer;
 use super::world::{SourceState, SourceWorld};
@@ -47,6 +47,7 @@ impl SourceMixingSystem {
         device_channels: usize,
         device_sample_rate: f32,
         buffers: &[Option<Arc<AudioBuffer>>],
+        curves: &[Option<Arc<AttenuationCurve>>],
     ) {
         let source_count = world.vol.len();
         if source_count == 0 {
@@ -54,7 +55,7 @@ impl SourceMixingSystem {
         }
 
         // Phase 1: 空間ゲインを計算（SpatialWorld に書き込む）。
-        SpatialSystem::compute_gains(spatial, &world.vol, source_count);
+        SpatialSystem::compute_gains(spatial, &world.vol, source_count, curves);
 
         // Phase 1.5: Voice Virtualization。空間ゲインを使って実効可聴度をスコアリングし、
         // 上位 MAX_PHYSICAL_VOICES のみ物理化、残りを仮想化する。

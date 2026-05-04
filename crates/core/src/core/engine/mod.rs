@@ -29,7 +29,7 @@ use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{MAX_SOURCES, SourceWorld};
-use crate::spatial::{ListenerState, SpatialWorld};
+use crate::spatial::{AttenuationCurve, CurveRegistry, ListenerState, SpatialWorld};
 
 use audio_thread::AudioThread;
 use callback_registry::{CallbackKind, CallbackRegistry};
@@ -134,6 +134,8 @@ pub struct SoundEngine {
     _stream: Stream,
     /// AudioBuffer のスロット管理。
     pub(super) buffer_pool: AudioBufferPool,
+    /// Phase 3-1: Custom Attenuation Curve のレジストリ。
+    pub(super) curve_registry: CurveRegistry,
     /// バスルーティングのメインスレッドミラー（ループ検出・トポロジカルソート用）。
     pub(super) bus_routing: BusRoutingMirror,
     /// 3D ソース用 EntityId のスロット管理（再利用付き、上限 MAX_SOURCES）。
@@ -191,6 +193,11 @@ impl SoundEngine {
             Arc::new(ArcSwap::from_pointee(Vec::new()));
         let shared_buffers_clone = Arc::clone(&shared_buffers);
 
+        // Phase 3-1: Custom Attenuation Curve のレジストリ snapshot を作成。
+        let shared_curves: Arc<ArcSwap<Vec<Option<Arc<AttenuationCurve>>>>> =
+            Arc::new(ArcSwap::from_pointee(Vec::new()));
+        let shared_curves_clone = Arc::clone(&shared_curves);
+
         let bus_world = BusWorld::new();
         let master_bus_id = bus_world.master_entity();
 
@@ -219,6 +226,7 @@ impl SoundEngine {
             hpf_world,
             reverb_world,
             shared_buffers_clone,
+            shared_curves_clone,
             live_params_audio,
             master_bus_id,
             device_sample_rate,
@@ -244,6 +252,7 @@ impl SoundEngine {
             velocity_updates_input,
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
+            curve_registry: CurveRegistry::new(shared_curves),
             bus_routing: BusRoutingMirror::new(master_bus_id),
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),

@@ -135,4 +135,48 @@ impl SoundEngine {
             .try_push(Command::SetSoundSpeed { speed })
             .is_ok()
     }
+
+    // ── Phase 3-1: Custom Attenuation Curve ──────────────────────────
+
+    /// Custom Attenuation Curve を作成してハンドルを返す。
+    ///
+    /// `points` は `[0.0, 1.0]` の正規化距離に対応する uniform sample。
+    /// 例: `&[1.0, 0.5, 0.0]` で「near=1.0、mid=0.5、far=0.0」の 3 段階。
+    /// 内部で 64 サンプル LUT に再サンプリングされる。
+    /// `MAX_CURVES` 超過時は `None`。
+    #[must_use]
+    pub fn create_attenuation_curve(
+        &mut self,
+        points: &[f32],
+    ) -> Option<crate::spatial::AttenuationCurveId> {
+        let curve = crate::spatial::AttenuationCurve::from_points(points);
+        self.curve_registry.create(curve)
+    }
+
+    /// Custom Attenuation Curve を破棄する。
+    /// 参照中のソースは `AttenuationModel::Custom` 指定のまま gain 0 (silent) フォールバックする。
+    pub fn destroy_attenuation_curve(&mut self, id: crate::spatial::AttenuationCurveId) -> bool {
+        self.curve_registry.destroy(id)
+    }
+
+    /// ソースに Custom Attenuation Curve を割り当てる。
+    /// `model = AttenuationModel::Custom` を併せて設定する必要がある (`set_source_spatial_params`)。
+    /// `curve = None` で curve を外す (再び `set_source_spatial_params` で別モデルに切替を想定)。
+    #[must_use]
+    pub fn set_source_attenuation_curve(
+        &mut self,
+        id: EntityId,
+        curve: Option<crate::spatial::AttenuationCurveId>,
+    ) -> bool {
+        let curve_index = match curve {
+            Some(c) => match self.curve_registry.resolve(c) {
+                Some(idx) => idx,
+                None => return false,
+            },
+            None => crate::spatial::CURVE_INDEX_NONE,
+        };
+        self.command_producer
+            .try_push(Command::SetSourceAttenuationCurve { id, curve_index })
+            .is_ok()
+    }
 }

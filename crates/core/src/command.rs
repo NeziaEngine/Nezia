@@ -99,6 +99,11 @@ pub enum Command {
     /// SP-10: 媒質中の音速 (m/s) を設定する。0 以下は無視される。既定値 343.0。
     SetSoundSpeed { speed: f32 },
 
+    /// Phase 3-1: ソースの Custom Attenuation Curve を curve registry slot で指定する。
+    /// `curve_index = u32::MAX` (= `CURVE_INDEX_NONE`) で「カーブ未指定」(`Custom` モデル時に
+    /// silent fallback)。`AttenuationModel::Custom` 以外のモデルでは無視される。
+    SetSourceAttenuationCurve { id: EntityId, curve_index: u32 },
+
     // ── ライブソース制御（spawn 後の挙動変更） ──
     // SetSourceVolume / SetSourcePitch は live_params の atomic スロット経由に変更されたため削除。
     /// ソースの再生位置（フレーム単位）を設定する。

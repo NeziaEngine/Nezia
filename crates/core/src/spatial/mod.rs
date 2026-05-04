@@ -1,10 +1,15 @@
+mod curve;
 mod system;
 mod world;
 
+pub use curve::{AttenuationCurve, AttenuationCurveId, CurveRegistry};
 pub use system::SpatialSystem;
 #[cfg(test)]
 pub use world::DEFAULT_SOUND_SPEED;
 pub use world::{AttenuationModel, ListenerState, SpatialWorld};
+
+/// `SpatialWorld.curve_indices` で「カーブ未指定」を表すセンチネル値。
+pub const CURVE_INDEX_NONE: u32 = u32::MAX;
 
 #[cfg(test)]
 mod tests {
@@ -87,12 +92,12 @@ mod tests {
 
         // フォーカス無効 → 距離 10 の減衰
         world.listener.set_focus([10.0, 0.0, 0.0], 0.0, 0.0);
-        SpatialSystem::compute_gains(&mut world, &vols, 1);
+        SpatialSystem::compute_gains(&mut world, &vols, 1, &[]);
         let gain_no_focus = world.left_gains[0] + world.right_gains[0];
 
         // 距離フォーカス完全 → 距離 0 (>= min=1.0 にクランプ) → 最大近く
         world.listener.set_focus([10.0, 0.0, 0.0], 1.0, 0.0);
-        SpatialSystem::compute_gains(&mut world, &vols, 1);
+        SpatialSystem::compute_gains(&mut world, &vols, 1, &[]);
         let gain_full_focus = world.left_gains[0] + world.right_gains[0];
 
         assert!(
@@ -128,7 +133,7 @@ mod tests {
         let world = doppler_world([10.0, 0.0, 0.0], [0.0; 3], [0.0; 3]);
         assert_eq!(world.sound_speed, DEFAULT_SOUND_SPEED);
         let mut world = world;
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         assert!(approx_eq(world.doppler_pitches[0], 1.0, 1e-6));
     }
 
@@ -136,7 +141,7 @@ mod tests {
     fn doppler_listener_approaching_increases_pitch() {
         // ソースは右方 [10,0,0]、リスナーは原点。リスナーが +X 方向（ソースに接近）に動く → ピッチ↑
         let mut world = doppler_world([10.0, 0.0, 0.0], [0.0; 3], [30.0, 0.0, 0.0]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         let p = world.doppler_pitches[0];
         assert!(p > 1.0, "approaching listener should raise pitch, got {p}");
     }
@@ -145,7 +150,7 @@ mod tests {
     fn doppler_listener_receding_decreases_pitch() {
         // リスナーが -X 方向（ソースから離反）→ ピッチ↓
         let mut world = doppler_world([10.0, 0.0, 0.0], [0.0; 3], [-30.0, 0.0, 0.0]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         let p = world.doppler_pitches[0];
         assert!(p < 1.0, "receding listener should lower pitch, got {p}");
     }
@@ -154,7 +159,7 @@ mod tests {
     fn doppler_source_approaching_increases_pitch() {
         // ソースが -X 方向（リスナーに接近）→ ピッチ↑
         let mut world = doppler_world([10.0, 0.0, 0.0], [-30.0, 0.0, 0.0], [0.0; 3]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         let p = world.doppler_pitches[0];
         assert!(p > 1.0, "approaching source should raise pitch, got {p}");
     }
@@ -163,7 +168,7 @@ mod tests {
     fn doppler_source_receding_decreases_pitch() {
         // ソースが +X 方向（リスナーから離反）→ ピッチ↓
         let mut world = doppler_world([10.0, 0.0, 0.0], [30.0, 0.0, 0.0], [0.0; 3]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         let p = world.doppler_pitches[0];
         assert!(p < 1.0, "receding source should lower pitch, got {p}");
     }
@@ -172,7 +177,7 @@ mod tests {
     fn doppler_perpendicular_motion_no_pitch_shift() {
         // ソース速度がリスナー方向に垂直（Y 軸方向）→ 視線方向の成分 0 → ピッチ不変
         let mut world = doppler_world([10.0, 0.0, 0.0], [0.0, 30.0, 0.0], [0.0; 3]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         assert!(approx_eq(world.doppler_pitches[0], 1.0, 1e-5));
     }
 
@@ -180,7 +185,7 @@ mod tests {
     fn doppler_level_zero_disables_effect() {
         let mut world = doppler_world([10.0, 0.0, 0.0], [-50.0, 0.0, 0.0], [0.0; 3]);
         world.set_doppler_level(0, 0.0);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         assert_eq!(world.doppler_pitches[0], 1.0);
     }
 
@@ -190,8 +195,8 @@ mod tests {
         let mut world_half = doppler_world([10.0, 0.0, 0.0], [-30.0, 0.0, 0.0], [0.0; 3]);
         world_half.set_doppler_level(0, 0.5);
 
-        SpatialSystem::compute_gains(&mut world_full, &[1.0_f32], 1);
-        SpatialSystem::compute_gains(&mut world_half, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world_full, &[1.0_f32], 1, &[]);
+        SpatialSystem::compute_gains(&mut world_half, &[1.0_f32], 1, &[]);
 
         // どちらも >1.0 だが、half は full より 1.0 に近い
         assert!(world_full.doppler_pitches[0] > world_half.doppler_pitches[0]);
@@ -202,7 +207,7 @@ mod tests {
     fn doppler_disabled_when_spatial_disabled() {
         let mut world = doppler_world([10.0, 0.0, 0.0], [-30.0, 0.0, 0.0], [0.0; 3]);
         world.set_enabled(0, false);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         assert_eq!(world.doppler_pitches[0], 1.0);
     }
 
@@ -213,8 +218,8 @@ mod tests {
         let mut world_686 = doppler_world([10.0, 0.0, 0.0], [-30.0, 0.0, 0.0], [0.0; 3]);
         world_686.set_sound_speed(686.0);
 
-        SpatialSystem::compute_gains(&mut world_343, &[1.0_f32], 1);
-        SpatialSystem::compute_gains(&mut world_686, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world_343, &[1.0_f32], 1, &[]);
+        SpatialSystem::compute_gains(&mut world_686, &[1.0_f32], 1, &[]);
 
         let shift_343 = world_343.doppler_pitches[0] - 1.0;
         let shift_686 = world_686.doppler_pitches[0] - 1.0;
@@ -226,7 +231,7 @@ mod tests {
     fn doppler_supersonic_clamps_to_max() {
         // ソースが音速以上で接近 → 分母 0 以下 → 最大ピッチへクランプ
         let mut world = doppler_world([10.0, 0.0, 0.0], [-400.0, 0.0, 0.0], [0.0; 3]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         let p = world.doppler_pitches[0];
         assert!(p > 1.0 && p.is_finite());
     }
@@ -235,7 +240,7 @@ mod tests {
     fn doppler_zero_distance_no_shift() {
         // ソースとリスナーが同位置 → 方向不定 → ピッチ不変
         let mut world = doppler_world([0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0; 3]);
-        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1);
+        SpatialSystem::compute_gains(&mut world, &[1.0_f32], 1, &[]);
         assert_eq!(world.doppler_pitches[0], 1.0);
     }
 
@@ -273,7 +278,7 @@ mod tests {
             .update([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
 
         let vols = [1.0_f32; 5];
-        SpatialSystem::compute_gains(&mut world, &vols, 5);
+        SpatialSystem::compute_gains(&mut world, &vols, 5, &[]);
 
         // 全ソースが接近中 → 全部ピッチ↑
         for i in 0..5 {
@@ -305,12 +310,12 @@ mod tests {
 
         // フォーカス無効: ソースは右 → R > L
         world.listener.set_focus([0.0, 0.0, 0.0], 0.0, 0.0);
-        SpatialSystem::compute_gains(&mut world, &vols, 1);
+        SpatialSystem::compute_gains(&mut world, &vols, 1, &[]);
         assert!(world.right_gains[0] > world.left_gains[0]);
 
         // フォーカス [20,0,0] direction=1.0: 仮想リスナーは [20,0,0]、ソース [10,0,0] は左 → L > R
         world.listener.set_focus([20.0, 0.0, 0.0], 0.0, 1.0);
-        SpatialSystem::compute_gains(&mut world, &vols, 1);
+        SpatialSystem::compute_gains(&mut world, &vols, 1, &[]);
         assert!(
             world.left_gains[0] > world.right_gains[0],
             "direction focus should flip panning: L={}, R={}",

@@ -1,7 +1,9 @@
 use std::f32::consts::FRAC_PI_4;
+use std::sync::Arc;
 
 use wide::f32x4;
 
+use super::curve::AttenuationCurve;
 use super::world::{AttenuationModel, SpatialWorld};
 
 /// SP-10: Doppler ピッチ倍率の許容範囲。
@@ -23,7 +25,14 @@ impl SpatialSystem {
     ///
     /// `vols` は `SourceWorld::vols()` のスライスを渡す。
     /// `n` はアクティブなソース数（`SourceWorld::len()`）。
-    pub fn compute_gains(world: &mut SpatialWorld, vols: &[f32], n: usize) {
+    /// `curves` は curve registry の snapshot (`AttenuationModel::Custom` のとき参照)。
+    /// `&[]` を渡せば Custom 指定ソースは silent fallback (gain=0) になる。
+    pub fn compute_gains(
+        world: &mut SpatialWorld,
+        vols: &[f32],
+        n: usize,
+        curves: &[Option<Arc<AttenuationCurve>>],
+    ) {
         if n == 0 {
             return;
         }
@@ -97,7 +106,7 @@ impl SpatialSystem {
                 (pdx * f32x4::splat(fx) + pdy * f32x4::splat(fy) + pdz * f32x4::splat(fz)).into();
 
             for j in 0..4 {
-                apply_gains(world, vols, i + j, dist[j], local_x[j], local_z[j]);
+                apply_gains(world, vols, curves, i + j, dist[j], local_x[j], local_z[j]);
                 apply_doppler(
                     world,
                     i + j,
@@ -127,7 +136,7 @@ impl SpatialSystem {
             let local_x = pdx * rx + pdy * ry + pdz * rz;
             let local_z = pdx * fx + pdy * fy + pdz * fz;
 
-            apply_gains(world, vols, i, dist, local_x, local_z);
+            apply_gains(world, vols, curves, i, dist, local_x, local_z);
             apply_doppler(world, i, lpos_x, lpos_y, lpos_z, lvx, lvy, lvz, sound_speed);
             i += 1;
         }
@@ -212,6 +221,7 @@ fn apply_doppler(
 fn apply_gains(
     world: &mut SpatialWorld,
     vols: &[f32],
+    curves: &[Option<Arc<AttenuationCurve>>],
     i: usize,
     dist: f32,
     local_x: f32,
@@ -225,13 +235,34 @@ fn apply_gains(
         return;
     }
 
-    let dist_gain = compute_attenuation(
-        dist,
-        world.attenuation_models[i],
-        world.min_distances[i],
-        world.max_distances[i],
-        world.rolloff_factors[i],
-    );
+    let model = world.attenuation_models[i];
+    let dist_gain = if matches!(model, AttenuationModel::Custom) {
+        // Phase 3-1: Custom Attenuation Curve。curve registry slot を引いて LUT サンプリング。
+        // curve_index 未指定 / out-of-range / slot 空 のいずれも silent fallback (0.0)。
+        let min_d = world.min_distances[i];
+        let max_d = world.max_distances[i];
+        let range = max_d - min_d;
+        if range <= 0.0 {
+            0.0
+        } else {
+            let curve_idx = world.curve_indices[i] as usize;
+            match curves.get(curve_idx).and_then(|c| c.as_ref()) {
+                Some(curve) => {
+                    let t = ((dist - min_d) / range).clamp(0.0, 1.0);
+                    curve.sample(t).max(0.0)
+                }
+                None => 0.0,
+            }
+        }
+    } else {
+        compute_attenuation(
+            dist,
+            model,
+            world.min_distances[i],
+            world.max_distances[i],
+            world.rolloff_factors[i],
+        )
+    };
 
     // 水平面投影ベクトルの sin(azimuth) を直接パン値に使う。
     // 真前/真後ろで pan=0、真横で pan=±1。後方半球では真後ろに向かって滑らかにセンターへ戻る。
@@ -282,5 +313,7 @@ fn compute_attenuation(
             }
             (dist / min_dist).powf(-rolloff).clamp(0.0, 1.0)
         }
+        // Custom は apply_gains 内で handle されるためこの関数には到達しない。
+        AttenuationModel::Custom => 1.0,
     }
 }
