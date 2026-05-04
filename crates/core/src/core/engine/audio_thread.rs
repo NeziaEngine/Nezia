@@ -881,17 +881,13 @@ fn tick_snapshot_interpolation(
         bus_world.write_gain_by_dense(dense, v);
     }
 
-    // ── バスミュート (t >= 0.5 で snap、未適用ならば 1 度だけ書く) ──
-    for i in 0..active.bus_muted_dense.len() {
-        if active.bus_muted_applied[i] {
-            continue;
-        }
-        if t >= 0.5 {
-            let dense = active.bus_muted_dense[i] as usize;
-            bus_world.write_muted_by_dense(dense, active.bus_muted_to[i]);
-            active.bus_muted_applied[i] = true;
-        }
-    }
+    // ── バスミュート ──
+    // 補間できない bool 値は **fade 完了時にのみ snap** する (Phase 3-2 設計)。
+    // ユーザーが「フェードアウトしてからミュート」を実現したい場合は、同じ snapshot に
+    // `set_bus_gain(0.0)` も併記することで gain が滑らかに 0 へ向かい、完了時にミュート
+    // フラグが立つ。中点 (`t >= 0.5`) snap は時間差で gain と muted の整合が取れず
+    // プチノイズの原因になるため採用しない。
+    // 完了書き込みは下の fade_remaining == 0 ブロックで行う。
 
     // ── エフェクトパラメータ lerp ──
     for i in 0..active.effect_kind.len() {

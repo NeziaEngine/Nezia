@@ -33,7 +33,7 @@ NEZIA ENGINE の Mixer Snapshot 機能設計。Unity AudioMixer の Snapshot 互
 | 補間状態の表現 | **`ActiveSnapshot` (SoA `Vec<...>`)** をサウンドスレッドが所有 | snapshot data 直接補間 | apply 時に ID resolve + from キャプチャ を 1 回行い、以降は dense 配列の lerp ループ。DoD 整合 |
 | from 値の決定 | **apply 時点の現在値をキャプチャ** | snapshot に from を埋め込む | from を埋めると「snapshot A から snapshot B へ」のような遷移しかできず、任意状態からの apply ができない |
 | 中断時の挙動 | **interrupt-and-restart**: 進行中 fade を破棄、現在値を新 from にして再開 | キューイング (順次実行) | クロスフェード中の再切替が自然 (BGM が「Normal → Battle 中の途中で Boss」のようなケース) |
-| bool パラメータ (muted) | **`t >= 0.5` で snap** | 補間しない / 0% で即適用 | 補間できないので最も自然な「中点でスイッチ」を採用 |
+| bool パラメータ (muted) | **fade 完了時 (`fade_remaining == 0`) に snap** | 中点 (`t >= 0.5`) snap / 開始時 snap | gain など f32 パラメータの最終状態と timing が一致。Unity AudioMixer も同じ仕様。「フェードアウトしてからミュート」は同 snapshot に `set_bus_gain(0.0)` を併記することで実現できる |
 | エフェクトパラメータ参照 | **dense index を resolve してキャッシュ** | 毎 callback で `EffectId` を resolve | apply 時 1 度きり。fade 中に effect が destroy されたら値は書けないが panic はしない (write_*_by_dense は範囲外無視) |
 | destroy 済み snapshot の apply | **`false` を返す** (no-op) | エラー | `play_with_handle` などの既存 API と一貫 |
 | 進行中 fade と destroy | **`destroy_snapshot` は registry slot 解放のみ、ActiveSnapshot 影響なし** | apply 中の Snapshot の destroy 禁止 | apply 時に値を `ActiveSnapshot` に複製済みなので registry が消えても安全 |
@@ -72,7 +72,7 @@ apply_snapshot(id, 2.0)                           │
                                         ├─ t = (consumed + samples) / total
                                         ├─ for each entry: lerp(from, to, t)
                                         ├─ write to BusWorld / Lpf/Hpf/ReverbWorld
-                                        ├─ bool: snap at t >= 0.5
+                                        ├─ bool: snap only at fade completion
                                         └─ on completion: clear ActiveSnapshot
 ```
 
@@ -115,7 +115,7 @@ pub struct ActiveSnapshot {
     pub bus_gain_from: Vec<f32>,      // 適用時の現在値
     pub bus_gain_to: Vec<f32>,        // ターゲット値
 
-    // バスミュート (bool は補間ではなく t>=0.5 で snap)
+    // バスミュート (bool は補間ではなく fade 完了時に snap)
     pub bus_muted_dense: Vec<u32>,
     pub bus_muted_to: Vec<bool>,
     pub bus_muted_applied: Vec<bool>, // 二重書き防止
@@ -170,16 +170,27 @@ for i in 0..bus_gain_dense.len() {
 
 エフェクトパラメータも同様。LPF / HPF の `set_cutoff` は dirty フラグを立てるため、次の `flush_dirty` で biquad 係数が再計算される (5ms ごとの fade 更新で毎回 recalc されるが、計算は数 op で軽量)。
 
-### bool 補間
+### bool 補間 (= 完了時 snap)
+
+`muted` のような bool パラメータは補間できないため、**fade 完了時にのみ書き込む**。
+`tick_snapshot_interpolation` 内では何もせず、`fade_remaining_samples == 0` のブロックで
+未適用エントリを一括適用してから `clear()` する。
 
 ```rust
-if !bus_muted_applied[i] && t >= 0.5 {
-    bus_world.write_muted_by_dense(dense, bus_muted_to[i]);
-    bus_muted_applied[i] = true;
+if active.fade_remaining_samples == 0 {
+    for i in 0..bus_muted_dense.len() {
+        if !bus_muted_applied[i] {
+            bus_world.write_muted_by_dense(bus_muted_dense[i], bus_muted_to[i]);
+            bus_muted_applied[i] = true;
+        }
+    }
+    active.clear();
 }
 ```
 
-fade 完了時 (`fade_remaining_samples == 0`) は未適用エントリも全て確実に書き込んで `clear()`。
+**「フェードアウトしてからミュート」を実現するには**、同じ snapshot に `set_bus_gain(0.0)` を
+併記する。gain は線形補間で 1.0 → 0.0 に下がり、fade 完了時に muted フラグが立つ。
+gain の時間変化と muted の bool 変化が **完了 timing で揃う** ため、プチノイズが乗らない。
 
 ---
 
