@@ -7,6 +7,7 @@ mod effect_alloc;
 mod effect_api;
 mod live_params;
 mod slot_allocator;
+mod snapshot_api;
 mod source_api;
 mod spatial_api;
 
@@ -28,6 +29,7 @@ use crate::core::bus_routing::BusRoutingMirror;
 use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
+use crate::snapshot::{Snapshot, SnapshotRegistry};
 use crate::source::{MAX_SOURCES, SourceWorld};
 use crate::spatial::{AttenuationCurve, CurveRegistry, ListenerState, SpatialWorld};
 
@@ -136,6 +138,10 @@ pub struct SoundEngine {
     pub(super) buffer_pool: AudioBufferPool,
     /// Phase 3-1: Custom Attenuation Curve のレジストリ。
     pub(super) curve_registry: CurveRegistry,
+    /// Phase 3-2: Mixer Snapshot のレジストリ。
+    pub(super) snapshot_registry: SnapshotRegistry,
+    /// デバイスのサンプルレート (`apply_snapshot` の fade 秒 → サンプル換算で使用)。
+    pub(super) device_sample_rate: f32,
     /// バスルーティングのメインスレッドミラー（ループ検出・トポロジカルソート用）。
     pub(super) bus_routing: BusRoutingMirror,
     /// 3D ソース用 EntityId のスロット管理（再利用付き、上限 MAX_SOURCES）。
@@ -198,6 +204,11 @@ impl SoundEngine {
             Arc::new(ArcSwap::from_pointee(Vec::new()));
         let shared_curves_clone = Arc::clone(&shared_curves);
 
+        // Phase 3-2: Mixer Snapshot のレジストリ snapshot を作成。
+        let shared_snapshots: Arc<ArcSwap<Vec<Option<Arc<Snapshot>>>>> =
+            Arc::new(ArcSwap::from_pointee(Vec::new()));
+        let shared_snapshots_clone = Arc::clone(&shared_snapshots);
+
         let bus_world = BusWorld::new();
         let master_bus_id = bus_world.master_entity();
 
@@ -227,6 +238,7 @@ impl SoundEngine {
             reverb_world,
             shared_buffers_clone,
             shared_curves_clone,
+            shared_snapshots_clone,
             live_params_audio,
             master_bus_id,
             device_sample_rate,
@@ -253,6 +265,8 @@ impl SoundEngine {
             _stream: stream,
             buffer_pool: AudioBufferPool::new(shared_buffers),
             curve_registry: CurveRegistry::new(shared_curves),
+            snapshot_registry: SnapshotRegistry::new(shared_snapshots),
+            device_sample_rate,
             bus_routing: BusRoutingMirror::new(master_bus_id),
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),

@@ -227,6 +227,29 @@ impl BusWorld {
         }
     }
 
+    /// dense 配列のゲインスライス (Phase 3-2 Snapshot 補間で使用)。
+    #[inline]
+    #[must_use]
+    pub fn gains(&self) -> &[f32] {
+        &self.gain
+    }
+
+    /// dense index 直指定でゲイン書き込み (Phase 3-2 Snapshot 補間で使用)。
+    #[inline]
+    pub fn write_gain_by_dense(&mut self, dense: usize, value: f32) {
+        if let Some(slot) = self.gain.get_mut(dense) {
+            *slot = value;
+        }
+    }
+
+    /// dense index 直指定でミュート書き込み (Phase 3-2 Snapshot 補間で使用)。
+    #[inline]
+    pub fn write_muted_by_dense(&mut self, dense: usize, value: bool) {
+        if let Some(slot) = self.muted.get_mut(dense) {
+            *slot = value;
+        }
+    }
+
     pub fn output_bus_dense(&self, id: EntityId) -> Option<u32> {
         self.resolve(id).map(|i| self.output_bus_dense[i])
     }
