@@ -226,6 +226,14 @@ impl ReverbWorld {
         }
     }
 
+    /// dense index 直指定でパラメータ読み出し (Phase 3-2 Snapshot)。
+    /// 不正 dense は `None`。
+    #[must_use]
+    pub fn params_at(&self, dense: u32) -> Option<(f32, f32, f32, f32, f32)> {
+        let s = self.states.get(dense as usize)?;
+        Some((s.room_size, s.damping, s.wet, s.dry, s.width))
+    }
+
     pub fn set_room_size(&mut self, dense: u32, value: f32) {
         let i = dense as usize;
         if i < self.states.len() {

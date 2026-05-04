@@ -99,6 +99,20 @@ impl LpfWorld {
         }
     }
 
+    /// cutoff slice 読み出し (Phase 3-2 Snapshot)。
+    #[inline]
+    #[must_use]
+    pub fn cutoffs(&self) -> &[f32] {
+        &self.cutoff_hz
+    }
+
+    /// Q slice 読み出し (Phase 3-2 Snapshot)。
+    #[inline]
+    #[must_use]
+    pub fn qs(&self) -> &[f32] {
+        &self.q
+    }
+
     /// dirty フラグが立っているエントリの係数を再計算する (コールバック冒頭で呼ぶ)。
     pub fn flush_dirty(&mut self, sample_rate: f32) {
         for i in 0..self.dirty.len() {

@@ -6,6 +6,7 @@ mod core;
 mod effect;
 mod entity;
 mod event;
+mod snapshot;
 mod source;
 mod spatial;
 mod streaming;
@@ -28,6 +29,9 @@ pub use buffer_pool::BufferId;
 
 /// ストリーミング再生オプション (Phase 2-4)。
 pub use streaming::StreamingOpts;
+
+/// Mixer Snapshot のハンドル (Phase 3-2)。
+pub use snapshot::SnapshotId;
 
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;

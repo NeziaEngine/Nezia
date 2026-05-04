@@ -90,6 +90,20 @@ impl HpfWorld {
         }
     }
 
+    /// cutoff slice 読み出し (Phase 3-2 Snapshot)。
+    #[inline]
+    #[must_use]
+    pub fn cutoffs(&self) -> &[f32] {
+        &self.cutoff_hz
+    }
+
+    /// Q slice 読み出し (Phase 3-2 Snapshot)。
+    #[inline]
+    #[must_use]
+    pub fn qs(&self) -> &[f32] {
+        &self.q
+    }
+
     pub fn flush_dirty(&mut self, sample_rate: f32) {
         for i in 0..self.dirty.len() {
             if self.dirty[i] {

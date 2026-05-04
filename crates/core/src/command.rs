@@ -104,6 +104,14 @@ pub enum Command {
     /// silent fallback)。`AttenuationModel::Custom` 以外のモデルでは無視される。
     SetSourceAttenuationCurve { id: EntityId, curve_index: u32 },
 
+    /// Phase 3-2: Mixer Snapshot を適用する。サウンドスレッドが registry slot から
+    /// Snapshot を引いて `ActiveSnapshot` に展開し、`fade_samples` かけて補間する。
+    /// `fade_samples = 0` で即時切替。snapshot_index 解決失敗時は無視。
+    ApplySnapshot {
+        snapshot_index: u32,
+        fade_samples: u64,
+    },
+
     // ── ライブソース制御（spawn 後の挙動変更） ──
     // SetSourceVolume / SetSourcePitch は live_params の atomic スロット経由に変更されたため削除。
     /// ソースの再生位置（フレーム単位）を設定する。
