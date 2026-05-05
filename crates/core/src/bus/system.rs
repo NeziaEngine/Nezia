@@ -15,7 +15,6 @@ pub struct BusSystem;
 
 impl BusSystem {
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn update(
         world: &mut BusWorld,
         effect_world: &EffectWorld,
