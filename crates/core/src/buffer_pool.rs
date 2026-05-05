@@ -13,6 +13,11 @@ const MAX_BUFFERS: usize = 1024;
 ///
 /// generation によってスロット再利用時の無効化を検出する。
 /// ECS の EntityId とは独立した型。
+///
+/// `#[repr(C)]` は FFI 層 (`NeziaBufferId`) とのゼロコピー slice cast 用
+/// (例: `nezia_container_create_random` が `&[NeziaBufferId]` をそのまま `&[BufferId]`
+/// として core に渡すために必要)。
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferId {
     pub index: u32,

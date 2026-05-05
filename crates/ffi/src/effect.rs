@@ -12,14 +12,16 @@ pub enum NeziaEffectKind {
     Lpf = 0,
     Hpf = 1,
     Reverb = 2,
+    Compressor = 3,
 }
 
 impl NeziaEffectKind {
-    fn to_core(self) -> EffectKind {
+    pub(crate) fn to_core(self) -> EffectKind {
         match self {
             Self::Lpf => EffectKind::Lpf,
             Self::Hpf => EffectKind::Hpf,
             Self::Reverb => EffectKind::Reverb,
+            Self::Compressor => EffectKind::Compressor,
         }
     }
 }
