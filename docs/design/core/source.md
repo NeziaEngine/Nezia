@@ -51,6 +51,33 @@ spawn 時は `Playing` で初期化される。
 | `pitch` | `f32` | ピッチ倍率（1.0 = 原音） |
 | `sample_offset` | `f32` | サンプル単位の再生位置 |
 | `audio_buffer_index` | `u32` | 再生する AudioBuffer のインデックス |
+| `priority` | `u8` | Voice Virtualization 用優先度。**高いほど高優先**、既定値 128 |
+
+## Priority — Wwise / ADX2 互換セマンティクス
+
+Voice Virtualization で同時発音数 (`MAX_PHYSICAL_VOICES`) を超えたとき、どのソースを
+仮想化するかを決める優先度。範囲は `u8` 0..255、**高い値ほど高優先**、既定値 128。
+
+| ミドルウェア | 範囲 | 高優先側 | 既定値 |
+|---|---|---|---|
+| **NEZIA** | 0..255 | **高い値** | 128 |
+| Wwise (`AK::SoundEngine` Priority) | 0..100 | 高い値 | 50 |
+| CRI ADX2 (Voice Priority) | 0..255 | 高い値 | 0 (カテゴリ既定) |
+| Unity `AudioSource.priority` | 0..255 | 低い値 | 128 |
+| FMOD Studio Priority | 0..256 | 高い値 | — |
+
+Unity と意味が反転している点に注意。Unity からの移行層 (`integration/`) では値を
+`255 - unity_priority` で写像してから NEZIA に渡すこと。
+
+仮想化スコア (`virtualizer.rs`):
+
+```text
+audibility = vol * spatial_gain_avg * (priority / 255)
+```
+
+毎フレーム降順ソートして上位 `MAX_PHYSICAL_VOICES` を物理ボイスに割り当てる。
+priority=0 のソースは `audibility=0` となり、他に Playing がいれば必ず仮想化される
+(完全な「鳴らさない」指定として使える)。priority=255 は最大重みで保護される。
 
 ## SourceWorld / SourceSystem
 

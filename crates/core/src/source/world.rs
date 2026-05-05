@@ -17,8 +17,8 @@ pub struct SourceComponent {
     pub token: u32,
     /// ループ再生フラグ。`true` の場合、バッファ末尾到達時に先頭へ巻き戻す。
     pub looping: bool,
-    /// Voice Virtualization 用優先度。Unity `AudioSource.priority` 互換 (0..255、低いほど高優先)。
-    /// 既定値 128 (Unity と一致)。
+    /// Voice Virtualization 用優先度。Wwise / CRI ADX2 互換 (0..255、**高いほど高優先**)。
+    /// 既定値 128 (中央値)。Wwise は 0..100、ADX2 は 0..255 だが、いずれも「高い値ほど重要」が共通。
     pub priority: u8,
 }
 
@@ -75,7 +75,7 @@ pub struct SourceWorld {
     pub(super) token: Vec<u32>,
     /// ループ再生フラグ。
     pub(super) looping: Vec<bool>,
-    /// Voice Virtualization 用優先度 (0..255, 低いほど高優先, Unity 互換)。
+    /// Voice Virtualization 用優先度 (0..255, **高いほど高優先**, Wwise / ADX2 互換)。
     pub(super) priority: Vec<u8>,
     /// Voice Virtualization タグ。`true` のソースはミキシング段でスキップされ、
     /// `sample_offset` だけ前進する (時間同期維持)。
