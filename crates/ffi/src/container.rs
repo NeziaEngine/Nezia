@@ -3,13 +3,14 @@
 //! 現状 Random Container のみサポート (Switch / Sequence は将来実装)。
 //! 設計詳細は `docs/design/core/container.md` 参照。
 
+use std::ffi::c_void;
 use std::slice;
 
 use nezia_core::{BufferId, ContainerId};
 
 use crate::engine::NeziaEngine;
 use crate::panic::{guard_entity, guard_result, guard_value};
-use crate::types::{NeziaBufferId, NeziaEntityId, NeziaResult};
+use crate::types::{NeziaBufferId, NeziaEntityId, NeziaFinishCallback, NeziaResult};
 
 // `NeziaBufferId` と `core::BufferId` のレイアウト一致を保証する
 // (`nezia_container_create_random` でゼロコピー slice cast するため)。
@@ -133,6 +134,10 @@ pub unsafe extern "C" fn nezia_container_play(
 
 /// Container から子を 1 つ選んでハンドル付きで再生する。
 /// 戻り値は **選ばれた 1 つの Source の `EntityId`** (Container ハンドルとは別)。
+///
+/// `callback` が `Some` のとき、自然終了時に `nezia_engine_poll_events()` 経由で
+/// 1 度だけ呼ばれる (`looping != 0` の場合は呼ばれない)。`user_data` のライフタイムは
+/// コールバック発火まで呼出側が保証する。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_container_play_with_handle(
     engine: *mut NeziaEngine,
@@ -141,20 +146,35 @@ pub unsafe extern "C" fn nezia_container_play_with_handle(
     pitch: f32,
     bus: NeziaEntityId,
     looping: u8,
+    callback: NeziaFinishCallback,
+    user_data: *mut c_void,
 ) -> NeziaEntityId {
     guard_entity(|| {
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return NeziaEntityId::INVALID;
         };
-        engine
-            .inner
-            .play_container_with_handle(
+        let result = match callback {
+            Some(f) => unsafe {
+                // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
+                engine.inner.play_container_with_handle_and_callback_native(
+                    container.to_core(),
+                    vol,
+                    pitch,
+                    bus.to_core(),
+                    looping != 0,
+                    f,
+                    user_data,
+                )
+            },
+            None => engine.inner.play_container_with_handle(
                 container.to_core(),
                 vol,
                 pitch,
                 bus.to_core(),
                 looping != 0,
-            )
+            ),
+        };
+        result
             .map(NeziaEntityId::from_core)
             .unwrap_or(NeziaEntityId::INVALID)
     })

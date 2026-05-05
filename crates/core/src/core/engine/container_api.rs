@@ -4,6 +4,8 @@
 //! `play_container_*` はメインスレッドで子を 1 つ選び、既存の Source 再生
 //! コマンドに変換して発行する。設計詳細は `docs/design/core/container.md` 参照。
 
+use std::ffi::c_void;
+
 use ringbuf::traits::Producer;
 
 use crate::buffer_pool::BufferId;
@@ -12,6 +14,7 @@ use crate::container::{ContainerId, RandomPick};
 use crate::entity::EntityId;
 
 use super::SoundEngine;
+use super::source_api::NativeFinishFn;
 
 impl SoundEngine {
     /// Random Container を生成する。
@@ -102,6 +105,61 @@ impl SoundEngine {
             })
             .is_err()
         {
+            self.source_slots.free(id);
+            return None;
+        }
+        Some(id)
+    }
+
+    /// Container から子を 1 つ選んでハンドル付きで再生し、自然終了時に C 関数
+    /// コールバックを呼ぶ (FFI 用、**alloc なし**)。
+    ///
+    /// 戻る `EntityId` は `play_container_with_handle()` と同じく **選ばれた 1 つの
+    /// Source** のもの。`looping = true` の場合は終了通知が発火しないため
+    /// コールバックは呼ばれない (Source 経路と同じ意味論)。Container / buffer / bus
+    /// が無効、または `MAX_SOURCES` 上限などでコマンド送信に失敗した場合は
+    /// コールバックは呼ばれずにキャンセルされる。
+    ///
+    /// # Safety
+    /// `f` / `user_data` は `poll_events()` で発火するまで有効である必要がある。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn play_container_with_handle_and_callback_native(
+        &mut self,
+        container: ContainerId,
+        vol: f32,
+        pitch: f32,
+        bus: EntityId,
+        looping: bool,
+        f: NativeFinishFn,
+        user_data: *mut c_void,
+    ) -> Option<EntityId> {
+        let pick = self.container_world.pick(container)?;
+        let RandomPick::Source(buffer) = pick;
+        let audio_buffer_index = self.buffer_pool.resolve(buffer)?;
+        let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
+
+        let id = self.source_slots.alloc()?;
+        self.live_params.prime(id, vol, pitch);
+
+        let Some(token) = self.callbacks.register_native(f, user_data) else {
+            self.source_slots.free(id);
+            return None;
+        };
+        let ok = self
+            .command_producer
+            .try_push(Command::SpawnSource {
+                id,
+                audio_buffer_index,
+                vol,
+                pitch,
+                output_bus_dense,
+                token,
+                looping,
+            })
+            .is_ok();
+        if !ok {
+            self.callbacks.cancel(token);
             self.source_slots.free(id);
             return None;
         }
