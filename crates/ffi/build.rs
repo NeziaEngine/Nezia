@@ -13,6 +13,7 @@ fn main() {
         "src/bus.rs",
         "src/spatial.rs",
         "src/audio_meta.rs",
+        "src/capture.rs",
     ];
 
     let mut builder = csbindgen::Builder::default()

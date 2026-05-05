@@ -16,4 +16,10 @@ pub enum Event {
     /// ストリーミングバッファでサウンドスレッドが必要量を読み出せなかった (Phase 2-4)。
     /// 短時間 (1〜2 callback) なら自然解消。連続発火時はワーカが追いついていない。
     StreamingUnderrun { buffer: BufferId },
+    /// マスター出力キャプチャのリングが満杯でサンプルがドロップされた。
+    /// `dropped_samples` は今回のコールバックで捨てたインターリーブサンプル数。
+    /// `CaptureReader::dropped_samples()` の累積カウンタとは別に、発生イベントとしても
+    /// 通知することで Recorder UI が「キャプチャ品質が劣化している」と即座に検知できる。
+    /// 連続発火抑制 (前回からの差分が一定以上のときだけ発火) は audio thread 側で行う。
+    CaptureOverflow { dropped_samples: u32 },
 }
