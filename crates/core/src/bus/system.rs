@@ -109,13 +109,16 @@ impl BusSystem {
                 let parent = world.output_bus_dense[d] as usize;
                 let parent_start = parent * MAX_MIX_BUFFER_SIZE;
                 debug_assert_ne!(d, parent, "バスが自己参照しています");
-                // SAFETY: d != parent（DAG なので src != parent）。
-                // 重複しないスライスを別々に書き換える。
+                // src と dest は別バスのスライスで重複しない (DAG 保証)。
+                // `from_raw_parts(_mut)` で slice にして autovectorizer に no-alias を伝える。
+                // SAFETY: d != parent（DAG）なので 2 領域は重複しない。
                 unsafe {
                     let src_ptr = world.mix_buffer.as_ptr().add(start);
                     let dst_ptr = world.mix_buffer.as_mut_ptr().add(parent_start);
-                    for i in 0..sample_count {
-                        *dst_ptr.add(i) += *src_ptr.add(i);
+                    let src = std::slice::from_raw_parts(src_ptr, sample_count);
+                    let dst = std::slice::from_raw_parts_mut(dst_ptr, sample_count);
+                    for (d_s, s) in dst.iter_mut().zip(src.iter()) {
+                        *d_s += *s;
                     }
                 }
             }
@@ -170,29 +173,36 @@ fn apply_sends(
                     // 自分自身への Send (DAG 上ありえない) は防御的にスキップ。
                     continue;
                 }
-                // SAFETY: src と dest は別のバスのスライスで重複しない。
+                // src と dest は別バスのスライスで重複しない (DAG 保証)。
+                // 借用チェッカは同一 Vec の 2 領域を同時に貸せないため、
+                // `from_raw_parts(_mut)` で **slice として** 参照を作って autovectorizer
+                // に no-alias を伝える (`*ptr.add(s)` のままだと SIMD 化されない)。
+                // SAFETY: DAG なので 2 領域は重複せず、有効な BusWorld 内バッファ。
                 unsafe {
                     let src_ptr = world.mix_buffer.as_ptr().add(src_start);
                     let dst_ptr = world.mix_buffer.as_mut_ptr().add(dest_start);
-                    for s in 0..sample_count {
-                        *dst_ptr.add(s) += *src_ptr.add(s) * gain;
+                    let src = std::slice::from_raw_parts(src_ptr, sample_count);
+                    let dst = std::slice::from_raw_parts_mut(dst_ptr, sample_count);
+                    for (d, s) in dst.iter_mut().zip(src.iter()) {
+                        *d += *s * gain;
                     }
                 }
             }
             Some(SendDestKind::CompressorSidechain) => {
-                // BusWorld と CompressorWorld は別オブジェクトだが、借用チェッカは
-                // `world.mix_buffer` の参照を保ったまま `compressor_world.sidechain_slice_mut`
-                // を呼べる。前者は不変参照経由で長さ取得 → ポインタコピー、後者は可変借用。
-                let src_len = world.mix_buffer.len();
-                debug_assert!(src_start + sample_count <= src_len);
+                // BusWorld と CompressorWorld は別オブジェクト → 借用は両立する。
+                // src スライスを先に切り出して compressor の可変借用と組み合わせる。
+                let src_end = src_start + sample_count;
+                if src_end > world.mix_buffer.len() {
+                    continue;
+                }
                 let src_ptr = world.mix_buffer.as_ptr();
                 if let Some(dst) = compressor_world.sidechain_slice_mut(dest_dense, sample_count) {
-                    // SAFETY: src は BusWorld のバッファ、dst は CompressorWorld のバッファで
-                    // メモリ的に重複しない。
-                    unsafe {
-                        for (i, slot) in dst.iter_mut().enumerate() {
-                            *slot += *src_ptr.add(src_start + i) * gain;
-                        }
+                    // SAFETY: src は BusWorld 内、dst は CompressorWorld 内で重複なし。
+                    // `from_raw_parts` で slice 化して autovectorize を許す。
+                    let src =
+                        unsafe { std::slice::from_raw_parts(src_ptr.add(src_start), dst.len()) };
+                    for (d, s) in dst.iter_mut().zip(src.iter()) {
+                        *d += *s * gain;
                     }
                 }
             }
