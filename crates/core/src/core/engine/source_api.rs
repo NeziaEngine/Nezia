@@ -425,9 +425,11 @@ impl SoundEngine {
             .is_ok()
     }
 
-    /// Voice Virtualization 用優先度を設定する (Unity `AudioSource.priority` 互換)。
+    /// Voice Virtualization 用優先度を設定する (Wwise / CRI ADX2 互換)。
     ///
-    /// 値域 `0..=255`、**低い値ほど高優先**。既定値 128。
+    /// 値域 `0..=255`、**高い値ほど高優先**。既定値 128 (中央値)。
+    /// Wwise の Priority は 0..100、ADX2 の Voice Priority は 0..255 だが、
+    /// いずれも「高い値ほど重要」という共通セマンティクスに従う。
     /// 物理ボイス上限 (`MAX_PHYSICAL_VOICES`) を超えるアクティブソースが存在するとき、
     /// 優先度・音量・距離減衰の総合スコアが下位のソースが仮想化される (ミキシングはスキップ、
     /// `sample_offset` のみ前進して時間同期を維持)。

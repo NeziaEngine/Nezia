@@ -14,7 +14,7 @@ use super::world::{SourceState, SourceWorld};
 /// ```
 /// - `vol`: ユーザー設定音量 (`SourceWorld::vol`)
 /// - `gain_avg`: 空間ゲイン平均 `(left_gain + right_gain) / 2`。`spatial_enabled = false` のソースは `vol` 自体が代入されているため自然に整合する
-/// - `priority_weight`: `(255 - priority) / 255`、Unity 互換 (低い priority = 高優先 = 大きい重み)
+/// - `priority_weight`: `priority / 255`、Wwise / CRI ADX2 互換 (高い priority = 高優先 = 大きい重み)
 ///
 /// `SpatialSystem::compute_gains()` の **後**、`SourceMixingSystem::update()` の **前** に呼び出す。
 pub struct VoiceVirtualizer;
@@ -64,7 +64,7 @@ impl VoiceVirtualizer {
                     continue;
                 }
                 let gain_avg = 0.5 * (left_gains[i] + right_gains[i]);
-                let priority_weight = (255 - priorities[i] as i32) as f32 / 255.0;
+                let priority_weight = priorities[i] as f32 / 255.0;
                 let audibility = vols[i] * gain_avg.abs() * priority_weight;
                 scores[score_count] = (audibility, i as u32);
                 score_count += 1;
@@ -147,14 +147,14 @@ mod tests {
 
     #[test]
     fn higher_priority_protected_from_virtualization() {
-        // 全部 priority=200 (低優先) にし、最後の 1 体だけ priority=0 (最高優先) にする。
-        // MAX_PHYSICAL_VOICES より多く生成しても、priority=0 のソースは必ず物理化される。
+        // 全部 priority=50 (低優先) にし、最後の 1 体だけ priority=255 (最高優先) にする。
+        // MAX_PHYSICAL_VOICES より多く生成しても、priority=255 のソースは必ず物理化される。
         let n = MAX_PHYSICAL_VOICES + 16;
         let mut world = SourceWorld::new();
         let mut spatial = SpatialWorld::new();
         let mut high_prio_id = None;
         for i in 0..n {
-            let prio = if i == n - 1 { 0 } else { 200 };
+            let prio = if i == n - 1 { 255 } else { 50 };
             let id = world
                 .spawn(SourceComponent {
                     vol: 1.0,
@@ -165,7 +165,7 @@ mod tests {
             spatial.push_defaults();
             spatial.left_gains[i] = 1.0;
             spatial.right_gains[i] = 1.0;
-            if prio == 0 {
+            if prio == 255 {
                 high_prio_id = Some(id);
             }
         }

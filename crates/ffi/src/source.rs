@@ -231,9 +231,9 @@ pub unsafe extern "C" fn nezia_source_set_loop(
     })
 }
 
-/// Voice Virtualization 用優先度を設定する (Unity `AudioSource.priority` 互換)。
+/// Voice Virtualization 用優先度を設定する (Wwise / CRI ADX2 互換)。
 ///
-/// 0..255、低いほど高優先。既定 128。
+/// 0..255、**高いほど高優先**。既定 128 (中央値)。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_source_set_priority(
     engine: *mut NeziaEngine,
