@@ -8,6 +8,7 @@ mod core;
 mod effect;
 mod entity;
 mod event;
+mod limiter;
 mod metrics;
 mod snapshot;
 mod source;
