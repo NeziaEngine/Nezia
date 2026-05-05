@@ -36,6 +36,7 @@ use crate::core::bus_routing::BusRoutingMirror;
 use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
+use crate::metrics::{DropoutStats, DspStats, EngineMetrics};
 use crate::snapshot::{Snapshot, SnapshotRegistry};
 use crate::source::{MAX_SOURCES, SourceWorld};
 use crate::spatial::{AttenuationCurve, CurveRegistry, ListenerState, SpatialWorld};
@@ -191,6 +192,8 @@ pub struct SoundEngine {
     capture_reader: Option<CaptureReader>,
     /// エンジン起動以降の累積処理フレーム数。`dsp_time_samples()` で公開。
     dsp_time_frames: Arc<AtomicU64>,
+    /// audio thread と共有するベンチマーク用ランタイム計測値。
+    metrics: Arc<EngineMetrics>,
 }
 
 impl SoundEngine {
@@ -264,6 +267,8 @@ impl SoundEngine {
         let capture_shared_audio = Arc::clone(&capture_shared);
         let dsp_time_frames = Arc::new(AtomicU64::new(0));
         let dsp_time_frames_audio = Arc::clone(&dsp_time_frames);
+        let metrics = Arc::new(EngineMetrics::new());
+        let metrics_audio = Arc::clone(&metrics);
         let capture_reader = Some(CaptureReader::new(
             capture_consumer,
             Arc::clone(&capture_shared),
@@ -296,6 +301,7 @@ impl SoundEngine {
             capture_producer,
             capture_shared_audio,
             dsp_time_frames_audio,
+            metrics_audio,
         );
 
         let stream = device.build_output_stream(
@@ -334,6 +340,7 @@ impl SoundEngine {
             capture_shared,
             capture_reader,
             dsp_time_frames,
+            metrics,
         })
     }
 
@@ -382,6 +389,57 @@ impl SoundEngine {
         let frames = self.dsp_time_samples() as f64;
         let sr = self.device_sample_rate as f64;
         if sr <= 0.0 { 0.0 } else { frames / sr }
+    }
+
+    /// 直近 audio callback の DSP CPU 計測値スナップショットを返す。
+    ///
+    /// 任意スレッドから lock-free に読める (各カウンタは relaxed atomic load)。
+    /// ベンチマークで Unity の `AudioSettings.GetCPULoad()` 相当として使う。
+    #[must_use]
+    pub fn dsp_stats(&self) -> DspStats {
+        DspStats {
+            last_callback_ns: self.metrics.last_callback_ns.load(Ordering::Relaxed),
+            peak_callback_ns: self.metrics.peak_callback_ns.load(Ordering::Relaxed),
+            callback_count: self.metrics.callback_count.load(Ordering::Relaxed),
+            callback_total_ns: self.metrics.callback_total_ns.load(Ordering::Relaxed),
+            last_callback_budget_ns: self.metrics.last_callback_budget_ns.load(Ordering::Relaxed),
+        }
+    }
+
+    /// 直近 audio callback 末尾で観測された生存ソース数 (Playing/Pausing/Stopped 含む)。
+    ///
+    /// `poll_events()` 経由のスナップショットではなく、audio thread が atomic に
+    /// 公開した最新値。ベンチマーク時に「実際にいま鳴っているボイス本数」を
+    /// 計測するのに使う。`poll_events()` 不要。
+    #[must_use]
+    pub fn active_source_count(&self) -> u32 {
+        self.metrics.active_source_count.load(Ordering::Relaxed)
+    }
+
+    /// 直近 audio callback 末尾で virtualized (mix スキップ) 状態だったボイス数。
+    #[must_use]
+    pub fn virtualized_voice_count(&self) -> u32 {
+        self.metrics.virtualized_voice_count.load(Ordering::Relaxed)
+    }
+
+    /// ドロップアウト系カウンタのスナップショット (cumulative)。
+    ///
+    /// - `voice_steal`: callback ごとの virtualized voice 数の累積和 (voice-frame 単位)。
+    ///   現状の Nezia は MAX_PHYSICAL_VOICES 超過時に「古いボイスを止める」のではなく
+    ///   「優先度下位を一時的に mix スキップ」する設計のため、伝統的な voice steal とは
+    ///   意味が異なる点に注意。
+    /// - `streaming_underrun`: ストリーミングバッファ underrun の累積発生回数。
+    /// - `dropped_play_calls`: `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
+    #[must_use]
+    pub fn dropouts(&self) -> DropoutStats {
+        DropoutStats {
+            voice_steal: self.metrics.voice_steal_count.load(Ordering::Relaxed),
+            streaming_underrun: self
+                .metrics
+                .streaming_underrun_count
+                .load(Ordering::Relaxed),
+            dropped_play_calls: self.metrics.dropped_play_calls.load(Ordering::Relaxed),
+        }
     }
 
     /// ゲームループの毎フレーム末尾で呼ぶ。

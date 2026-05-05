@@ -25,6 +25,7 @@ use crate::command::Command;
 use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
+use crate::metrics::{EngineMetrics, update_peak};
 use crate::source::{SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
 use crate::spatial::{AttenuationCurve, ListenerState, SpatialWorld};
 
@@ -77,6 +78,8 @@ pub(in crate::core::engine) struct AudioThread {
     /// エンジン起動以降の累積処理フレーム数 (per-channel sample count)。
     /// 任意スレッドから `SoundEngine::dsp_time_samples()` 経由で読まれる。
     dsp_time_frames: Arc<AtomicU64>,
+    /// ベンチマーク用ランタイム計測値。任意スレッドから `SoundEngine::dsp_stats()` 等で読まれる。
+    metrics: Arc<EngineMetrics>,
 }
 
 impl AudioThread {
@@ -106,6 +109,7 @@ impl AudioThread {
         capture_producer: HeapProd<f32>,
         capture_shared: Arc<CaptureShared>,
         dsp_time_frames: Arc<AtomicU64>,
+        metrics: Arc<EngineMetrics>,
     ) -> Self {
         Self {
             command_consumer,
@@ -134,12 +138,16 @@ impl AudioThread {
             capture_producer,
             capture_shared,
             dsp_time_frames,
+            metrics,
         }
     }
 
     /// cpal のコールバック 1 回分の処理。
     pub(in crate::core::engine) fn process(&mut self, data: &mut [f32]) {
         let sample_count = data.len();
+        // ベンチマーク用に DSP 処理時間を計測。Instant::now() は macOS / Linux /
+        // Windows いずれもナノ秒精度の vDSO 経由で <50 ns のオーバヘッド。
+        let t_start = std::time::Instant::now();
 
         // コマンドを先に処理する。spawn 系を反映してから triple buffer の
         // 位置更新を適用しないと、spawn と同フレームで publish された位置が
@@ -179,6 +187,7 @@ impl AudioThread {
                 &mut self.compressor_world,
                 &mut self.event_producer,
                 self.master_bus_id,
+                &self.metrics,
             );
         }
 
@@ -337,6 +346,9 @@ impl AudioThread {
                 .underrun_flag
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
             {
+                self.metrics
+                    .streaming_underrun_count
+                    .fetch_add(1, Ordering::Relaxed);
                 if let Some(id) = state.buffer_id() {
                     let _ = self
                         .event_producer
@@ -347,6 +359,55 @@ impl AudioThread {
 
         // 生存ソースのスナップショットを publish する（メインスレッドのクエリ用）。
         publish_source_snapshots(&mut self.source_snapshots_input, &self.source_world);
+
+        // ベンチマーク用カウンタを更新する。
+        // - Playing 数: ベンチで「実際に鳴っているボイス本数」として読まれる。
+        // - virtualized 数: mix スキップされた本数 (現状の Nezia の voice steal 相当)。
+        // 線形スキャン (高々 MAX_SOURCES = 256) で SoA を 1 度だけ走る。
+        let mut playing = 0u32;
+        let mut virt = 0u32;
+        let states = self.source_world.states();
+        let virts = self.source_world.is_virtuals();
+        let n = states.len();
+        for i in 0..n {
+            if states[i] == crate::source::SourceState::Playing {
+                playing += 1;
+                if virts[i] {
+                    virt += 1;
+                }
+            }
+        }
+        self.metrics
+            .active_source_count
+            .store(playing, Ordering::Relaxed);
+        self.metrics
+            .virtualized_voice_count
+            .store(virt, Ordering::Relaxed);
+        self.metrics
+            .voice_steal_count
+            .fetch_add(virt as u64, Ordering::Relaxed);
+
+        // DSP 処理時間と予算を atomic に publish。
+        let elapsed_ns = t_start.elapsed().as_nanos() as u64;
+        // 予算 = (per-channel sample 数 / sample_rate) * 1e9。device_channels == 0 は
+        // new() で除外済みのため安全。sample_rate <= 0 のときは 0 を入れる。
+        let budget_ns = if self.device_sample_rate > 0.0 {
+            let per_channel = (sample_count / self.device_channels) as f64;
+            ((per_channel / self.device_sample_rate as f64) * 1.0e9) as u64
+        } else {
+            0
+        };
+        self.metrics
+            .last_callback_ns
+            .store(elapsed_ns, Ordering::Relaxed);
+        self.metrics
+            .last_callback_budget_ns
+            .store(budget_ns, Ordering::Relaxed);
+        self.metrics.callback_count.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .callback_total_ns
+            .fetch_add(elapsed_ns, Ordering::Relaxed);
+        update_peak(&self.metrics.peak_callback_ns, elapsed_ns);
     }
 }
 
