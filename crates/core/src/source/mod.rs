@@ -11,7 +11,7 @@ pub use world::{SourceComponent, SourceState, SourceWorld};
 ///
 /// `MAX_PHYSICAL_VOICES` を超えるソースは spawn 直後の rebalance で `is_virtual = true`
 /// となり、ミキシング段でスキップされる (sample_offset は前進する)。
-pub const MAX_SOURCES: usize = 256;
+pub const MAX_SOURCES: usize = 4096;
 
 /// 物理ボイス数 (実 DSP / ミキシングを行うボイスの上限)。
 ///
