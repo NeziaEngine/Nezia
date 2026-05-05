@@ -4,6 +4,8 @@
 //! アクセスが必要なため呼び出し側 (`AudioThread::process`) でインターセプトしており、
 //! ここでは到達不能扱い (debug_assert) にしている。
 
+use std::sync::atomic::Ordering;
+
 use ringbuf::traits::Producer;
 
 use crate::bus::{BusComponent, BusWorld, SendDestKind};
@@ -11,6 +13,7 @@ use crate::command::{Command, SendDestination};
 use crate::effect::{CompressorWorld, EffectKind, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::EntityId;
 use crate::event::Event;
+use crate::metrics::EngineMetrics;
 use crate::source::{SourceComponent, SourceState, SourceWorld};
 use crate::spatial::SpatialWorld;
 
@@ -30,6 +33,7 @@ pub(super) fn process_command(
     compressor_world: &mut CompressorWorld,
     event_producer: &mut ringbuf::HeapProd<Event>,
     master_bus_id: EntityId,
+    metrics: &EngineMetrics,
 ) {
     match cmd {
         Command::SetVolume(v) => {
@@ -54,8 +58,11 @@ pub(super) fn process_command(
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
-            } else if token != 0 {
-                let _ = event_producer.try_push(Event::PlayFailed { token });
+            } else {
+                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
+                if token != 0 {
+                    let _ = event_producer.try_push(Event::PlayFailed { token });
+                }
             }
         }
         Command::PlayToBus {
@@ -78,8 +85,11 @@ pub(super) fn process_command(
             });
             if spawned.is_some() {
                 spatial_world.push_defaults();
-            } else if token != 0 {
-                let _ = event_producer.try_push(Event::PlayFailed { token });
+            } else {
+                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
+                if token != 0 {
+                    let _ = event_producer.try_push(Event::PlayFailed { token });
+                }
             }
         }
         Command::SpawnSource {
@@ -106,8 +116,11 @@ pub(super) fn process_command(
             );
             if spawned {
                 spatial_world.push_defaults();
-            } else if token != 0 {
-                let _ = event_producer.try_push(Event::PlayFailed { token });
+            } else {
+                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
+                if token != 0 {
+                    let _ = event_producer.try_push(Event::PlayFailed { token });
+                }
             }
         }
         Command::StopAll => {

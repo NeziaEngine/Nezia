@@ -8,6 +8,7 @@ mod core;
 mod effect;
 mod entity;
 mod event;
+mod metrics;
 mod snapshot;
 mod source;
 mod spatial;
@@ -46,6 +47,9 @@ pub use container::ContainerId;
 
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;
+
+/// ベンチマーク / プロファイリング用の DSP CPU 計測値とドロップアウトカウンタ。
+pub use metrics::{DropoutStats, DspStats};
 
 /// `SoundEngine::batch_set_source_positions()` の入力要素。
 pub use entity::SourcePositionUpdate;
