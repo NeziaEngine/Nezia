@@ -12,12 +12,15 @@ mod effect;
 mod snapshot;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
+use ringbuf::HeapProd;
 use ringbuf::traits::{Consumer, Producer};
 
 use crate::audio::AudioBuffer;
 use crate::bus::{BusSystem, BusWorld};
+use crate::capture::CaptureShared;
 use crate::command::Command;
 use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
@@ -66,6 +69,14 @@ pub(in crate::core::engine) struct AudioThread {
     master_bus_id: EntityId,
     device_sample_rate: f32,
     device_channels: usize,
+    /// マスター出力キャプチャ用 SPSC リングの producer。
+    /// `capture_shared.enabled` が false のときは触らない (hot path コスト 0)。
+    capture_producer: HeapProd<f32>,
+    /// メインスレッドと共有する制御フラグ + ドロップ累積。
+    capture_shared: Arc<CaptureShared>,
+    /// エンジン起動以降の累積処理フレーム数 (per-channel sample count)。
+    /// 任意スレッドから `SoundEngine::dsp_time_samples()` 経由で読まれる。
+    dsp_time_frames: Arc<AtomicU64>,
 }
 
 impl AudioThread {
@@ -92,6 +103,9 @@ impl AudioThread {
         master_bus_id: EntityId,
         device_sample_rate: f32,
         device_channels: usize,
+        capture_producer: HeapProd<f32>,
+        capture_shared: Arc<CaptureShared>,
+        dsp_time_frames: Arc<AtomicU64>,
     ) -> Self {
         Self {
             command_consumer,
@@ -117,6 +131,9 @@ impl AudioThread {
             master_bus_id,
             device_sample_rate,
             device_channels,
+            capture_producer,
+            capture_shared,
+            dsp_time_frames,
         }
     }
 
@@ -281,6 +298,31 @@ impl AudioThread {
             self.device_channels,
             sample_count,
         );
+
+        // マスター出力キャプチャ。enabled でない限り capture_producer には触らない。
+        // SPSC リングは事前確保済みで alloc 0、push_slice は memcpy + atomic 1 回。
+        if self.capture_shared.enabled.load(Ordering::Relaxed) {
+            let pushed = self.capture_producer.push_slice(data);
+            if pushed < data.len() {
+                let dropped = (data.len() - pushed) as u64;
+                self.capture_shared
+                    .dropped_samples
+                    .fetch_add(dropped, Ordering::Relaxed);
+                // CaptureOverflow イベントは「同一 callback で取りこぼしが発生した」場合のみ
+                // 1 度だけ発火する。連続発火時は「何 sample 落ちたか」が累積で
+                // dropped_samples() 経由で取れるので、イベント側は U32_MAX で頭打ち。
+                let dropped_u32 = dropped.min(u32::MAX as u64) as u32;
+                let _ = self.event_producer.try_push(Event::CaptureOverflow {
+                    dropped_samples: dropped_u32,
+                });
+            }
+        }
+
+        // DSP クロックを進める。frames = サンプル数 / チャンネル数 (per-channel)。
+        // device_channels == 0 は new() で弾いているので除算は安全。
+        let frames_advanced = (sample_count / self.device_channels) as u64;
+        self.dsp_time_frames
+            .fetch_add(frames_advanced, Ordering::Relaxed);
 
         // streaming バッファの underrun フラグをドレインしてイベント発火。
         // BufferId は `StreamingState::buffer_id_packed` (load_streaming 時に書き込み済み)

@@ -14,6 +14,7 @@ fn main() {
         "src/spatial.rs",
         "src/audio_meta.rs",
         "src/effect.rs",
+        "src/capture.rs",
     ];
 
     let mut builder = csbindgen::Builder::default()

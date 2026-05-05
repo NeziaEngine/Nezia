@@ -1,6 +1,7 @@
 mod audio;
 mod buffer_pool;
 mod bus;
+mod capture;
 mod command;
 mod container;
 mod core;
@@ -24,6 +25,9 @@ pub use audio::{AudioMetadata, peek_metadata};
 
 /// バッファリーダー（任意スレッドから PCM を読める読み取りハンドル）。
 pub use core::engine::BufferReader;
+
+/// マスター出力 PCM のキャプチャリーダー (Unity Recorder 等の外部録音向け)。
+pub use capture::CaptureReader;
 
 /// ロード済みオーディオバッファへのハンドル。
 pub use buffer_pool::BufferId;
