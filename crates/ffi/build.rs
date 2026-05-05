@@ -15,6 +15,11 @@ fn main() {
         "src/audio_meta.rs",
         "src/effect.rs",
         "src/capture.rs",
+        "src/send.rs",
+        "src/snapshot.rs",
+        "src/container.rs",
+        "src/attenuation_curve.rs",
+        "src/streaming.rs",
     ];
 
     let mut builder = csbindgen::Builder::default()
