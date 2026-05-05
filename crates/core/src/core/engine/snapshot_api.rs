@@ -4,11 +4,13 @@
 
 use ringbuf::traits::Producer;
 
+use crate::bus::SendId;
 use crate::command::Command;
 use crate::effect::{EffectId, EffectParamId};
 use crate::entity::EntityId;
 use crate::snapshot::{
-    BusGainEntry, BusMutedEntry, EffectParamEntry, Snapshot, SnapshotEffectKind, SnapshotId,
+    BusGainEntry, BusMutedEntry, EffectParamEntry, SendGainEntry, Snapshot, SnapshotEffectKind,
+    SnapshotId,
 };
 
 use super::SoundEngine;
@@ -44,6 +46,17 @@ impl<'a> SnapshotBuilder<'a> {
         self
     }
 
+    /// Phase 3-3: Send gain を追加。dB 空間で線形補間 (バスゲインと同じ)。
+    #[must_use]
+    pub fn set_send_gain(mut self, send: SendId, gain: f32) -> Self {
+        // 重複は最後の指定を優先 (同じ SendId に対して上書き)。
+        self.snapshot
+            .send_gains
+            .retain(|e| !(e.send.index == send.index && e.send.generation == send.generation));
+        self.snapshot.send_gains.push(SendGainEntry { send, gain });
+        self
+    }
+
     /// エフェクトパラメータを追加。
     #[must_use]
     pub fn set_effect_param<P: EffectParamId>(
@@ -56,6 +69,7 @@ impl<'a> SnapshotBuilder<'a> {
             crate::effect::EffectKind::Lpf => SnapshotEffectKind::Lpf,
             crate::effect::EffectKind::Hpf => SnapshotEffectKind::Hpf,
             crate::effect::EffectKind::Reverb => SnapshotEffectKind::Reverb,
+            crate::effect::EffectKind::Compressor => SnapshotEffectKind::Compressor,
         };
         let p = param.as_u8();
         // 重複排除 (同 effect + 同 param) は最後の値を優先。

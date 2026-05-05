@@ -47,3 +47,25 @@ impl SendPosition {
         }
     }
 }
+
+/// Send の宛先種別 (Phase 3-3 PR2)。
+///
+/// - `Bus`: 別バスの mix_buffer に加算。dest_dense は `BusWorld` 内 dense index。
+/// - `CompressorSidechain`: Compressor の sidechain 入力バッファに加算。
+///   dest_dense は `CompressorWorld` 内 dense index。
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SendDestKind {
+    Bus = 0,
+    CompressorSidechain = 1,
+}
+
+impl SendDestKind {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(SendDestKind::Bus),
+            1 => Some(SendDestKind::CompressorSidechain),
+            _ => None,
+        }
+    }
+}

@@ -2,7 +2,7 @@ use crate::core::sparse_set::SparseSet;
 use crate::effect::{EffectId, MAX_EFFECTS_PER_BUS};
 use crate::entity::EntityId;
 
-use super::send::{SendId, SendPosition};
+use super::send::{SendDestKind, SendId, SendPosition};
 use super::{MAX_BUSES, MAX_MIX_BUFFER_SIZE, MAX_SENDS, MAX_SENDS_PER_BUS};
 
 /// SendId.index → (bus_dense, slot) の逆引きエントリ。
@@ -62,12 +62,15 @@ pub struct BusWorld {
     pub(super) post_count: Vec<u8>,
 
     // ── Send (Phase 3-3) ──
-    /// 各バスから出ていく Send の宛先バス (dense index)。
+    /// 各バスから出ていく Send の宛先 dense index。
+    /// `send_dest_kind` の値によって BusWorld dense か CompressorWorld dense かが変わる。
     pub(super) send_dest_dense: Vec<[u32; MAX_SENDS_PER_BUS]>,
     /// 各 Send の gain。
     pub(super) send_gain: Vec<[f32; MAX_SENDS_PER_BUS]>,
     /// 各 Send のタップ位置 (`SendPosition` を u8 で格納)。
     pub(super) send_position: Vec<[u8; MAX_SENDS_PER_BUS]>,
+    /// 各 Send の宛先種別 (`SendDestKind` を u8 で格納、PR2)。
+    pub(super) send_dest_kind: Vec<[u8; MAX_SENDS_PER_BUS]>,
     /// 各 Send の SendId (despawn / Set 系の逆引きと整合確認用)。
     pub(super) send_id: Vec<[SendId; MAX_SENDS_PER_BUS]>,
     /// 各バスの有効 Send 数 (0..=MAX_SENDS_PER_BUS)。
@@ -112,6 +115,7 @@ impl BusWorld {
             send_dest_dense: Vec::with_capacity(MAX_BUSES),
             send_gain: Vec::with_capacity(MAX_BUSES),
             send_position: Vec::with_capacity(MAX_BUSES),
+            send_dest_kind: Vec::with_capacity(MAX_BUSES),
             send_id: Vec::with_capacity(MAX_BUSES),
             send_count: Vec::with_capacity(MAX_BUSES),
             send_lookup: vec![SendLookup::EMPTY; MAX_SENDS],
@@ -161,6 +165,7 @@ impl BusWorld {
         self.send_dest_dense.push([0; MAX_SENDS_PER_BUS]);
         self.send_gain.push([0.0; MAX_SENDS_PER_BUS]);
         self.send_position.push([0; MAX_SENDS_PER_BUS]);
+        self.send_dest_kind.push([0; MAX_SENDS_PER_BUS]);
         self.send_id.push([SendId::INVALID; MAX_SENDS_PER_BUS]);
         self.send_count.push(0);
     }
@@ -170,6 +175,7 @@ impl BusWorld {
         self.send_dest_dense.pop();
         self.send_gain.pop();
         self.send_position.pop();
+        self.send_dest_kind.pop();
         self.send_id.pop();
         self.send_count.pop();
     }
@@ -276,6 +282,7 @@ impl BusWorld {
         self.send_dest_dense.swap_remove(dense_index);
         self.send_gain.swap_remove(dense_index);
         self.send_position.swap_remove(dense_index);
+        self.send_dest_kind.swap_remove(dense_index);
         self.send_id.swap_remove(dense_index);
         self.send_count.swap_remove(dense_index);
 
@@ -338,6 +345,7 @@ impl BusWorld {
             self.send_dest_dense[bus_dense][slot] = self.send_dest_dense[bus_dense][last];
             self.send_gain[bus_dense][slot] = self.send_gain[bus_dense][last];
             self.send_position[bus_dense][slot] = self.send_position[bus_dense][last];
+            self.send_dest_kind[bus_dense][slot] = self.send_dest_kind[bus_dense][last];
             self.send_id[bus_dense][slot] = self.send_id[bus_dense][last];
 
             // 移動した Send の lookup slot を更新。
@@ -533,6 +541,7 @@ impl BusWorld {
         bus_dense: usize,
         id: SendId,
         dest_dense: u32,
+        dest_kind: SendDestKind,
         gain: f32,
         position: SendPosition,
     ) -> bool {
@@ -549,6 +558,7 @@ impl BusWorld {
         self.send_dest_dense[bus_dense][count] = dest_dense;
         self.send_gain[bus_dense][count] = gain;
         self.send_position[bus_dense][count] = position as u8;
+        self.send_dest_kind[bus_dense][count] = dest_kind as u8;
         self.send_id[bus_dense][count] = id;
         self.send_count[bus_dense] = (count + 1) as u8;
         self.send_lookup[id.index as usize] = SendLookup {
@@ -601,7 +611,7 @@ impl BusWorld {
         }
     }
 
-    /// dense index 指定で send_gain を直接書き込む (Snapshot 補間で使用、PR2 で活用)。
+    /// dense index 指定で send_gain を直接書き込む (Snapshot 補間で使用)。
     #[inline]
     pub fn write_send_gain_by_dense(&mut self, bus_dense: usize, slot: usize, gain: f32) {
         if let Some(arr) = self.send_gain.get_mut(bus_dense)
@@ -609,6 +619,16 @@ impl BusWorld {
         {
             arr[slot] = gain;
         }
+    }
+
+    /// dense index 指定で send_gain を読み出す (Snapshot apply 時の現在値キャプチャ用)。
+    #[inline]
+    #[must_use]
+    pub fn send_gain_at(&self, bus_dense: usize, slot: usize) -> Option<f32> {
+        self.send_gain
+            .get(bus_dense)
+            .and_then(|arr| arr.get(slot))
+            .copied()
     }
 
     /// バス `bus_dense` の Send 数。
@@ -621,14 +641,15 @@ impl BusWorld {
             .unwrap_or(0)
     }
 
-    /// バス `bus_dense` の slot `slot` にある Send 情報 `(dest_dense, gain, position)`。
+    /// バス `bus_dense` の slot `slot` にある Send 情報 `(dest_dense, gain, position, dest_kind)`。
     /// `BusSystem` の hot loop から読まれる。
     #[inline]
-    pub fn send_at(&self, bus_dense: usize, slot: usize) -> (u32, f32, u8) {
+    pub fn send_at(&self, bus_dense: usize, slot: usize) -> (u32, f32, u8, u8) {
         (
             self.send_dest_dense[bus_dense][slot],
             self.send_gain[bus_dense][slot],
             self.send_position[bus_dense][slot],
+            self.send_dest_kind[bus_dense][slot],
         )
     }
 }

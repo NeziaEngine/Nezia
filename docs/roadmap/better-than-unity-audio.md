@@ -241,6 +241,8 @@ Phase 6  ── 中長期 ──
 
 「Unity より良い」を最短で名乗れるのは **Phase 4 完了時点**。
 
+Phase 4 完了後の極限パフォーマンス追求 (タスクベース並列化・SIMD 徹底化) は [post-unity-performance.md](post-unity-performance.md) を参照。
+
 ---
 
 ## 設計上のガードレール

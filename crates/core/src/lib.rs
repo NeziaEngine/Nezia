@@ -53,6 +53,6 @@ pub use spatial::AttenuationCurveId;
 
 /// DSP エフェクト関連の公開型。
 pub use effect::{
-    EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget, HpfParam, LpfParam,
-    ReverbParam,
+    CompressorParam, EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget, HpfParam,
+    LpfParam, ReverbParam,
 };

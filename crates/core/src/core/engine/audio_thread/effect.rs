@@ -6,8 +6,8 @@
 
 use crate::bus::BusWorld;
 use crate::effect::{
-    EffectKind, EffectPosition, EffectTarget, EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld,
-    Owner, ReverbParam, ReverbWorld,
+    CompressorParam, CompressorWorld, EffectKind, EffectPosition, EffectTarget, EffectWorld,
+    HpfParam, HpfWorld, LpfParam, LpfWorld, Owner, ReverbParam, ReverbWorld,
 };
 use crate::source::SourceWorld;
 
@@ -25,6 +25,7 @@ pub(super) fn spawn_effect(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) {
     // 1. owner dense を解決。
     let owner = match target {
@@ -33,8 +34,8 @@ pub(super) fn spawn_effect(
             None => return,
         },
         EffectTarget::Source(src_id) => {
-            // Source 対象 + Reverb は Phase 2-3 では非対応 (Phase 3-3 Send 経由)。
-            if matches!(kind, EffectKind::Reverb) {
+            // Source 対象 + Reverb / Compressor は Bus 専用 (Aux Bus + Send 経由で利用)。
+            if matches!(kind, EffectKind::Reverb | EffectKind::Compressor) {
                 return;
             }
             // Phase 2-3 では Source の Post-Spatial も未実装。
@@ -62,6 +63,10 @@ pub(super) fn spawn_effect(
             Some(d) => d,
             None => return,
         },
+        EffectKind::Compressor => match compressor_world.spawn(id) {
+            Some(d) => d,
+            None => return,
+        },
     };
 
     // 3. owner のチェーンに slot を追加。失敗したら state も巻き戻す。
@@ -80,6 +85,9 @@ pub(super) fn spawn_effect(
             }
             EffectKind::Reverb => {
                 let _ = reverb_world.despawn(state_index);
+            }
+            EffectKind::Compressor => {
+                let _ = compressor_world.despawn(state_index);
             }
         }
         return;
@@ -105,6 +113,7 @@ pub(super) fn despawn_effect(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -132,6 +141,7 @@ pub(super) fn despawn_effect(
         EffectKind::Lpf => lpf_world.despawn(state_index),
         EffectKind::Hpf => hpf_world.despawn(state_index),
         EffectKind::Reverb => reverb_world.despawn(state_index),
+        EffectKind::Compressor => compressor_world.despawn(state_index),
     };
     if let Some((moved_id, new_state_index)) = moved {
         let _ = moved_id;
@@ -142,11 +152,13 @@ pub(super) fn despawn_effect(
             EffectKind::Lpf => lpf_world.len() as u32,
             EffectKind::Hpf => hpf_world.len() as u32,
             EffectKind::Reverb => reverb_world.len() as u32,
+            EffectKind::Compressor => compressor_world.len() as u32,
         };
         effect_world.remap_state_index(kind, last_after, new_state_index);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_effect_param(
     id: crate::effect::EffectId,
     param: u8,
@@ -155,6 +167,7 @@ pub(super) fn apply_effect_param(
     lpf_world: &mut LpfWorld,
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
+    compressor_world: &mut CompressorWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -187,6 +200,21 @@ pub(super) fn apply_effect_param(
                 reverb_world.set_dry(state_index, value);
             } else if param == ReverbParam::Width as u8 {
                 reverb_world.set_width(state_index, value);
+            }
+        }
+        EffectKind::Compressor => {
+            if param == CompressorParam::ThresholdDb as u8 {
+                compressor_world.set_threshold_db(state_index, value);
+            } else if param == CompressorParam::Ratio as u8 {
+                compressor_world.set_ratio(state_index, value);
+            } else if param == CompressorParam::AttackMs as u8 {
+                compressor_world.set_attack_ms(state_index, value);
+            } else if param == CompressorParam::ReleaseMs as u8 {
+                compressor_world.set_release_ms(state_index, value);
+            } else if param == CompressorParam::KneeDb as u8 {
+                compressor_world.set_knee_db(state_index, value);
+            } else if param == CompressorParam::MakeupDb as u8 {
+                compressor_world.set_makeup_db(state_index, value);
             }
         }
     }

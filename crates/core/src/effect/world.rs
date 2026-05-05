@@ -13,6 +13,10 @@ pub enum EffectKind {
     Lpf = 0,
     Hpf = 1,
     Reverb = 2,
+    /// Phase 3-3: ピーク検波 + soft knee + attack/release コンプレッサー。
+    /// Sidechain 入力 (`bind_compressor_sidechain` で他バスからの Send を紐付け) で
+    /// ダッキング動作する。Bus 専用。
+    Compressor = 3,
 }
 
 /// エフェクトを取り付ける対象。

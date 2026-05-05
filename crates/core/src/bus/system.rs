@@ -1,6 +1,8 @@
-use crate::effect::{EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::effect::{
+    CompressorWorld, EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld, ReverbWorld,
+};
 
-use super::send::SendPosition;
+use super::send::{SendDestKind, SendPosition};
 use super::{MAX_MIX_BUFFER_SIZE, MAX_SENDS_PER_BUS, world::BusWorld};
 
 /// バス処理システム。
@@ -19,6 +21,7 @@ impl BusSystem {
         lpf_world: &mut LpfWorld,
         hpf_world: &mut HpfWorld,
         reverb_world: &mut ReverbWorld,
+        compressor_world: &mut CompressorWorld,
         output_buffer: &mut [f32],
         device_channels: usize,
         sample_count: usize,
@@ -44,6 +47,7 @@ impl BusSystem {
                     lpf_world,
                     hpf_world,
                     reverb_world,
+                    compressor_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -52,7 +56,14 @@ impl BusSystem {
             let _ = EffectPosition::Pre;
 
             // Pre-Fader Send tap (Fader 適用前で tap、本線 mute / gain 0 でも流れる)。
-            apply_sends(world, d, start, sample_count, SendPosition::Pre);
+            apply_sends(
+                world,
+                compressor_world,
+                d,
+                start,
+                sample_count,
+                SendPosition::Pre,
+            );
 
             // Fader: mute / gain。
             if world.muted[d] {
@@ -77,6 +88,7 @@ impl BusSystem {
                     lpf_world,
                     hpf_world,
                     reverb_world,
+                    compressor_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -84,19 +96,29 @@ impl BusSystem {
             }
 
             // Post-Fader Send tap (本線 mute なら 0 ミックス)。
-            apply_sends(world, d, start, sample_count, SendPosition::Post);
+            apply_sends(
+                world,
+                compressor_world,
+                d,
+                start,
+                sample_count,
+                SendPosition::Post,
+            );
 
             if d != master_dense {
                 let parent = world.output_bus_dense[d] as usize;
                 let parent_start = parent * MAX_MIX_BUFFER_SIZE;
                 debug_assert_ne!(d, parent, "バスが自己参照しています");
-                // SAFETY: d != parent（DAG なので src != parent）。
-                // 重複しないスライスを別々に書き換える。
+                // src と dest は別バスのスライスで重複しない (DAG 保証)。
+                // `from_raw_parts(_mut)` で slice にして autovectorizer に no-alias を伝える。
+                // SAFETY: d != parent（DAG）なので 2 領域は重複しない。
                 unsafe {
                     let src_ptr = world.mix_buffer.as_ptr().add(start);
                     let dst_ptr = world.mix_buffer.as_mut_ptr().add(parent_start);
-                    for i in 0..sample_count {
-                        *dst_ptr.add(i) += *src_ptr.add(i);
+                    let src = std::slice::from_raw_parts(src_ptr, sample_count);
+                    let dst = std::slice::from_raw_parts_mut(dst_ptr, sample_count);
+                    for (d_s, s) in dst.iter_mut().zip(src.iter()) {
+                        *d_s += *s;
                     }
                 }
             }
@@ -109,12 +131,16 @@ impl BusSystem {
     }
 }
 
-/// 指定バスの Send を `position` フィルタで tap して各 dest mix_buffer に gain 乗算で加算する。
+/// 指定バスの Send を `position` フィルタで tap し、`SendDestKind` で振り分けて加算する。
+///
+/// - `Bus`: BusWorld の mix_buffer (dest_dense) に加算
+/// - `CompressorSidechain`: CompressorWorld の sidechain_buffer (dest_dense) に加算
 ///
 /// `send_count == 0` のバスは即 return で hot path コストゼロ。
 #[inline]
 fn apply_sends(
     world: &mut BusWorld,
+    compressor_world: &mut CompressorWorld,
     src_dense: usize,
     src_start: usize,
     sample_count: usize,
@@ -126,12 +152,12 @@ fn apply_sends(
     }
 
     // 固定長配列で send 情報をキャプチャ (借用衝突を避ける)。
-    let mut destinations: [(u32, f32); MAX_SENDS_PER_BUS] = [(0, 0.0); MAX_SENDS_PER_BUS];
+    let mut destinations: [(u32, f32, u8); MAX_SENDS_PER_BUS] = [(0, 0.0, 0); MAX_SENDS_PER_BUS];
     let mut active = 0usize;
     for slot in 0..count {
-        let (dest, gain, pos_u8) = world.send_at(src_dense, slot);
+        let (dest, gain, pos_u8, kind_u8) = world.send_at(src_dense, slot);
         if pos_u8 == position as u8 {
-            destinations[active] = (dest, gain);
+            destinations[active] = (dest, gain, kind_u8);
             active += 1;
         }
     }
@@ -139,20 +165,48 @@ fn apply_sends(
         return;
     }
 
-    // src と dest が同じスライスを指すと UB になるが、サイクル検出済みのため発生しない。
-    for &(dest_dense, gain) in &destinations[..active] {
-        let dest_start = dest_dense as usize * MAX_MIX_BUFFER_SIZE;
-        if dest_start == src_start {
-            // 自分自身への Send (DAG 上ありえない) は防御的にスキップ。
-            continue;
-        }
-        // SAFETY: src と dest は別のバスのスライスで重複しない。
-        unsafe {
-            let src_ptr = world.mix_buffer.as_ptr().add(src_start);
-            let dst_ptr = world.mix_buffer.as_mut_ptr().add(dest_start);
-            for s in 0..sample_count {
-                *dst_ptr.add(s) += *src_ptr.add(s) * gain;
+    for &(dest_dense, gain, kind_u8) in &destinations[..active] {
+        match SendDestKind::from_u8(kind_u8) {
+            Some(SendDestKind::Bus) => {
+                let dest_start = dest_dense as usize * MAX_MIX_BUFFER_SIZE;
+                if dest_start == src_start {
+                    // 自分自身への Send (DAG 上ありえない) は防御的にスキップ。
+                    continue;
+                }
+                // src と dest は別バスのスライスで重複しない (DAG 保証)。
+                // 借用チェッカは同一 Vec の 2 領域を同時に貸せないため、
+                // `from_raw_parts(_mut)` で **slice として** 参照を作って autovectorizer
+                // に no-alias を伝える (`*ptr.add(s)` のままだと SIMD 化されない)。
+                // SAFETY: DAG なので 2 領域は重複せず、有効な BusWorld 内バッファ。
+                unsafe {
+                    let src_ptr = world.mix_buffer.as_ptr().add(src_start);
+                    let dst_ptr = world.mix_buffer.as_mut_ptr().add(dest_start);
+                    let src = std::slice::from_raw_parts(src_ptr, sample_count);
+                    let dst = std::slice::from_raw_parts_mut(dst_ptr, sample_count);
+                    for (d, s) in dst.iter_mut().zip(src.iter()) {
+                        *d += *s * gain;
+                    }
+                }
             }
+            Some(SendDestKind::CompressorSidechain) => {
+                // BusWorld と CompressorWorld は別オブジェクト → 借用は両立する。
+                // src スライスを先に切り出して compressor の可変借用と組み合わせる。
+                let src_end = src_start + sample_count;
+                if src_end > world.mix_buffer.len() {
+                    continue;
+                }
+                let src_ptr = world.mix_buffer.as_ptr();
+                if let Some(dst) = compressor_world.sidechain_slice_mut(dest_dense, sample_count) {
+                    // SAFETY: src は BusWorld 内、dst は CompressorWorld 内で重複なし。
+                    // `from_raw_parts` で slice 化して autovectorize を許す。
+                    let src =
+                        unsafe { std::slice::from_raw_parts(src_ptr.add(src_start), dst.len()) };
+                    for (d, s) in dst.iter_mut().zip(src.iter()) {
+                        *d += *s * gain;
+                    }
+                }
+            }
+            None => {} // 未知 kind は無視 (将来 variant 追加への余地)。
         }
     }
 }

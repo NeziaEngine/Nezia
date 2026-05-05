@@ -19,7 +19,7 @@ use ringbuf::traits::{Consumer, Producer};
 use crate::audio::AudioBuffer;
 use crate::bus::{BusSystem, BusWorld};
 use crate::command::Command;
-use crate::effect::{EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::source::{SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
@@ -46,6 +46,7 @@ pub(in crate::core::engine) struct AudioThread {
     lpf_world: LpfWorld,
     hpf_world: HpfWorld,
     reverb_world: ReverbWorld,
+    compressor_world: CompressorWorld,
     /// Source Pre-Spatial chain 適用用の事前確保 mono スクラッチ。
     /// 容量は `MAX_MIX_BUFFER_SIZE / 1ch` でフレーム単位。サウンドスレッド alloc 0。
     mono_scratch: Vec<f32>,
@@ -83,6 +84,7 @@ impl AudioThread {
         lpf_world: LpfWorld,
         hpf_world: HpfWorld,
         reverb_world: ReverbWorld,
+        compressor_world: CompressorWorld,
         shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
         shared_curves: Arc<ArcSwap<Vec<Option<Arc<AttenuationCurve>>>>>,
         shared_snapshots: Arc<ArcSwap<Vec<Option<Arc<crate::snapshot::Snapshot>>>>>,
@@ -105,6 +107,7 @@ impl AudioThread {
             lpf_world,
             hpf_world,
             reverb_world,
+            compressor_world,
             mono_scratch: vec![0.0; crate::bus::MAX_MIX_BUFFER_SIZE],
             shared_buffers,
             shared_curves,
@@ -143,6 +146,7 @@ impl AudioThread {
                     &self.lpf_world,
                     &self.hpf_world,
                     &self.reverb_world,
+                    &self.compressor_world,
                 );
                 continue;
             }
@@ -155,6 +159,7 @@ impl AudioThread {
                 &mut self.lpf_world,
                 &mut self.hpf_world,
                 &mut self.reverb_world,
+                &mut self.compressor_world,
                 &mut self.event_producer,
                 self.master_bus_id,
             );
@@ -169,6 +174,7 @@ impl AudioThread {
                 &mut self.lpf_world,
                 &mut self.hpf_world,
                 &mut self.reverb_world,
+                &mut self.compressor_world,
             );
         }
 
@@ -176,6 +182,11 @@ impl AudioThread {
         self.lpf_world.flush_dirty(self.device_sample_rate);
         self.hpf_world.flush_dirty(self.device_sample_rate);
         self.reverb_world.flush_dirty();
+        self.compressor_world.flush_dirty(self.device_sample_rate);
+
+        // Phase 3-3: Compressor の sidechain buffer は、Send tap 書き込み前に
+        // 必ずゼロクリアしておく必要がある (per-callback の最大値が乗らないと検波器が誤反応)。
+        self.compressor_world.clear_sidechain_buffers(sample_count);
 
         // triple buffer から最新の listener / source positions を取り込む。
         // commands の後にやることで、spawn と同フレームで publish された
@@ -235,6 +246,7 @@ impl AudioThread {
                 &mut self.lpf_world,
                 &mut self.hpf_world,
                 &mut self.reverb_world,
+                &mut self.compressor_world,
                 &mut self.mono_scratch,
                 mix_buf,
                 crate::bus::MAX_MIX_BUFFER_SIZE,
@@ -264,6 +276,7 @@ impl AudioThread {
             &mut self.lpf_world,
             &mut self.hpf_world,
             &mut self.reverb_world,
+            &mut self.compressor_world,
             data,
             self.device_channels,
             sample_count,

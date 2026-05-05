@@ -55,6 +55,12 @@ impl SoundEngine {
             self.effect_slots.free(id);
             return None;
         }
+        // Phase 3-3 PR2: Compressor のオーナーバスを記録 (sidechain Send の DAG エッジ用)。
+        if matches!(kind, EffectKind::Compressor) {
+            if let EffectTarget::Bus(bus_id) = target {
+                self.compressor_owners.insert(id, bus_id);
+            }
+        }
         Some(id)
     }
 
@@ -68,6 +74,8 @@ impl SoundEngine {
         {
             return false;
         }
+        // Phase 3-3 PR2: Compressor だった場合 owner マップから除去。
+        self.compressor_owners.remove(&id);
         // メインスレッド側 slot を即時解放 (audio thread からの delete 通知は出さない)。
         self.effect_slots.free(id);
         true

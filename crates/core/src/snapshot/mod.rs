@@ -29,5 +29,6 @@ mod world;
 
 pub use registry::{SnapshotId, SnapshotRegistry};
 pub(crate) use world::{
-    ActiveSnapshot, BusGainEntry, BusMutedEntry, EffectParamEntry, Snapshot, SnapshotEffectKind,
+    ActiveSnapshot, BusGainEntry, BusMutedEntry, EffectParamEntry, SendGainEntry, Snapshot,
+    SnapshotEffectKind,
 };

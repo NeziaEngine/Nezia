@@ -3,6 +3,15 @@ use crate::effect::{EffectId, EffectKind, EffectPosition, EffectTarget};
 use crate::entity::EntityId;
 use crate::spatial::AttenuationModel;
 
+/// Send の宛先 (Phase 3-3)。コマンド経路で運ばれる識別子。
+/// audio thread 側で `Bus` は dense_index、`CompressorSidechain` は EffectId →
+/// CompressorWorld dense_index に解決される。
+#[derive(Debug, Clone, Copy)]
+pub enum SendDestination {
+    Bus { dense: u32 },
+    CompressorSidechain { effect: EffectId },
+}
+
 /// メインスレッドからサウンドスレッドへ送るコマンド。
 ///
 /// リングバッファ経由で送信されるため、すべてのバリアントは
@@ -146,16 +155,20 @@ pub enum Command {
     SetEffectParam { id: EffectId, param: u8, value: f32 },
 
     // ── Send (Phase 3-3) ──
-    /// バス間 Send を追加する。`id` はメインスレッドが事前発行。
-    /// `src_dense` / `dst_dense` はメインスレッドで解決済み。
-    /// メインスレッドでサイクル検出 + 容量確認済みの前提。
+    /// バス → バス または バス → Compressor sidechain の Send を追加する。
+    /// `id` はメインスレッドが事前発行。`src_dense` は BusWorld dense。
+    /// `dst` は `Bus` の場合 BusWorld dense、`CompressorSidechain` の場合 EffectId
+    /// (audio thread が CompressorWorld dense に resolve)。サイクル検出 + 容量確認はメインスレッドで完了済み。
     AddSend {
         id: SendId,
         src_dense: u32,
-        dst_dense: u32,
+        dst: SendDestination,
         position: SendPosition,
         gain: f32,
     },
+    /// Compressor の sidechain 入力を有効/無効にする。`true` で外部 sidechain (Send 経由) を使用、
+    /// `false` で自バス内部検波に戻す。
+    SetCompressorSidechainEnabled { id: EffectId, enabled: bool },
     /// Send を削除する。
     RemoveSend { id: SendId },
     /// Send の gain を設定する。
