@@ -25,6 +25,7 @@ use crate::command::Command;
 use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
+use crate::limiter::apply_soft_clip;
 use crate::metrics::{EngineMetrics, update_peak};
 use crate::source::{SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
 use crate::spatial::{AttenuationCurve, ListenerState, SpatialWorld};
@@ -307,6 +308,12 @@ impl AudioThread {
             self.device_channels,
             sample_count,
         );
+
+        // マスター出力 soft limiter。多重再生時にサンプル総和が ±1.0 を超えても
+        // デバイス側でハードクリップせず ±1.0 に漸近する。透過域は |x| <= 0.8 で、
+        // 単発再生やゲイン段の単体テスト相当の信号には影響しない。capture も
+        // この後で取るため、外部録音にもリミッタ後の信号が反映される。
+        apply_soft_clip(data);
 
         // マスター出力キャプチャ。enabled でない限り capture_producer には触らない。
         // SPSC リングは事前確保済みで alloc 0、push_slice は memcpy + atomic 1 回。
