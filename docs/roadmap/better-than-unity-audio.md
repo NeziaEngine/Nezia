@@ -195,7 +195,7 @@ Phase 6  ── 中長期 ──
 | ステップ | 領域 | 内容 | 概算コスト |
 |---------|------|------|-----------|
 | 4-1 | A | **Sound Cone (SP-11)** | 1 週間 |
-| 4-2 | E | **Random / Switch / Sequence Container** | 3〜4 週間 |
+| 4-2 | E | **Random / Switch / Sequence Container** ([設計](../design/core/container.md)、現状 Random のみ実装) | 3〜4 週間 |
 | 4-3 | G | **ランタイムプロファイラ + デバッグビジュアライザ** | 2〜3 週間 |
 
 **判断ポイント**:

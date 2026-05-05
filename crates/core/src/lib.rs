@@ -2,6 +2,7 @@ mod audio;
 mod buffer_pool;
 mod bus;
 mod command;
+mod container;
 mod core;
 mod effect;
 mod entity;
@@ -35,6 +36,9 @@ pub use snapshot::SnapshotId;
 
 /// Phase 3-3: Send (副ルート) のハンドルとタップ位置。
 pub use bus::{SendId, SendPosition};
+
+/// Phase 4-2: Random Container のハンドル。
+pub use container::ContainerId;
 
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;

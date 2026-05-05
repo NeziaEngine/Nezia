@@ -3,6 +3,7 @@ mod buffer_api;
 mod buffer_reader;
 mod bus_api;
 mod callback_registry;
+mod container_api;
 mod effect_alloc;
 mod effect_api;
 mod live_params;
@@ -28,6 +29,7 @@ use crate::audio::AudioBuffer;
 use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::command::Command;
+use crate::container::ContainerWorld;
 use crate::core::bus_routing::BusRoutingMirror;
 use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
@@ -154,6 +156,8 @@ pub struct SoundEngine {
     pub(super) effect_slots: EffectIdAllocator,
     /// Phase 3-3: Send ハンドル発行。
     pub(super) send_slots: SendIdAllocator,
+    /// Phase 4-2: Random Container のメインスレッド側ワールド (audio thread には流れない)。
+    pub(super) container_world: ContainerWorld,
     /// Phase 3-3 PR2: Compressor EffectId → 所属バス EntityId のマッピング。
     /// `add_send_to_compressor` で sidechain Send を貼る際、メインスレッドが
     /// 所属バスを resolve して DAG topological sort のエッジに反映するために使う。
@@ -283,6 +287,7 @@ impl SoundEngine {
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),
             send_slots: SendIdAllocator::new(),
+            container_world: ContainerWorld::new(),
             compressor_owners: HashMap::new(),
             live_params,
             callbacks: CallbackRegistry::new(),
