@@ -122,6 +122,10 @@ pub enum NeziaAttenuationModel {
     Linear = 1,
     InverseDistance = 2,
     Exponential = 3,
+    /// Custom Attenuation Curve (Phase 3-1)。
+    /// `nezia_source_set_attenuation_curve` で割り当てた curve を距離→ゲイン変換に使う。
+    /// curve 未設定または curve 破棄済みの場合は silent (gain=0) フォールバックする。
+    Custom = 4,
 }
 
 impl NeziaAttenuationModel {
@@ -132,6 +136,7 @@ impl NeziaAttenuationModel {
             Self::Linear => AttenuationModel::Linear,
             Self::InverseDistance => AttenuationModel::InverseDistance,
             Self::Exponential => AttenuationModel::Exponential,
+            Self::Custom => AttenuationModel::Custom,
         }
     }
 }
