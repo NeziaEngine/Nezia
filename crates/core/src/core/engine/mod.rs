@@ -16,6 +16,7 @@ mod spatial_api;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
 use cpal::Stream;
@@ -28,6 +29,7 @@ use ringbuf::{
 use crate::audio::AudioBuffer;
 use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
+use crate::capture::{CaptureReader, CaptureShared};
 use crate::command::Command;
 use crate::container::ContainerWorld;
 use crate::core::bus_routing::BusRoutingMirror;
@@ -118,6 +120,11 @@ const COMMAND_RING_CAPACITY: usize = 128;
 /// イベントリングバッファの容量。
 const EVENT_RING_CAPACITY: usize = 64;
 
+/// マスター出力キャプチャリングの容量 (秒)。device_sample_rate * device_channels * この値を
+/// インターリーブサンプル数として確保する。1.0 秒分あれば、Unity Recorder のメインスレッド
+/// drain ジッタ (フレーム落ちを含めて 〜500ms) を吸収できる余裕がある。
+const CAPTURE_RING_SECONDS: f32 = 1.0;
+
 /// サウンドエンジン。メインスレッド側で保持し、コマンドを発行する。
 ///
 /// API は責務ごとに以下のサブモジュールへ分離されている:
@@ -175,6 +182,15 @@ pub struct SoundEngine {
     /// SoA レイアウトにより、batch query の hot path（`indices` だけ舐める）で
     /// L1 キャッシュ親和性が高い。
     pub(super) source_state_cache: SourceStateCache,
+    /// デバイス出力チャンネル数 (通常 2)。`output_format()` で公開する。
+    pub(super) device_channels: u16,
+    /// マスター出力キャプチャの enabled フラグ + ドロップ累積。audio thread と共有。
+    capture_shared: Arc<CaptureShared>,
+    /// 初回 `enable_master_capture()` 呼び出しで `take()` される唯一のリーダー。
+    /// 取った後は再 enable しても `None` のまま (既存ハンドルが流量を受け続ける)。
+    capture_reader: Option<CaptureReader>,
+    /// エンジン起動以降の累積処理フレーム数。`dsp_time_samples()` で公開。
+    dsp_time_frames: Arc<AtomicU64>,
 }
 
 impl SoundEngine {
@@ -237,6 +253,24 @@ impl SoundEngine {
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
 
+        // マスター出力キャプチャ用 SPSC リングを構築。サンプル単位で 1 秒ぶん確保。
+        // 例: 48000 Hz / 2ch = 96000 samples = 384 KB。device_channels が 0 の場合は
+        // 後段で除算事故を起こすため、最低 1 として扱う (cpal は通常 1ch 以上を返す)。
+        let capture_capacity_samples =
+            ((device_sample_rate * CAPTURE_RING_SECONDS) as usize).max(1) * device_channels.max(1);
+        let capture_ring = HeapRb::<f32>::new(capture_capacity_samples);
+        let (capture_producer, capture_consumer) = capture_ring.split();
+        let capture_shared = Arc::new(CaptureShared::new());
+        let capture_shared_audio = Arc::clone(&capture_shared);
+        let dsp_time_frames = Arc::new(AtomicU64::new(0));
+        let dsp_time_frames_audio = Arc::clone(&dsp_time_frames);
+        let capture_reader = Some(CaptureReader::new(
+            capture_consumer,
+            Arc::clone(&capture_shared),
+            device_sample_rate as u32,
+            device_channels as u16,
+        ));
+
         let mut audio_thread = AudioThread::new(
             command_consumer,
             event_producer,
@@ -259,6 +293,9 @@ impl SoundEngine {
             master_bus_id,
             device_sample_rate,
             device_channels,
+            capture_producer,
+            capture_shared_audio,
+            dsp_time_frames_audio,
         );
 
         let stream = device.build_output_stream(
@@ -293,7 +330,58 @@ impl SoundEngine {
             callbacks: CallbackRegistry::new(),
             source_snapshots_output,
             source_state_cache: SourceStateCache::with_capacity(MAX_SOURCES),
+            device_channels: device_channels as u16,
+            capture_shared,
+            capture_reader,
+            dsp_time_frames,
         })
+    }
+
+    /// マスター出力 PCM のキャプチャを有効化し、リーダーハンドルを返す。
+    ///
+    /// 戻り値は **初回呼び出し時のみ Some**。リーダーは 1 個しか発行されないため、
+    /// 2 回目以降は `None` を返す (既に取得済みのハンドルが流量を受け続けている)。
+    /// `disable_master_capture()` 後に再度 enable しても新しいリーダーは発行されない。
+    ///
+    /// 取得後は任意スレッドから `CaptureReader::read_interleaved()` を呼んでよい。
+    /// Unity Recorder からは Unity 側のオーディオスレッドや専用録音スレッドで drain 可能。
+    pub fn enable_master_capture(&mut self) -> Option<CaptureReader> {
+        let reader = self.capture_reader.take()?;
+        self.capture_shared.enabled.store(true, Ordering::Release);
+        Some(reader)
+    }
+
+    /// マスター出力キャプチャを無効化する。
+    ///
+    /// audio thread はこれ以降リングへ push しない。既存リーダーはリング内に残る
+    /// サンプルを最後まで drain してよい。再 enable も可能 (フラグを再 store するだけ)。
+    pub fn disable_master_capture(&self) {
+        self.capture_shared.enabled.store(false, Ordering::Release);
+    }
+
+    /// デバイス出力フォーマットを `(sample_rate_hz, channels)` で返す。
+    ///
+    /// Unity Recorder の wav/mp4 mux 設定や、自前の録音 muxer 構築に使う。
+    #[must_use]
+    pub fn output_format(&self) -> (u32, u16) {
+        (self.device_sample_rate as u32, self.device_channels)
+    }
+
+    /// エンジン起動以降に audio thread が処理した累積フレーム数 (per-channel sample count)。
+    ///
+    /// 任意スレッドから lock-free に読める (atomic relaxed load)。Unity の `Time.time` /
+    /// 動画フレーム位置と相関を取って、録音 PCM とビデオの同期点を決めるのに使う。
+    #[must_use]
+    pub fn dsp_time_samples(&self) -> u64 {
+        self.dsp_time_frames.load(Ordering::Relaxed)
+    }
+
+    /// `dsp_time_samples()` を秒に換算した値。
+    #[must_use]
+    pub fn dsp_time_seconds(&self) -> f64 {
+        let frames = self.dsp_time_samples() as f64;
+        let sr = self.device_sample_rate as f64;
+        if sr <= 0.0 { 0.0 } else { frames / sr }
     }
 
     /// ゲームループの毎フレーム末尾で呼ぶ。
@@ -325,6 +413,11 @@ impl SoundEngine {
                     // 現状は通知のみ。アプリ側がコールバック経由で観測するための
                     // 公開 API を Phase 2-4 後半で追加予定。
                     let _ = buffer;
+                }
+                Event::CaptureOverflow { dropped_samples } => {
+                    // 通知のみ。累積カウンタ (`CaptureReader::dropped_samples`) で値は取れる。
+                    // 連続発火時のレート抑制は audio thread 側に閉じる方針。
+                    let _ = dropped_samples;
                 }
             }
         }
