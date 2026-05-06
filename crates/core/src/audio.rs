@@ -207,6 +207,8 @@ fn decode(
         .unwrap_or(2);
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let track_id = track.id;
+    let delay_frames = track.codec_params.delay.unwrap_or(0) as usize;
+    let padding_frames = track.codec_params.padding.unwrap_or(0) as usize;
 
     let mut decoder =
         symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
@@ -237,5 +239,30 @@ fn decode(
         all_samples.extend_from_slice(sample_buf.samples());
     }
 
-    Ok(AudioBuffer::from_pcm(all_samples, channels, sample_rate))
+    let trimmed = trim_priming_padding(all_samples, channels, delay_frames, padding_frames);
+    Ok(AudioBuffer::from_pcm(trimmed, channels, sample_rate))
+}
+
+/// MP3 等のコーデックがデコード結果に挿入する priming (先頭) / padding (末尾) サンプルを
+/// 取り除く。これらは MDCT overlap-add やフレーム長境界揃えのための無音であり、
+/// `CodecParameters::{delay, padding}` の指示通り再生時にスキップする責務は呼出側にある。
+///
+/// trim しないとループ再生時に「本来音 → 末尾無音 → 先頭無音 → 本来音」となり、
+/// ループ境界でクリック音が発生する (静的バッファのギャップレス再生問題)。
+fn trim_priming_padding(
+    mut samples: Vec<f32>,
+    channels: u16,
+    delay_frames: usize,
+    padding_frames: usize,
+) -> Vec<f32> {
+    let ch = channels.max(1) as usize;
+    let head = delay_frames.saturating_mul(ch).min(samples.len());
+    if head > 0 {
+        samples.drain(..head);
+    }
+    let tail = padding_frames.saturating_mul(ch).min(samples.len());
+    if tail > 0 {
+        samples.truncate(samples.len() - tail);
+    }
+    samples
 }
