@@ -189,14 +189,21 @@ fn decode(
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe().format(
+    let mut probed = symphonia::default::get_probe().format(
         &hint,
         mss,
         &FormatOptions::default(),
         &MetadataOptions::default(),
     )?;
 
+    // iTunSMPB タグを ID3v2 メタデータから読む (symphonia 0.5.5 は MP3 demuxer 内で
+    // iTunSMPB を `delay`/`padding` に反映しないため、ここで補完する)。
+    let itunsmpb = read_itunsmpb_from_probed(&mut probed);
+
     let mut format = probed.format;
+
+    // format reader 側 (パケット読み込み中に出現する ID3v2) も念のため確認。
+    let itunsmpb = itunsmpb.or_else(|| read_itunsmpb_from_format(&mut format));
 
     let track = format.default_track().ok_or("no audio track found")?;
 
@@ -207,8 +214,18 @@ fn decode(
         .unwrap_or(2);
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let track_id = track.id;
-    let delay_frames = track.codec_params.delay.unwrap_or(0) as usize;
-    let padding_frames = track.codec_params.padding.unwrap_or(0) as usize;
+    let mut delay_frames = track.codec_params.delay.unwrap_or(0) as usize;
+    let mut padding_frames = track.codec_params.padding.unwrap_or(0) as usize;
+    if let Some((priming, padding)) = itunsmpb {
+        // タグ未指定の場合のみ iTunSMPB を採用 (LAME タグが優先)。
+        if delay_frames == 0 {
+            delay_frames = priming as usize;
+        }
+        if padding_frames == 0 {
+            padding_frames = padding as usize;
+        }
+    }
+    let n_frames_hint = track.codec_params.n_frames.map(|n| n as usize);
 
     let mut decoder =
         symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
@@ -239,23 +256,121 @@ fn decode(
         all_samples.extend_from_slice(sample_buf.samples());
     }
 
-    let trimmed = trim_priming_padding(all_samples, channels, delay_frames, padding_frames);
+    let trimmed = trim_priming_padding(
+        all_samples,
+        channels,
+        delay_frames,
+        padding_frames,
+        n_frames_hint,
+    );
     Ok(AudioBuffer::from_pcm(trimmed, channels, sample_rate))
 }
 
-/// MP3 等のコーデックがデコード結果に挿入する priming (先頭) / padding (末尾) サンプルを
-/// 取り除く。これらは MDCT overlap-add やフレーム長境界揃えのための無音であり、
-/// `CodecParameters::{delay, padding}` の指示通り再生時にスキップする責務は呼出側にある。
+/// iTunSMPB タグ (Apple iTunes/Music が MP3 に書き込む gapless 再生用メタデータ) から
+/// `(priming_frames, padding_frames)` を読み出す。
 ///
-/// trim しないとループ再生時に「本来音 → 末尾無音 → 先頭無音 → 本来音」となり、
-/// ループ境界でクリック音が発生する (静的バッファのギャップレス再生問題)。
+/// iTunSMPB は ID3v2 COMM フレームに格納された 12 個のスペース区切り 8/16 桁 hex 値で、
+/// 2 番目のフィールドが encoder delay (priming)、3 番目が encoder padding。例:
+///
+/// ```text
+/// " 00000000 00000210 0000087C 000000000008BF74 ..."
+///              ^priming  ^padding
+/// ```
+///
+/// symphonia 0.5.5 は MP3 demuxer 内で iTunSMPB を `CodecParameters::{delay, padding}` に
+/// 反映しないため (LAME タグのみ対応)、ここで補完して Apple Music 互換の seamless 再生を
+/// 実現する。
+fn read_itunsmpb_from_probed(
+    probed: &mut symphonia::core::probe::ProbeResult,
+) -> Option<(u32, u32)> {
+    let metadata = probed.metadata.get()?;
+    let rev = metadata.current()?;
+    find_itunsmpb_in_revision(rev)
+}
+
+fn read_itunsmpb_from_format(
+    format: &mut Box<dyn symphonia::core::formats::FormatReader>,
+) -> Option<(u32, u32)> {
+    let metadata = format.metadata();
+    let rev = metadata.current()?;
+    find_itunsmpb_in_revision(rev)
+}
+
+fn find_itunsmpb_in_revision(rev: &symphonia::core::meta::MetadataRevision) -> Option<(u32, u32)> {
+    use symphonia::core::meta::Value;
+    // symphonia 0.5.5 の ID3v2 reader は COMM フレームの description フィールド
+    // ("iTunSMPB" 等の識別子) を捨てるため、key 一致では判別できない。代わりに
+    // value の形式 (12 個のスペース区切り hex、4 番目が 16 桁) で識別する。
+    for tag in rev.tags() {
+        let s = match &tag.value {
+            Value::String(s) => s.as_str(),
+            _ => continue,
+        };
+        if let Some(result) = parse_itunsmpb(s) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// iTunSMPB の文字列表現から `(priming, padding)` を解析する。
+///
+/// iTunSMPB は 12 個のスペース区切り hex フィールドからなり、ユニークな署名:
+/// - フィールド 0..3, 4..12: 8 桁 hex
+/// - フィールド 3: 16 桁 hex (元音声の総サンプル数)
+///
+/// この形式に厳密一致しない文字列 (iTunNORM, 通常コメント等) は弾く。
+fn parse_itunsmpb(s: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() != 12 {
+        return None;
+    }
+    // 形式署名チェック: 4 番目だけが 16 桁、残りは 8 桁。
+    if parts[3].len() != 16 {
+        return None;
+    }
+    if parts
+        .iter()
+        .enumerate()
+        .any(|(i, p)| i != 3 && p.len() != 8)
+    {
+        return None;
+    }
+    if parts
+        .iter()
+        .any(|p| !p.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return None;
+    }
+    let priming = u32::from_str_radix(parts[1], 16).ok()?;
+    let padding = u32::from_str_radix(parts[2], 16).ok()?;
+    Some((priming, padding))
+}
+
+/// コーデックがデコード結果に挿入する priming (先頭) / padding (末尾) サンプルを取り除く。
+///
+/// MDCT overlap-add やフレーム長境界揃えのための無音であり、`CodecParameters::{delay, padding}`
+/// の指示通り再生時にスキップする責務は呼出側にある。trim しないとループ再生時に
+/// 「本来音 → 末尾無音 → 先頭無音 → 本来音」となり、ループ境界でクリック音が発生する
+/// (静的バッファのギャップレス再生問題)。
+///
+/// 業界標準 (Unity / Wwise / FMOD) と同じく **コーデックのメタデータに従った範囲のみ trim** する。
+/// シームレスループには loop-ready な形式 (Vorbis / WAV / Opus) と適切な authoring が必要で、
+/// 任意 MP3 を seamless にする処理 (silence 検出, crossfade) は意図的に行わない。
+///
+/// 1. **タグベース trim** — `delay`/`padding` が指定されていれば仕様通り削る (LAME-tagged MP3 等)。
+/// 2. **n_frames ベース truncation** — タグが無くても symphonia が「再生すべき総フレーム数」を
+///    `n_frames` に格納していれば、それを超える末尾余剰 (encoder padding) を切り詰める。
 fn trim_priming_padding(
     mut samples: Vec<f32>,
     channels: u16,
     delay_frames: usize,
     padding_frames: usize,
+    n_frames_hint: Option<usize>,
 ) -> Vec<f32> {
     let ch = channels.max(1) as usize;
+
+    // Step 1: タグから読み取れた値を優先して trim。
     let head = delay_frames.saturating_mul(ch).min(samples.len());
     if head > 0 {
         samples.drain(..head);
@@ -264,5 +379,14 @@ fn trim_priming_padding(
     if tail > 0 {
         samples.truncate(samples.len() - tail);
     }
+
+    // Step 2: `n_frames` が示す長さを超える分は末尾余剰 (encoder padding) として切り詰める。
+    if let Some(target_frames) = n_frames_hint {
+        let target_samples = target_frames.saturating_mul(ch);
+        if samples.len() > target_samples {
+            samples.truncate(target_samples);
+        }
+    }
+
     samples
 }
