@@ -17,6 +17,8 @@ pub enum SnapshotEffectKind {
     Reverb = 2,
     /// Phase 3-3: Compressor。
     Compressor = 3,
+    /// Phase 3-5: Parametric / Peaking EQ。
+    PeakingEq = 4,
 }
 
 /// バスゲインの target 指定。

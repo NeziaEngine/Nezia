@@ -207,6 +207,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -214,6 +215,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -246,6 +248,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -253,6 +256,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -296,6 +300,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -303,6 +308,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -347,6 +353,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -354,6 +361,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -639,6 +647,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -646,6 +655,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -709,6 +719,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -716,6 +727,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -779,6 +791,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -786,6 +799,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,
@@ -826,6 +840,7 @@ mod tests {
         let mut hpf = crate::effect::HpfWorld::new();
         let mut reverb = crate::effect::ReverbWorld::new();
         let mut compressor = crate::effect::CompressorWorld::new();
+        let mut peq = crate::effect::PeakingEqWorld::new();
         BusSystem::update(
             &mut world,
             &effect,
@@ -833,6 +848,7 @@ mod tests {
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &mut output,
             2,
             sample_count,

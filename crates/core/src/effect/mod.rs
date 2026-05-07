@@ -2,6 +2,7 @@ mod biquad;
 mod compressor;
 mod hpf;
 mod lpf;
+mod peq;
 mod reverb;
 mod system;
 mod world;
@@ -9,6 +10,7 @@ mod world;
 pub use compressor::CompressorWorld;
 pub use hpf::HpfWorld;
 pub use lpf::LpfWorld;
+pub use peq::PeakingEqWorld;
 pub use reverb::ReverbWorld;
 pub use system::EffectSystem;
 pub use world::{EffectKind, EffectPosition, EffectTarget, EffectWorld, Owner};
@@ -34,6 +36,10 @@ pub const MAX_REVERBS: usize = 16;
 
 /// Phase 3-3: Compressor プール上限 (Bus 専用)。1 体あたり 32KB の sidechain buffer を持つ。
 pub const MAX_COMPRESSORS: usize = 16;
+
+/// Phase 3-5: PeakingEq プール上限。1 体 = 1 バンドで、複数バンド EQ は同一バスに
+/// 複数 chain することで構成する。LPF/HPF と同程度の余裕を持たせる。
+pub const MAX_PEQ: usize = 256;
 
 /// EffectId は EntityId を再利用する (sparse-set ベースで二層 ID を踏襲)。
 pub type EffectId = EntityId;
@@ -63,6 +69,18 @@ pub enum ReverbParam {
     Wet = 2,
     Dry = 3,
     Width = 4,
+}
+
+/// Phase 3-5: PeakingEq パラメータインデックス。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeakingEqParam {
+    /// 中心周波数 Hz (例: 1000.0)。
+    CenterHz = 0,
+    /// 帯域幅 Q (大きいほど狭帯域)。
+    Q = 1,
+    /// ピーク dB。0.0 で素通し、正で boost、負で cut ([-24, +24] にクランプ)。
+    GainDb = 2,
 }
 
 /// Phase 3-3: Compressor パラメータインデックス。
@@ -112,6 +130,13 @@ impl EffectParamId for ReverbParam {
 
 impl EffectParamId for CompressorParam {
     const KIND: EffectKind = EffectKind::Compressor;
+    fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl EffectParamId for PeakingEqParam {
+    const KIND: EffectKind = EffectKind::PeakingEq;
     fn as_u8(self) -> u8 {
         self as u8
     }
@@ -174,12 +199,14 @@ mod tests {
             .collect();
         let mut reverb = ReverbWorld::new();
         let mut compressor = CompressorWorld::new();
+        let mut peq = PeakingEqWorld::new();
         EffectSystem::apply_chain(
             &meta,
             &mut lpf,
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &[id],
             &mut buf,
             1,
@@ -217,12 +244,14 @@ mod tests {
         let original = buf.clone();
         let mut reverb = ReverbWorld::new();
         let mut compressor = CompressorWorld::new();
+        let mut peq = PeakingEqWorld::new();
         EffectSystem::apply_chain(
             &meta,
             &mut lpf,
             &mut hpf,
             &mut reverb,
             &mut compressor,
+            &mut peq,
             &[id],
             &mut buf,
             1,

@@ -1,6 +1,7 @@
 use super::compressor::CompressorWorld;
 use super::hpf::HpfWorld;
 use super::lpf::LpfWorld;
+use super::peq::PeakingEqWorld;
 use super::reverb::ReverbWorld;
 use super::world::{EffectKind, EffectPosition, EffectWorld, Owner};
 
@@ -20,6 +21,7 @@ impl EffectSystem {
         hpf: &mut HpfWorld,
         reverb: &mut ReverbWorld,
         compressor: &mut CompressorWorld,
+        peq: &mut PeakingEqWorld,
         chain: &[crate::effect::EffectId],
         buf: &mut [f32],
         channels: usize,
@@ -34,12 +36,13 @@ impl EffectSystem {
             let kind = meta.kinds()[meta_dense];
             let algo = meta.algos()[meta_dense];
             let state_index = meta.state_indices()[meta_dense];
-            // 二段階 dispatch: kind → algo。Phase 2-3/3-3 では各種別 1 アルゴリズム (algo == 0) のみ。
+            // 二段階 dispatch: kind → algo。Phase 2-3/3-3/3-5 では各種別 1 アルゴリズム (algo == 0) のみ。
             match kind {
                 EffectKind::Lpf if algo == 0 => lpf.apply(state_index, buf, channels),
                 EffectKind::Hpf if algo == 0 => hpf.apply(state_index, buf, channels),
                 EffectKind::Reverb if algo == 0 => reverb.apply(state_index, buf, channels),
                 EffectKind::Compressor if algo == 0 => compressor.apply(state_index, buf, channels),
+                EffectKind::PeakingEq if algo == 0 => peq.apply(state_index, buf, channels),
                 _ => {}
             }
         }

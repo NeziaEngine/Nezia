@@ -119,7 +119,7 @@ pub unsafe extern "C" fn nezia_snapshot_builder_set_send_gain(
 
 /// エフェクトパラメータを Snapshot に追加する。
 ///
-/// `kind` は `NeziaEffectKind` (Lpf=0 / Hpf=1 / Reverb=2 / Compressor=3)、
+/// `kind` は `NeziaEffectKind` (Lpf=0 / Hpf=1 / Reverb=2 / Compressor=3 / PeakingEq=4)、
 /// `param` は種別ごとのパラメータインデックス (`nezia_effect_set_param` と同じ意味)。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_snapshot_builder_set_effect_param(
@@ -179,6 +179,7 @@ pub unsafe extern "C" fn nezia_snapshot_builder_commit(
                 1 => sb.set_effect_param(effect.to_core(), RawHpf(param), value),
                 2 => sb.set_effect_param(effect.to_core(), RawReverb(param), value),
                 3 => sb.set_effect_param(effect.to_core(), RawCompressor(param), value),
+                4 => sb.set_effect_param(effect.to_core(), RawPeakingEq(param), value),
                 _ => sb,
             };
         }
@@ -268,6 +269,14 @@ impl EffectParamId for RawReverb {
 struct RawCompressor(u8);
 impl EffectParamId for RawCompressor {
     const KIND: EffectKind = EffectKind::Compressor;
+    fn as_u8(self) -> u8 {
+        self.0
+    }
+}
+#[derive(Clone, Copy)]
+struct RawPeakingEq(u8);
+impl EffectParamId for RawPeakingEq {
+    const KIND: EffectKind = EffectKind::PeakingEq;
     fn as_u8(self) -> u8 {
         self.0
     }

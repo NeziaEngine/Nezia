@@ -13,6 +13,8 @@ pub enum NeziaEffectKind {
     Hpf = 1,
     Reverb = 2,
     Compressor = 3,
+    /// Phase 3-5: Parametric / Peaking EQ。1 effect = 1 band。
+    PeakingEq = 4,
 }
 
 impl NeziaEffectKind {
@@ -22,6 +24,7 @@ impl NeziaEffectKind {
             Self::Hpf => EffectKind::Hpf,
             Self::Reverb => EffectKind::Reverb,
             Self::Compressor => EffectKind::Compressor,
+            Self::PeakingEq => EffectKind::PeakingEq,
         }
     }
 }
@@ -124,6 +127,8 @@ pub unsafe extern "C" fn nezia_effect_set_enabled(
 /// `param` は種別ごとに以下を意味する:
 /// - LPF / HPF: 0=Cutoff (Hz), 1=Q
 /// - Reverb: 0=RoomSize, 1=Damping, 2=Wet, 3=Dry, 4=Width (すべて [0.0, 1.0] 正規化値)
+/// - Compressor: 0=ThresholdDb, 1=Ratio, 2=AttackMs, 3=ReleaseMs, 4=KneeDb, 5=MakeupDb
+/// - PeakingEq: 0=CenterHz, 1=Q, 2=GainDb (`[-24.0, +24.0]` クランプ、0 で素通し)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_effect_set_param(
     engine: *mut NeziaEngine,

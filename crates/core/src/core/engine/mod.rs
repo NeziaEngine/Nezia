@@ -33,7 +33,9 @@ use crate::capture::{CaptureReader, CaptureShared};
 use crate::command::Command;
 use crate::container::ContainerWorld;
 use crate::core::bus_routing::BusRoutingMirror;
-use crate::effect::{CompressorWorld, EffectWorld, HpfWorld, LpfWorld, ReverbWorld};
+use crate::effect::{
+    CompressorWorld, EffectWorld, HpfWorld, LpfWorld, PeakingEqWorld, ReverbWorld,
+};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::metrics::{DropoutStats, DspStats, EngineMetrics};
@@ -252,6 +254,7 @@ impl SoundEngine {
         let hpf_world = HpfWorld::new();
         let reverb_world = ReverbWorld::new();
         let compressor_world = CompressorWorld::new();
+        let peq_world = PeakingEqWorld::new();
 
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
@@ -291,6 +294,7 @@ impl SoundEngine {
             hpf_world,
             reverb_world,
             compressor_world,
+            peq_world,
             shared_buffers_clone,
             shared_curves_clone,
             shared_snapshots_clone,

@@ -18,8 +18,10 @@
 //!
 //! ## 含む / 含まない
 //!
-//! 含む: `BusWorld.gain` / `muted` + `LpfWorld` (cutoff/Q) + `HpfWorld` (cutoff/Q) +
-//!       `ReverbWorld` (room_size/damping/wet/dry/width)。
+//! 含む: `BusWorld.gain` / `muted` + 各 Send gain + `LpfWorld` (cutoff/Q) + `HpfWorld` (cutoff/Q) +
+//!       `ReverbWorld` (room_size/damping/wet/dry/width) +
+//!       `CompressorWorld` (threshold/ratio/attack/release/knee/makeup) +
+//!       `PeakingEqWorld` (center_hz/Q/gain_db)。
 //! 含まない: Source 個別パラメータ (vol/pitch)、3D 位置・速度、リスナー姿勢、
 //!           AudioBuffer / AttenuationCurve のロード状態。
 //!           これらは「ミキサー設定」ではなく毎フレーム動的状態のため。

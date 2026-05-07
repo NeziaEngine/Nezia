@@ -27,6 +27,23 @@ impl BiquadCoeffs {
         Self::normalize(b0, b1, b2, a0, a1, a2)
     }
 
+    /// Peaking EQ (RBJ): 中心周波数 `center_hz` 付近を `gain_db` だけ持ち上げ/削る。
+    /// `gain_db = 0` で素通し (恒等)。`gain_db > 0` で boost、`< 0` で cut。
+    /// `gain_db` は [-24.0, +24.0] dB にクランプ (運用上の暴走防止)。
+    pub fn peaking_eq(center_hz: f32, q: f32, gain_db: f32, sample_rate: f32) -> Self {
+        let (_sin_w0, cos_w0, alpha) = rbj_common(center_hz, q, sample_rate);
+        let g = gain_db.clamp(-24.0, 24.0);
+        // A = 10^(gain_db/40)。peaking では b 側に A、a 側に 1/A が入る非対称形。
+        let a_amp = 10.0_f32.powf(g / 40.0);
+        let b0 = 1.0 + alpha * a_amp;
+        let b1 = -2.0 * cos_w0;
+        let b2 = 1.0 - alpha * a_amp;
+        let a0 = 1.0 + alpha / a_amp;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha / a_amp;
+        Self::normalize(b0, b1, b2, a0, a1, a2)
+    }
+
     /// HPF (RBJ)。
     pub fn hpf(cutoff_hz: f32, q: f32, sample_rate: f32) -> Self {
         let (_sin_w0, cos_w0, alpha) = rbj_common(cutoff_hz, q, sample_rate);
@@ -145,6 +162,76 @@ mod tests {
         assert!(
             max_abs < 0.2,
             "expected strong attenuation at 10kHz, got max_abs={max_abs}"
+        );
+    }
+
+    #[test]
+    fn peaking_eq_zero_db_is_passthrough() {
+        // gain_db = 0 のとき peaking EQ は恒等 (DC ゲインも全帯域もユニティ)。
+        let c = BiquadCoeffs::peaking_eq(1000.0, 1.0, 0.0, 44100.0);
+        let dc_gain = (c.b0 + c.b1 + c.b2) / (1.0 + c.a1 + c.a2);
+        assert!(approx(dc_gain, 1.0, 1e-3));
+        // ナイキスト近傍 (z = -1 → 1 - z^-1 + z^-2) のゲインも 1。
+        let nyq_gain = (c.b0 - c.b1 + c.b2) / (1.0 - c.a1 + c.a2);
+        assert!(approx(nyq_gain, 1.0, 1e-3));
+    }
+
+    #[test]
+    fn peaking_eq_boost_amplifies_at_center() {
+        // 1 kHz で +12 dB ブースト → 1 kHz サイン波の出力振幅は ~4x (10^(12/20)=3.98)。
+        let sr = 44100.0;
+        let c = BiquadCoeffs::peaking_eq(1000.0, 1.0, 12.0, sr);
+        let mut s = BiquadState::default();
+        let mut max_abs = 0.0_f32;
+        for n in 0..4096 {
+            let x = (2.0 * std::f32::consts::PI * 1000.0 * n as f32 / sr).sin();
+            let y = s.process(x, &c);
+            if n > 2048 {
+                max_abs = max_abs.max(y.abs());
+            }
+        }
+        // 入力振幅 1.0、+12 dB → ~3.98 倍。許容 ±10%。
+        assert!(
+            (3.5..=4.5).contains(&max_abs),
+            "expected ~4x boost at 1kHz, got {max_abs}"
+        );
+    }
+
+    #[test]
+    fn peaking_eq_cut_attenuates_at_center() {
+        // 1 kHz で -12 dB カット → 1 kHz サイン波の出力振幅は ~0.25x (10^(-12/20)=0.251)。
+        let sr = 44100.0;
+        let c = BiquadCoeffs::peaking_eq(1000.0, 1.0, -12.0, sr);
+        let mut s = BiquadState::default();
+        let mut max_abs = 0.0_f32;
+        for n in 0..4096 {
+            let x = (2.0 * std::f32::consts::PI * 1000.0 * n as f32 / sr).sin();
+            let y = s.process(x, &c);
+            if n > 2048 {
+                max_abs = max_abs.max(y.abs());
+            }
+        }
+        assert!(max_abs < 0.35, "expected ~0.25x cut at 1kHz, got {max_abs}");
+    }
+
+    #[test]
+    fn peaking_eq_leaves_distant_frequency_intact() {
+        // 1 kHz center で +12 dB しても、100 Hz の信号は (Q=1) ほぼ素通し (1.0 付近)。
+        let sr = 44100.0;
+        let c = BiquadCoeffs::peaking_eq(1000.0, 1.0, 12.0, sr);
+        let mut s = BiquadState::default();
+        let mut max_abs = 0.0_f32;
+        for n in 0..4096 {
+            let x = (2.0 * std::f32::consts::PI * 100.0 * n as f32 / sr).sin();
+            let y = s.process(x, &c);
+            if n > 2048 {
+                max_abs = max_abs.max(y.abs());
+            }
+        }
+        // ピーキング EQ は中心から離れるとユニティに収束。
+        assert!(
+            (0.7..=1.3).contains(&max_abs),
+            "expected near-unity at 100Hz with 1kHz center, got {max_abs}"
         );
     }
 
