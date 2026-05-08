@@ -25,6 +25,52 @@ mod tests {
     use super::*;
     use crate::entity::EntityId;
 
+    /// テスト用に空の effect world 一式をまとめて生成し、`BusSystem::update` 呼び出しを薄く
+    /// ラップするヘルパ。エフェクト種別の追加で BusSystem シグネチャが伸びても、
+    /// 各テストの呼び出し形は変わらない。
+    struct TestFx {
+        effect: crate::effect::EffectWorld,
+        lpf: crate::effect::LpfWorld,
+        hpf: crate::effect::HpfWorld,
+        reverb: crate::effect::ReverbWorld,
+        compressor: crate::effect::CompressorWorld,
+        peq: crate::effect::PeakingEqWorld,
+    }
+
+    impl TestFx {
+        fn new() -> Self {
+            Self {
+                effect: crate::effect::EffectWorld::new(),
+                lpf: crate::effect::LpfWorld::new(),
+                hpf: crate::effect::HpfWorld::new(),
+                reverb: crate::effect::ReverbWorld::new(),
+                compressor: crate::effect::CompressorWorld::new(),
+                peq: crate::effect::PeakingEqWorld::new(),
+            }
+        }
+
+        fn run(
+            &mut self,
+            world: &mut BusWorld,
+            output: &mut [f32],
+            channels: usize,
+            sample_count: usize,
+        ) {
+            BusSystem::update(
+                world,
+                &self.effect,
+                &mut self.lpf,
+                &mut self.hpf,
+                &mut self.reverb,
+                &mut self.compressor,
+                &mut self.peq,
+                output,
+                channels,
+                sample_count,
+            );
+        }
+    }
+
     // ── 生成・削除 ──────────────────────────────────────────────────────────────
 
     #[test]
@@ -202,22 +248,7 @@ mod tests {
         world.set_gain(master, 0.5);
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         for &s in &output {
             assert!((s - 0.5).abs() < 1e-6, "expected 0.5, got {s}");
@@ -241,22 +272,7 @@ mod tests {
         world.set_muted(master, true);
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         for &s in &output {
             assert_eq!(s, 0.0, "muted bus should output silence");
@@ -291,22 +307,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         for &s in &output {
             assert!(
@@ -342,22 +343,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         for &s in &output {
             assert_eq!(s, 0.0, "muted child should not propagate");
@@ -634,22 +620,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         // Master 出力 = BGM 本線 (1.0) + Aux 本線 (BGM Send 経由 0.5) = 1.5。
         for &s in &output {
@@ -704,22 +675,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         // BGM 本線 = mute で 0、Pre-Send は mute 前に tap されるため Aux に 1.0 流れる。
         // Master = 0 + 1.0 = 1.0。
@@ -774,22 +730,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
 
         for &s in &output {
             assert!(
@@ -821,22 +762,7 @@ mod tests {
         }
 
         let mut output = vec![0.0f32; sample_count];
-        let effect = crate::effect::EffectWorld::new();
-        let mut lpf = crate::effect::LpfWorld::new();
-        let mut hpf = crate::effect::HpfWorld::new();
-        let mut reverb = crate::effect::ReverbWorld::new();
-        let mut compressor = crate::effect::CompressorWorld::new();
-        BusSystem::update(
-            &mut world,
-            &effect,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut output,
-            2,
-            sample_count,
-        );
+        TestFx::new().run(&mut world, &mut output, 2, sample_count);
         for &s in &output {
             assert!((s - 0.5).abs() < 1e-6);
         }

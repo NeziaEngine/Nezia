@@ -10,7 +10,7 @@ use arc_swap::ArcSwap;
 use crate::bus::BusWorld;
 use crate::effect::{
     CompressorParam, CompressorWorld, EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld,
-    ReverbParam, ReverbWorld,
+    PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
 };
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
@@ -27,6 +27,7 @@ pub(super) fn apply_snapshot(
     hpf_world: &HpfWorld,
     reverb_world: &ReverbWorld,
     compressor_world: &CompressorWorld,
+    peq_world: &PeakingEqWorld,
 ) {
     let snapshots = shared_snapshots.load();
     let Some(snapshot) = snapshots
@@ -91,6 +92,10 @@ pub(super) fn apply_snapshot(
                 crate::effect::EffectKind::Compressor,
                 crate::snapshot::SnapshotEffectKind::Compressor,
             ) => read_compressor_param(compressor_world, state_index, entry.param),
+            (
+                crate::effect::EffectKind::PeakingEq,
+                crate::snapshot::SnapshotEffectKind::PeakingEq,
+            ) => read_peq_param(peq_world, state_index, entry.param),
             _ => continue,
         };
         active.effect_kind.push(entry.kind);
@@ -106,6 +111,7 @@ pub(super) fn apply_snapshot(
 }
 
 /// 1 コールバック分 (`samples` フレーム) 進めて補間値を BusWorld / 各 *World に書き戻す。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tick_snapshot_interpolation(
     active: &mut crate::snapshot::ActiveSnapshot,
     samples: u64,
@@ -114,6 +120,7 @@ pub(super) fn tick_snapshot_interpolation(
     hpf_world: &mut HpfWorld,
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
+    peq_world: &mut PeakingEqWorld,
 ) {
     // 進行率 t を計算。fade_total_samples == 0 のときは即時 (t = 1.0)。
     let t = if active.fade_total_samples == 0 {
@@ -213,6 +220,15 @@ pub(super) fn tick_snapshot_interpolation(
                     compressor_world.set_makeup_db(state_dense, v);
                 }
             }
+            crate::snapshot::SnapshotEffectKind::PeakingEq => {
+                if param == PeakingEqParam::CenterHz as u8 {
+                    peq_world.set_center_hz(state_dense, v);
+                } else if param == PeakingEqParam::Q as u8 {
+                    peq_world.set_q(state_dense, v);
+                } else if param == PeakingEqParam::GainDb as u8 {
+                    peq_world.set_gain_db(state_dense, v);
+                }
+            }
         }
     }
 
@@ -291,6 +307,20 @@ fn read_compressor_param(world: &CompressorWorld, state_dense: u32, param: u8) -
         knee
     } else if param == CompressorParam::MakeupDb as u8 {
         makeup
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn read_peq_param(world: &PeakingEqWorld, state_dense: u32, param: u8) -> f32 {
+    let i = state_dense as usize;
+    if param == PeakingEqParam::CenterHz as u8 {
+        world.center_hzs().get(i).copied().unwrap_or(0.0)
+    } else if param == PeakingEqParam::Q as u8 {
+        world.qs().get(i).copied().unwrap_or(0.0)
+    } else if param == PeakingEqParam::GainDb as u8 {
+        world.gain_dbs().get(i).copied().unwrap_or(0.0)
     } else {
         0.0
     }

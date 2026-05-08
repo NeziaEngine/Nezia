@@ -70,6 +70,7 @@ impl<'a> SnapshotBuilder<'a> {
             crate::effect::EffectKind::Hpf => SnapshotEffectKind::Hpf,
             crate::effect::EffectKind::Reverb => SnapshotEffectKind::Reverb,
             crate::effect::EffectKind::Compressor => SnapshotEffectKind::Compressor,
+            crate::effect::EffectKind::PeakingEq => SnapshotEffectKind::PeakingEq,
         };
         let p = param.as_u8();
         // 重複排除 (同 effect + 同 param) は最後の値を優先。

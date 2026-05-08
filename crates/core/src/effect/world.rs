@@ -17,6 +17,9 @@ pub enum EffectKind {
     /// Sidechain 入力 (`bind_compressor_sidechain` で他バスからの Send を紐付け) で
     /// ダッキング動作する。Bus 専用。
     Compressor = 3,
+    /// Phase 3-5: パラメトリック EQ (ピーキング 1 バンド = 1 Effect)。
+    /// 複数バンドは同一バスに複数 chain して構成する (Unity ParameterEQ 同設計)。
+    PeakingEq = 4,
 }
 
 /// エフェクトを取り付ける対象。
