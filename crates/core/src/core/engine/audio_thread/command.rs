@@ -38,10 +38,26 @@ pub(super) fn process_command(
     master_bus_id: EntityId,
     metrics: &EngineMetrics,
 ) {
+    // 大半のセッタは bool (= 解決成功か) を返すが、コマンド経路では戻り値を使わない。
+    // 各 arm を `{ ...; }` で `()` に揃える。
     match cmd {
+        // ── マスター / 全体 ──────────────────────────────────────────────
         Command::SetVolume(v) => {
             bus_world.set_gain(master_bus_id, v.clamp(0.0, 1.0));
         }
+        Command::StopAll => stop_all(source_world, spatial_world, event_producer),
+        Command::UpdateProcessOrder { order, len } => {
+            bus_world.set_process_order(&order[..len as usize]);
+        }
+        Command::ApplySnapshot { .. } => {
+            // process() 内で intercept されるためここには来ない (網羅性のため arm を置く)。
+            debug_assert!(
+                false,
+                "ApplySnapshot should be handled before process_command"
+            );
+        }
+
+        // ── ソース再生 (Play 系) ──────────────────────────────────────────
         Command::Play {
             audio_buffer_index,
             vol,
@@ -49,24 +65,14 @@ pub(super) fn process_command(
             token,
             looping,
         } => {
-            let spawned = source_world.spawn(SourceComponent {
-                vol,
-                pitch,
-                sample_offset: 0.0,
-                audio_buffer_index,
-                output_bus: 0,
-                token,
-                looping,
-                priority: 128,
-            });
-            if spawned.is_some() {
-                spatial_world.push_defaults();
-            } else {
-                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
-                if token != 0 {
-                    let _ = event_producer.try_push(Event::PlayFailed { token });
-                }
-            }
+            try_spawn_source(
+                source_world,
+                spatial_world,
+                event_producer,
+                metrics,
+                None,
+                build_source_component(audio_buffer_index, vol, pitch, 0, token, looping),
+            );
         }
         Command::PlayToBus {
             audio_buffer_index,
@@ -76,24 +82,21 @@ pub(super) fn process_command(
             token,
             looping,
         } => {
-            let spawned = source_world.spawn(SourceComponent {
-                vol,
-                pitch,
-                sample_offset: 0.0,
-                audio_buffer_index,
-                output_bus: output_bus_dense,
-                token,
-                looping,
-                priority: 128,
-            });
-            if spawned.is_some() {
-                spatial_world.push_defaults();
-            } else {
-                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
-                if token != 0 {
-                    let _ = event_producer.try_push(Event::PlayFailed { token });
-                }
-            }
+            try_spawn_source(
+                source_world,
+                spatial_world,
+                event_producer,
+                metrics,
+                None,
+                build_source_component(
+                    audio_buffer_index,
+                    vol,
+                    pitch,
+                    output_bus_dense,
+                    token,
+                    looping,
+                ),
+            );
         }
         Command::SpawnSource {
             id,
@@ -104,38 +107,46 @@ pub(super) fn process_command(
             token,
             looping,
         } => {
-            let spawned = source_world.spawn_with_id(
-                id,
-                SourceComponent {
+            try_spawn_source(
+                source_world,
+                spatial_world,
+                event_producer,
+                metrics,
+                Some(id),
+                build_source_component(
+                    audio_buffer_index,
                     vol,
                     pitch,
-                    sample_offset: 0.0,
-                    audio_buffer_index,
-                    output_bus: output_bus_dense,
+                    output_bus_dense,
                     token,
                     looping,
-                    priority: 128,
-                },
+                ),
             );
-            if spawned {
-                spatial_world.push_defaults();
-            } else {
-                metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
-                if token != 0 {
-                    let _ = event_producer.try_push(Event::PlayFailed { token });
-                }
-            }
         }
-        Command::StopAll => {
-            // 既存ソースぶんの despawn 通知をメインスレッドへ送る（slot 解放のため）。
-            for dense in 0..source_world.len() {
-                if let Some(id) = source_world.entity_at_dense(dense) {
-                    let _ = event_producer.try_push(Event::SourceDespawned { id });
-                }
-            }
-            *source_world = SourceWorld::new();
-            *spatial_world = SpatialWorld::new();
+
+        // ── ライブソース制御 ──────────────────────────────────────────────
+        // SetSourceVolume / SetSourcePitch / SetSourceSpatialEnabled は live_params 経由で
+        // 反映するため、コマンド経路は廃止された。
+        Command::SeekSource { id, frame_offset } => {
+            source_world.set_sample_offset(id, frame_offset);
         }
+        Command::PauseSource { id } => {
+            source_world.set_state(id, SourceState::Pausing);
+        }
+        Command::ResumeSource { id } => {
+            source_world.set_state(id, SourceState::Playing);
+        }
+        Command::StopSource { id } => {
+            source_world.set_state(id, SourceState::Stopped);
+        }
+        Command::SetSourceLoop { id, looping } => {
+            source_world.set_looping(id, looping);
+        }
+        Command::SetSourcePriority { id, priority } => {
+            source_world.set_priority(id, priority);
+        }
+
+        // ── バス ──────────────────────────────────────────────────────────
         Command::SpawnBus {
             id,
             gain,
@@ -164,10 +175,8 @@ pub(super) fn process_command(
         } => {
             bus_world.set_output_bus_dense(id, output_bus_dense);
         }
-        Command::UpdateProcessOrder { order, len } => {
-            bus_world.set_process_order(&order[..len as usize]);
-        }
-        // ── 3D 空間コマンド ──
+
+        // ── 3D 空間 ────────────────────────────────────────────────────
         Command::SetSourceSpatialParams {
             id,
             model,
@@ -203,36 +212,8 @@ pub(super) fn process_command(
                 spatial_world.set_curve_index(dense, curve_index);
             }
         }
-        Command::ApplySnapshot { .. } => {
-            // process() 内で intercept されるためここには来ない (網羅性のため arm を置く)。
-            debug_assert!(
-                false,
-                "ApplySnapshot should be handled before process_command"
-            );
-        }
 
-        // ── ライブソース制御 ──
-        // SetSourceVolume / SetSourcePitch / SetSourceSpatialEnabled は live_params 経由で
-        // 反映するため、コマンド経路は廃止された。
-        Command::SeekSource { id, frame_offset } => {
-            source_world.set_sample_offset(id, frame_offset);
-        }
-        Command::PauseSource { id } => {
-            source_world.set_state(id, SourceState::Pausing);
-        }
-        Command::ResumeSource { id } => {
-            source_world.set_state(id, SourceState::Playing);
-        }
-        Command::StopSource { id } => {
-            source_world.set_state(id, SourceState::Stopped);
-        }
-        Command::SetSourceLoop { id, looping } => {
-            source_world.set_looping(id, looping);
-        }
-        Command::SetSourcePriority { id, priority } => {
-            source_world.set_priority(id, priority);
-        }
-        // ── DSP エフェクト ──
+        // ── DSP エフェクト ──────────────────────────────────────────────
         Command::SpawnEffect {
             id,
             target,
@@ -286,32 +267,23 @@ pub(super) fn process_command(
             );
         }
 
-        // ── Send (Phase 3-3) ──
+        // ── Send (Phase 3-3) ────────────────────────────────────────────
         Command::AddSend {
             id,
             src_dense,
             dst,
             position,
             gain,
-        } => {
-            // dst を resolve: Bus はそのまま、CompressorSidechain は effect_id → state_dense。
-            let (dst_dense, dest_kind) = match dst {
-                SendDestination::Bus { dense } => (dense, SendDestKind::Bus),
-                SendDestination::CompressorSidechain { effect } => {
-                    let Some(meta_dense) = effect_world.resolve(effect) else {
-                        return;
-                    };
-                    if effect_world.kinds()[meta_dense] != EffectKind::Compressor {
-                        return;
-                    }
-                    let state_dense = effect_world.state_indices()[meta_dense];
-                    // Sidechain mode を自動で有効化 (`bind_compressor_sidechain` の暗黙呼出)。
-                    compressor_world.set_use_sidechain(state_dense, true);
-                    (state_dense, SendDestKind::CompressorSidechain)
-                }
-            };
-            bus_world.add_send(src_dense as usize, id, dst_dense, dest_kind, gain, position);
-        }
+        } => handle_add_send(
+            id,
+            src_dense,
+            dst,
+            position,
+            gain,
+            bus_world,
+            effect_world,
+            compressor_world,
+        ),
         Command::RemoveSend { id } => {
             bus_world.remove_send(id);
         }
@@ -322,12 +294,117 @@ pub(super) fn process_command(
             bus_world.set_send_position(id, position);
         }
         Command::SetCompressorSidechainEnabled { id, enabled } => {
-            if let Some(meta_dense) = effect_world.resolve(id)
-                && effect_world.kinds()[meta_dense] == EffectKind::Compressor
-            {
-                let state_dense = effect_world.state_indices()[meta_dense];
-                compressor_world.set_use_sidechain(state_dense, enabled);
-            }
+            handle_set_compressor_sidechain(id, enabled, effect_world, compressor_world);
         }
+    }
+}
+
+/// Play / PlayToBus / SpawnSource の SoA フィールド組み立てを共通化する。
+/// `priority` のデフォルト 128、`sample_offset` 0 はここで集約する。
+#[inline]
+fn build_source_component(
+    audio_buffer_index: u32,
+    vol: f32,
+    pitch: f32,
+    output_bus: u32,
+    token: u32,
+    looping: bool,
+) -> SourceComponent {
+    SourceComponent {
+        vol,
+        pitch,
+        sample_offset: 0.0,
+        audio_buffer_index,
+        output_bus,
+        token,
+        looping,
+        priority: 128,
+    }
+}
+
+/// Play / PlayToBus / SpawnSource の共通本体。
+/// `id = Some(_)` で `spawn_with_id`、`None` で `spawn` (auto allocate)。
+/// 失敗時は `dropped_play_calls` をインクリメントし、token 付きなら `PlayFailed` を発火する。
+fn try_spawn_source(
+    source_world: &mut SourceWorld,
+    spatial_world: &mut SpatialWorld,
+    event_producer: &mut ringbuf::HeapProd<Event>,
+    metrics: &EngineMetrics,
+    id: Option<EntityId>,
+    component: SourceComponent,
+) {
+    let token = component.token;
+    let spawned = match id {
+        Some(id) => source_world.spawn_with_id(id, component),
+        None => source_world.spawn(component).is_some(),
+    };
+    if spawned {
+        spatial_world.push_defaults();
+    } else {
+        metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
+        if token != 0 {
+            let _ = event_producer.try_push(Event::PlayFailed { token });
+        }
+    }
+}
+
+/// `Command::StopAll` 本体。既存ソースぶんの despawn 通知を発行してから world を作り直す。
+fn stop_all(
+    source_world: &mut SourceWorld,
+    spatial_world: &mut SpatialWorld,
+    event_producer: &mut ringbuf::HeapProd<Event>,
+) {
+    for dense in 0..source_world.len() {
+        if let Some(id) = source_world.entity_at_dense(dense) {
+            let _ = event_producer.try_push(Event::SourceDespawned { id });
+        }
+    }
+    *source_world = SourceWorld::new();
+    *spatial_world = SpatialWorld::new();
+}
+
+/// `Command::AddSend` 本体。dst が CompressorSidechain の場合は effect_id → state_dense
+/// 解決と sidechain mode 自動有効化を行う。解決失敗 / 種別不一致は no-op。
+#[allow(clippy::too_many_arguments)]
+fn handle_add_send(
+    id: crate::bus::SendId,
+    src_dense: u32,
+    dst: SendDestination,
+    position: crate::bus::SendPosition,
+    gain: f32,
+    bus_world: &mut BusWorld,
+    effect_world: &EffectWorld,
+    compressor_world: &mut CompressorWorld,
+) {
+    let (dst_dense, dest_kind) = match dst {
+        SendDestination::Bus { dense } => (dense, SendDestKind::Bus),
+        SendDestination::CompressorSidechain { effect } => {
+            let Some(meta_dense) = effect_world.resolve(effect) else {
+                return;
+            };
+            if effect_world.kinds()[meta_dense] != EffectKind::Compressor {
+                return;
+            }
+            let state_dense = effect_world.state_indices()[meta_dense];
+            // Sidechain mode を自動で有効化 (`bind_compressor_sidechain` の暗黙呼出)。
+            compressor_world.set_use_sidechain(state_dense, true);
+            (state_dense, SendDestKind::CompressorSidechain)
+        }
+    };
+    bus_world.add_send(src_dense as usize, id, dst_dense, dest_kind, gain, position);
+}
+
+/// `Command::SetCompressorSidechainEnabled` 本体。Compressor 以外の effect_id は no-op。
+fn handle_set_compressor_sidechain(
+    id: crate::effect::EffectId,
+    enabled: bool,
+    effect_world: &EffectWorld,
+    compressor_world: &mut CompressorWorld,
+) {
+    if let Some(meta_dense) = effect_world.resolve(id)
+        && effect_world.kinds()[meta_dense] == EffectKind::Compressor
+    {
+        let state_dense = effect_world.state_indices()[meta_dense];
+        compressor_world.set_use_sidechain(state_dense, enabled);
     }
 }
