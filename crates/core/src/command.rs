@@ -175,6 +175,17 @@ pub enum Command {
     /// Compressor の sidechain 入力を有効/無効にする。`true` で外部 sidechain (Send 経由) を使用、
     /// `false` で自バス内部検波に戻す。
     SetCompressorSidechainEnabled { id: EffectId, enabled: bool },
+    /// ソース起点の Send (User-Defined Aux Send / Wwise・FMOD 互換) を追加する。
+    /// `src_entity` は対象ソースの EntityId (audio thread が `SourceWorld::resolve` で dense 解決)。
+    /// `dst` の解釈は `AddSend` と同じ (`Bus` は dense、`CompressorSidechain` は EffectId)。
+    /// SendId プールはバス起点 Send と共通だが、登録先は `SourceWorld::send_*` SoA に分かれる。
+    AddSourceSend {
+        id: SendId,
+        src_entity: EntityId,
+        dst: SendDestination,
+        position: SendPosition,
+        gain: f32,
+    },
     /// Send を削除する。
     RemoveSend { id: SendId },
     /// Send の gain を設定する。

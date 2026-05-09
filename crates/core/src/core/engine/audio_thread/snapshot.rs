@@ -12,6 +12,7 @@ use crate::effect::{
     CompressorParam, CompressorWorld, EffectWorld, EffectWorlds, HpfParam, HpfWorld, LimiterParam,
     LimiterWorld, LpfParam, LpfWorld, PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
 };
+use crate::source::SourceWorld;
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
 /// 現在値キャプチャして `ActiveSnapshot` に展開する。
@@ -22,6 +23,7 @@ pub(super) fn apply_snapshot(
     shared_snapshots: &Arc<ArcSwap<Vec<Option<Arc<crate::snapshot::Snapshot>>>>>,
     active: &mut crate::snapshot::ActiveSnapshot,
     bus_world: &BusWorld,
+    source_world: &SourceWorld,
     effect_world: &EffectWorld,
     worlds: &EffectWorlds,
 ) {
@@ -55,15 +57,22 @@ pub(super) fn apply_snapshot(
             active.bus_muted_applied.push(false);
         }
     }
-    // ── Send gain (Phase 3-3) ──
+    // ── Send gain (Phase 3-3 / source 起点も対応) ──
     for entry in &snapshot.send_gains {
         if let Some((bus_dense, slot)) = bus_world.resolve_send(entry.send) {
-            // 現在値を from にキャプチャ。
             let from = bus_world.send_gain_at(bus_dense, slot).unwrap_or(0.0);
             active.send_gain_bus_dense.push(bus_dense as u32);
             active.send_gain_slot.push(slot as u8);
             active.send_gain_from.push(from);
             active.send_gain_to.push(entry.gain);
+            active.send_gain_is_source.push(false);
+        } else if let Some((src_dense, slot)) = source_world.resolve_send(entry.send) {
+            let from = source_world.send_gain_at(src_dense, slot).unwrap_or(0.0);
+            active.send_gain_bus_dense.push(src_dense as u32);
+            active.send_gain_slot.push(slot as u8);
+            active.send_gain_from.push(from);
+            active.send_gain_to.push(entry.gain);
+            active.send_gain_is_source.push(true);
         }
     }
     // ── エフェクトパラメータ ──
@@ -114,6 +123,7 @@ pub(super) fn tick_snapshot_interpolation(
     active: &mut crate::snapshot::ActiveSnapshot,
     samples: u64,
     bus_world: &mut BusWorld,
+    source_world: &mut SourceWorld,
     worlds: &mut EffectWorlds,
 ) {
     // 進行率 t を計算。fade_total_samples == 0 のときは即時 (t = 1.0)。
@@ -148,12 +158,16 @@ pub(super) fn tick_snapshot_interpolation(
 
     // ── Send gain lerp (Phase 3-3、dB 空間でバスゲインと同じ補間) ──
     for i in 0..active.send_gain_bus_dense.len() {
-        let bus_dense = active.send_gain_bus_dense[i] as usize;
+        let owner_dense = active.send_gain_bus_dense[i] as usize;
         let slot = active.send_gain_slot[i] as usize;
         let from = active.send_gain_from[i];
         let to = active.send_gain_to[i];
         let v = lerp_db_gain(from, to, t);
-        bus_world.write_send_gain_by_dense(bus_dense, slot, v);
+        if active.send_gain_is_source[i] {
+            source_world.write_send_gain_by_dense(owner_dense, slot, v);
+        } else {
+            bus_world.write_send_gain_by_dense(owner_dense, slot, v);
+        }
     }
 
     // ── バスミュート ──

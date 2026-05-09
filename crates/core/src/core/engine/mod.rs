@@ -164,6 +164,10 @@ pub struct SoundEngine {
     pub(super) effect_slots: EffectIdAllocator,
     /// Phase 3-3: Send ハンドル発行。
     pub(super) send_slots: SendIdAllocator,
+    /// Source 起点 Send (User-Defined Aux Send) のメインスレッドミラー。
+    /// SendId.index → `(SendId, 発行元 Source EntityId)` のマップ。`Event::SourceDespawned`
+    /// 受信時に該当 SendId を一括解放するために使う。`MAX_SENDS` で固定確保。
+    pub(super) source_sends: Vec<Option<(crate::bus::SendId, crate::entity::EntityId)>>,
     /// Phase 4-2: Random Container のメインスレッド側ワールド (audio thread には流れない)。
     pub(super) container_world: ContainerWorld,
     /// Phase 3-3 PR2: Compressor EffectId → 所属バス EntityId のマッピング。
@@ -324,6 +328,7 @@ impl SoundEngine {
             source_slots: SourceSlotAllocator::new(),
             effect_slots: EffectIdAllocator::new(),
             send_slots: SendIdAllocator::new(),
+            source_sends: vec![None; crate::bus::MAX_SENDS],
             container_world: ContainerWorld::new(),
             compressor_owners: HashMap::new(),
             live_params,
@@ -458,6 +463,17 @@ impl SoundEngine {
                     self.callbacks.cancel(token);
                 }
                 Event::SourceDespawned { id } => {
+                    // 当該ソース起点の Send ハンドルを一括解放する (Wwise / FMOD 互換の
+                    // per-event aux send 自動 cleanup 規約)。audio thread 側は
+                    // `SourceWorld::despawn_by_dense_index` で send_lookup を既にクリア済み。
+                    for slot in 0..self.source_sends.len() {
+                        if let Some((send_id, src)) = self.source_sends[slot]
+                            && src == id
+                        {
+                            self.source_sends[slot] = None;
+                            self.send_slots.free(send_id);
+                        }
+                    }
                     // スロット index を再利用キューに戻す。
                     self.source_slots.free(id);
                 }
