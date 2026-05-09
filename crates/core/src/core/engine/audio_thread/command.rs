@@ -10,10 +10,7 @@ use ringbuf::traits::Producer;
 
 use crate::bus::{BusComponent, BusWorld, SendDestKind};
 use crate::command::{Command, SendDestination};
-use crate::effect::{
-    CompressorWorld, EffectKind, EffectWorld, HpfWorld, LimiterWorld, LpfWorld, PeakingEqWorld,
-    ReverbWorld,
-};
+use crate::effect::{CompressorWorld, EffectKind, EffectWorld, EffectWorlds};
 use crate::entity::EntityId;
 use crate::event::Event;
 use crate::metrics::EngineMetrics;
@@ -30,12 +27,7 @@ pub(super) fn process_command(
     source_world: &mut SourceWorld,
     spatial_world: &mut SpatialWorld,
     effect_world: &mut EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    effect_worlds: &mut EffectWorlds,
     event_producer: &mut ringbuf::HeapProd<Event>,
     master_bus_id: EntityId,
     metrics: &EngineMetrics,
@@ -232,44 +224,17 @@ pub(super) fn process_command(
                 bus_world,
                 source_world,
                 effect_world,
-                lpf_world,
-                hpf_world,
-                reverb_world,
-                compressor_world,
-                peq_world,
-                limiter_world,
+                effect_worlds,
             );
         }
         Command::DespawnEffect { id } => {
-            despawn_effect(
-                id,
-                bus_world,
-                source_world,
-                effect_world,
-                lpf_world,
-                hpf_world,
-                reverb_world,
-                compressor_world,
-                peq_world,
-                limiter_world,
-            );
+            despawn_effect(id, bus_world, source_world, effect_world, effect_worlds);
         }
         Command::SetEffectEnabled { id, enabled } => {
             effect_world.set_enabled(id, enabled);
         }
         Command::SetEffectParam { id, param, value } => {
-            apply_effect_param(
-                id,
-                param,
-                value,
-                effect_world,
-                lpf_world,
-                hpf_world,
-                reverb_world,
-                compressor_world,
-                peq_world,
-                limiter_world,
-            );
+            apply_effect_param(id, param, value, effect_world, effect_worlds);
         }
 
         // ── Send (Phase 3-3) ────────────────────────────────────────────
@@ -287,7 +252,7 @@ pub(super) fn process_command(
             gain,
             bus_world,
             effect_world,
-            compressor_world,
+            &mut effect_worlds.compressor,
         ),
         Command::RemoveSend { id } => {
             bus_world.remove_send(id);
@@ -299,7 +264,12 @@ pub(super) fn process_command(
             bus_world.set_send_position(id, position);
         }
         Command::SetCompressorSidechainEnabled { id, enabled } => {
-            handle_set_compressor_sidechain(id, enabled, effect_world, compressor_world);
+            handle_set_compressor_sidechain(
+                id,
+                enabled,
+                effect_world,
+                &mut effect_worlds.compressor,
+            );
         }
     }
 }

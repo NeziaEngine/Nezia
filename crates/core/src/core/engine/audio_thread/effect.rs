@@ -1,14 +1,13 @@
 //! DSP エフェクトの spawn / despawn / param 適用。
 //!
 //! メインスレッドが事前発行した `EffectId` を使い、
-//! 種別 World (Lpf/Hpf/Reverb) に state を確保 → メタ層 (`EffectWorld`) に登録 →
+//! 種別 World (Lpf/Hpf/Reverb 等) に state を確保 → メタ層 (`EffectWorld`) に登録 →
 //! owner (Bus / Source) のチェーンに slot を追加、という 3 段階を一括で扱う。
 
 use crate::bus::BusWorld;
 use crate::effect::{
-    CompressorParam, CompressorWorld, EffectKind, EffectPosition, EffectTarget, EffectWorld,
-    HpfParam, HpfWorld, LimiterParam, LimiterWorld, LpfParam, LpfWorld, Owner, PeakingEqParam,
-    PeakingEqWorld, ReverbParam, ReverbWorld,
+    CompressorParam, EffectKind, EffectPosition, EffectTarget, EffectWorld, EffectWorlds, HpfParam,
+    LimiterParam, LpfParam, Owner, PeakingEqParam, ReverbParam,
 };
 use crate::source::SourceWorld;
 
@@ -23,12 +22,7 @@ pub(super) fn spawn_effect(
     bus_world: &mut BusWorld,
     source_world: &mut SourceWorld,
     effect_world: &mut EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    worlds: &mut EffectWorlds,
 ) {
     // 1. owner dense を解決。
     let owner = match target {
@@ -57,27 +51,27 @@ pub(super) fn spawn_effect(
 
     // 2. 種別 World に state 確保。
     let state_index = match kind {
-        EffectKind::Lpf => match lpf_world.spawn(id, 1000.0, 0.707) {
+        EffectKind::Lpf => match worlds.lpf.spawn(id, 1000.0, 0.707) {
             Some(d) => d,
             None => return,
         },
-        EffectKind::Hpf => match hpf_world.spawn(id, 200.0, 0.707) {
+        EffectKind::Hpf => match worlds.hpf.spawn(id, 200.0, 0.707) {
             Some(d) => d,
             None => return,
         },
-        EffectKind::Reverb => match reverb_world.spawn(id) {
+        EffectKind::Reverb => match worlds.reverb.spawn(id) {
             Some(d) => d,
             None => return,
         },
-        EffectKind::Compressor => match compressor_world.spawn(id) {
+        EffectKind::Compressor => match worlds.compressor.spawn(id) {
             Some(d) => d,
             None => return,
         },
-        EffectKind::PeakingEq => match peq_world.spawn(id, 1000.0, 1.0, 0.0) {
+        EffectKind::PeakingEq => match worlds.peq.spawn(id, 1000.0, 1.0, 0.0) {
             Some(d) => d,
             None => return,
         },
-        EffectKind::Limiter => match limiter_world.spawn(id) {
+        EffectKind::Limiter => match worlds.limiter.spawn(id) {
             Some(d) => d,
             None => return,
         },
@@ -92,22 +86,22 @@ pub(super) fn spawn_effect(
         // チェーン満杯。state を巻き戻す。
         match kind {
             EffectKind::Lpf => {
-                let _ = lpf_world.despawn(state_index);
+                let _ = worlds.lpf.despawn(state_index);
             }
             EffectKind::Hpf => {
-                let _ = hpf_world.despawn(state_index);
+                let _ = worlds.hpf.despawn(state_index);
             }
             EffectKind::Reverb => {
-                let _ = reverb_world.despawn(state_index);
+                let _ = worlds.reverb.despawn(state_index);
             }
             EffectKind::Compressor => {
-                let _ = compressor_world.despawn(state_index);
+                let _ = worlds.compressor.despawn(state_index);
             }
             EffectKind::PeakingEq => {
-                let _ = peq_world.despawn(state_index);
+                let _ = worlds.peq.despawn(state_index);
             }
             EffectKind::Limiter => {
-                let _ = limiter_world.despawn(state_index);
+                let _ = worlds.limiter.despawn(state_index);
             }
         }
         return;
@@ -124,18 +118,12 @@ pub(super) fn spawn_effect(
     effect_world.spawn_with_id(id, kind, algo, owner, position, slot, state_index);
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn despawn_effect(
     id: crate::effect::EffectId,
     bus_world: &mut BusWorld,
     source_world: &mut SourceWorld,
     effect_world: &mut EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    worlds: &mut EffectWorlds,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -160,12 +148,12 @@ pub(super) fn despawn_effect(
 
     // 3. 種別 World で state を swap-remove し、移動した state があればメタ層を再マップ。
     let moved = match kind {
-        EffectKind::Lpf => lpf_world.despawn(state_index),
-        EffectKind::Hpf => hpf_world.despawn(state_index),
-        EffectKind::Reverb => reverb_world.despawn(state_index),
-        EffectKind::Compressor => compressor_world.despawn(state_index),
-        EffectKind::PeakingEq => peq_world.despawn(state_index),
-        EffectKind::Limiter => limiter_world.despawn(state_index),
+        EffectKind::Lpf => worlds.lpf.despawn(state_index),
+        EffectKind::Hpf => worlds.hpf.despawn(state_index),
+        EffectKind::Reverb => worlds.reverb.despawn(state_index),
+        EffectKind::Compressor => worlds.compressor.despawn(state_index),
+        EffectKind::PeakingEq => worlds.peq.despawn(state_index),
+        EffectKind::Limiter => worlds.limiter.despawn(state_index),
     };
     if let Some((moved_id, new_state_index)) = moved {
         let _ = moved_id;
@@ -173,29 +161,23 @@ pub(super) fn despawn_effect(
         // メタ層側で「kind 種別 + state_index == 旧末尾」を新位置に書き換える。
         // 旧末尾 index は "新サイズ" (despawn 後の len)。
         let last_after = match kind {
-            EffectKind::Lpf => lpf_world.len() as u32,
-            EffectKind::Hpf => hpf_world.len() as u32,
-            EffectKind::Reverb => reverb_world.len() as u32,
-            EffectKind::Compressor => compressor_world.len() as u32,
-            EffectKind::PeakingEq => peq_world.len() as u32,
-            EffectKind::Limiter => limiter_world.len() as u32,
+            EffectKind::Lpf => worlds.lpf.len() as u32,
+            EffectKind::Hpf => worlds.hpf.len() as u32,
+            EffectKind::Reverb => worlds.reverb.len() as u32,
+            EffectKind::Compressor => worlds.compressor.len() as u32,
+            EffectKind::PeakingEq => worlds.peq.len() as u32,
+            EffectKind::Limiter => worlds.limiter.len() as u32,
         };
         effect_world.remap_state_index(kind, last_after, new_state_index);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_effect_param(
     id: crate::effect::EffectId,
     param: u8,
     value: f32,
     effect_world: &EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    worlds: &mut EffectWorlds,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -205,60 +187,60 @@ pub(super) fn apply_effect_param(
     match kind {
         EffectKind::Lpf => {
             if param == LpfParam::Cutoff as u8 {
-                lpf_world.set_cutoff(state_index, value);
+                worlds.lpf.set_cutoff(state_index, value);
             } else if param == LpfParam::Q as u8 {
-                lpf_world.set_q(state_index, value);
+                worlds.lpf.set_q(state_index, value);
             }
         }
         EffectKind::Hpf => {
             if param == HpfParam::Cutoff as u8 {
-                hpf_world.set_cutoff(state_index, value);
+                worlds.hpf.set_cutoff(state_index, value);
             } else if param == HpfParam::Q as u8 {
-                hpf_world.set_q(state_index, value);
+                worlds.hpf.set_q(state_index, value);
             }
         }
         EffectKind::Reverb => {
             if param == ReverbParam::RoomSize as u8 {
-                reverb_world.set_room_size(state_index, value);
+                worlds.reverb.set_room_size(state_index, value);
             } else if param == ReverbParam::Damping as u8 {
-                reverb_world.set_damping(state_index, value);
+                worlds.reverb.set_damping(state_index, value);
             } else if param == ReverbParam::Wet as u8 {
-                reverb_world.set_wet(state_index, value);
+                worlds.reverb.set_wet(state_index, value);
             } else if param == ReverbParam::Dry as u8 {
-                reverb_world.set_dry(state_index, value);
+                worlds.reverb.set_dry(state_index, value);
             } else if param == ReverbParam::Width as u8 {
-                reverb_world.set_width(state_index, value);
+                worlds.reverb.set_width(state_index, value);
             }
         }
         EffectKind::Compressor => {
             if param == CompressorParam::ThresholdDb as u8 {
-                compressor_world.set_threshold_db(state_index, value);
+                worlds.compressor.set_threshold_db(state_index, value);
             } else if param == CompressorParam::Ratio as u8 {
-                compressor_world.set_ratio(state_index, value);
+                worlds.compressor.set_ratio(state_index, value);
             } else if param == CompressorParam::AttackMs as u8 {
-                compressor_world.set_attack_ms(state_index, value);
+                worlds.compressor.set_attack_ms(state_index, value);
             } else if param == CompressorParam::ReleaseMs as u8 {
-                compressor_world.set_release_ms(state_index, value);
+                worlds.compressor.set_release_ms(state_index, value);
             } else if param == CompressorParam::KneeDb as u8 {
-                compressor_world.set_knee_db(state_index, value);
+                worlds.compressor.set_knee_db(state_index, value);
             } else if param == CompressorParam::MakeupDb as u8 {
-                compressor_world.set_makeup_db(state_index, value);
+                worlds.compressor.set_makeup_db(state_index, value);
             }
         }
         EffectKind::PeakingEq => {
             if param == PeakingEqParam::CenterHz as u8 {
-                peq_world.set_center_hz(state_index, value);
+                worlds.peq.set_center_hz(state_index, value);
             } else if param == PeakingEqParam::Q as u8 {
-                peq_world.set_q(state_index, value);
+                worlds.peq.set_q(state_index, value);
             } else if param == PeakingEqParam::GainDb as u8 {
-                peq_world.set_gain_db(state_index, value);
+                worlds.peq.set_gain_db(state_index, value);
             }
         }
         EffectKind::Limiter => {
             if param == LimiterParam::CeilingDb as u8 {
-                limiter_world.set_ceiling_db(state_index, value);
+                worlds.limiter.set_ceiling_db(state_index, value);
             } else if param == LimiterParam::ReleaseMs as u8 {
-                limiter_world.set_release_ms(state_index, value);
+                worlds.limiter.set_release_ms(state_index, value);
             }
         }
     }

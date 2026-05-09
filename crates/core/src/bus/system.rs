@@ -1,7 +1,4 @@
-use crate::effect::{
-    CompressorWorld, EffectPosition, EffectSystem, EffectWorld, HpfWorld, LimiterWorld, LpfWorld,
-    PeakingEqWorld, ReverbWorld,
-};
+use crate::effect::{CompressorWorld, EffectPosition, EffectSystem, EffectWorld, EffectWorlds};
 
 use super::send::{SendDestKind, SendPosition};
 use super::{MAX_MIX_BUFFER_SIZE, MAX_SENDS_PER_BUS, world::BusWorld};
@@ -19,12 +16,7 @@ impl BusSystem {
     pub fn update(
         world: &mut BusWorld,
         effect_world: &EffectWorld,
-        lpf_world: &mut LpfWorld,
-        hpf_world: &mut HpfWorld,
-        reverb_world: &mut ReverbWorld,
-        compressor_world: &mut CompressorWorld,
-        peq_world: &mut PeakingEqWorld,
-        limiter_world: &mut LimiterWorld,
+        effect_worlds: &mut EffectWorlds,
         output_buffer: &mut [f32],
         device_channels: usize,
         sample_count: usize,
@@ -47,12 +39,7 @@ impl BusSystem {
                 let buf = &mut world.mix_buffer[start..start + sample_count];
                 EffectSystem::apply_chain(
                     effect_world,
-                    lpf_world,
-                    hpf_world,
-                    reverb_world,
-                    compressor_world,
-                    peq_world,
-                    limiter_world,
+                    effect_worlds,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -63,7 +50,7 @@ impl BusSystem {
             // Pre-Fader Send tap (Fader 適用前で tap、本線 mute / gain 0 でも流れる)。
             apply_sends(
                 world,
-                compressor_world,
+                &mut effect_worlds.compressor,
                 d,
                 start,
                 sample_count,
@@ -90,12 +77,7 @@ impl BusSystem {
                 let buf = &mut world.mix_buffer[start..start + sample_count];
                 EffectSystem::apply_chain(
                     effect_world,
-                    lpf_world,
-                    hpf_world,
-                    reverb_world,
-                    compressor_world,
-                    peq_world,
-                    limiter_world,
+                    effect_worlds,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -105,7 +87,7 @@ impl BusSystem {
             // Post-Fader Send tap (本線 mute なら 0 ミックス)。
             apply_sends(
                 world,
-                compressor_world,
+                &mut effect_worlds.compressor,
                 d,
                 start,
                 sample_count,

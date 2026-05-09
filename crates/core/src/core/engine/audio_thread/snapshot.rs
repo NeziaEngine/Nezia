@@ -9,8 +9,8 @@ use arc_swap::ArcSwap;
 
 use crate::bus::BusWorld;
 use crate::effect::{
-    CompressorParam, CompressorWorld, EffectWorld, HpfParam, HpfWorld, LimiterParam, LimiterWorld,
-    LpfParam, LpfWorld, PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
+    CompressorParam, CompressorWorld, EffectWorld, EffectWorlds, HpfParam, HpfWorld, LimiterParam,
+    LimiterWorld, LpfParam, LpfWorld, PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
 };
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
@@ -23,12 +23,7 @@ pub(super) fn apply_snapshot(
     active: &mut crate::snapshot::ActiveSnapshot,
     bus_world: &BusWorld,
     effect_world: &EffectWorld,
-    lpf_world: &LpfWorld,
-    hpf_world: &HpfWorld,
-    reverb_world: &ReverbWorld,
-    compressor_world: &CompressorWorld,
-    peq_world: &PeakingEqWorld,
-    limiter_world: &LimiterWorld,
+    worlds: &EffectWorlds,
 ) {
     let snapshots = shared_snapshots.load();
     let Some(snapshot) = snapshots
@@ -81,24 +76,24 @@ pub(super) fn apply_snapshot(
         // kind 不一致は no-op (ユーザー側の指定ミス)。
         let from = match (kind, entry.kind) {
             (crate::effect::EffectKind::Lpf, crate::snapshot::SnapshotEffectKind::Lpf) => {
-                read_lpf_param(lpf_world, state_index, entry.param)
+                read_lpf_param(&worlds.lpf, state_index, entry.param)
             }
             (crate::effect::EffectKind::Hpf, crate::snapshot::SnapshotEffectKind::Hpf) => {
-                read_hpf_param(hpf_world, state_index, entry.param)
+                read_hpf_param(&worlds.hpf, state_index, entry.param)
             }
             (crate::effect::EffectKind::Reverb, crate::snapshot::SnapshotEffectKind::Reverb) => {
-                read_reverb_param(reverb_world, state_index, entry.param)
+                read_reverb_param(&worlds.reverb, state_index, entry.param)
             }
             (
                 crate::effect::EffectKind::Compressor,
                 crate::snapshot::SnapshotEffectKind::Compressor,
-            ) => read_compressor_param(compressor_world, state_index, entry.param),
+            ) => read_compressor_param(&worlds.compressor, state_index, entry.param),
             (
                 crate::effect::EffectKind::PeakingEq,
                 crate::snapshot::SnapshotEffectKind::PeakingEq,
-            ) => read_peq_param(peq_world, state_index, entry.param),
+            ) => read_peq_param(&worlds.peq, state_index, entry.param),
             (crate::effect::EffectKind::Limiter, crate::snapshot::SnapshotEffectKind::Limiter) => {
-                read_limiter_param(limiter_world, state_index, entry.param)
+                read_limiter_param(&worlds.limiter, state_index, entry.param)
             }
             _ => continue,
         };
@@ -115,17 +110,11 @@ pub(super) fn apply_snapshot(
 }
 
 /// 1 コールバック分 (`samples` フレーム) 進めて補間値を BusWorld / 各 *World に書き戻す。
-#[allow(clippy::too_many_arguments)]
 pub(super) fn tick_snapshot_interpolation(
     active: &mut crate::snapshot::ActiveSnapshot,
     samples: u64,
     bus_world: &mut BusWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    worlds: &mut EffectWorlds,
 ) {
     // 進行率 t を計算。fade_total_samples == 0 のときは即時 (t = 1.0)。
     let t = if active.fade_total_samples == 0 {
@@ -185,60 +174,60 @@ pub(super) fn tick_snapshot_interpolation(
         match active.effect_kind[i] {
             crate::snapshot::SnapshotEffectKind::Lpf => {
                 if param == LpfParam::Cutoff as u8 {
-                    lpf_world.set_cutoff(state_dense, v);
+                    worlds.lpf.set_cutoff(state_dense, v);
                 } else if param == LpfParam::Q as u8 {
-                    lpf_world.set_q(state_dense, v);
+                    worlds.lpf.set_q(state_dense, v);
                 }
             }
             crate::snapshot::SnapshotEffectKind::Hpf => {
                 if param == HpfParam::Cutoff as u8 {
-                    hpf_world.set_cutoff(state_dense, v);
+                    worlds.hpf.set_cutoff(state_dense, v);
                 } else if param == HpfParam::Q as u8 {
-                    hpf_world.set_q(state_dense, v);
+                    worlds.hpf.set_q(state_dense, v);
                 }
             }
             crate::snapshot::SnapshotEffectKind::Reverb => {
                 if param == ReverbParam::RoomSize as u8 {
-                    reverb_world.set_room_size(state_dense, v);
+                    worlds.reverb.set_room_size(state_dense, v);
                 } else if param == ReverbParam::Damping as u8 {
-                    reverb_world.set_damping(state_dense, v);
+                    worlds.reverb.set_damping(state_dense, v);
                 } else if param == ReverbParam::Wet as u8 {
-                    reverb_world.set_wet(state_dense, v);
+                    worlds.reverb.set_wet(state_dense, v);
                 } else if param == ReverbParam::Dry as u8 {
-                    reverb_world.set_dry(state_dense, v);
+                    worlds.reverb.set_dry(state_dense, v);
                 } else if param == ReverbParam::Width as u8 {
-                    reverb_world.set_width(state_dense, v);
+                    worlds.reverb.set_width(state_dense, v);
                 }
             }
             crate::snapshot::SnapshotEffectKind::Compressor => {
                 if param == CompressorParam::ThresholdDb as u8 {
-                    compressor_world.set_threshold_db(state_dense, v);
+                    worlds.compressor.set_threshold_db(state_dense, v);
                 } else if param == CompressorParam::Ratio as u8 {
-                    compressor_world.set_ratio(state_dense, v);
+                    worlds.compressor.set_ratio(state_dense, v);
                 } else if param == CompressorParam::AttackMs as u8 {
-                    compressor_world.set_attack_ms(state_dense, v);
+                    worlds.compressor.set_attack_ms(state_dense, v);
                 } else if param == CompressorParam::ReleaseMs as u8 {
-                    compressor_world.set_release_ms(state_dense, v);
+                    worlds.compressor.set_release_ms(state_dense, v);
                 } else if param == CompressorParam::KneeDb as u8 {
-                    compressor_world.set_knee_db(state_dense, v);
+                    worlds.compressor.set_knee_db(state_dense, v);
                 } else if param == CompressorParam::MakeupDb as u8 {
-                    compressor_world.set_makeup_db(state_dense, v);
+                    worlds.compressor.set_makeup_db(state_dense, v);
                 }
             }
             crate::snapshot::SnapshotEffectKind::PeakingEq => {
                 if param == PeakingEqParam::CenterHz as u8 {
-                    peq_world.set_center_hz(state_dense, v);
+                    worlds.peq.set_center_hz(state_dense, v);
                 } else if param == PeakingEqParam::Q as u8 {
-                    peq_world.set_q(state_dense, v);
+                    worlds.peq.set_q(state_dense, v);
                 } else if param == PeakingEqParam::GainDb as u8 {
-                    peq_world.set_gain_db(state_dense, v);
+                    worlds.peq.set_gain_db(state_dense, v);
                 }
             }
             crate::snapshot::SnapshotEffectKind::Limiter => {
                 if param == LimiterParam::CeilingDb as u8 {
-                    limiter_world.set_ceiling_db(state_dense, v);
+                    worlds.limiter.set_ceiling_db(state_dense, v);
                 } else if param == LimiterParam::ReleaseMs as u8 {
-                    limiter_world.set_release_ms(state_dense, v);
+                    worlds.limiter.set_release_ms(state_dense, v);
                 }
             }
         }

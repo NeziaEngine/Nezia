@@ -7,6 +7,7 @@ mod peq;
 mod reverb;
 mod system;
 mod world;
+mod worlds;
 
 pub use compressor::CompressorWorld;
 pub use hpf::HpfWorld;
@@ -16,6 +17,7 @@ pub use peq::PeakingEqWorld;
 pub use reverb::ReverbWorld;
 pub use system::EffectSystem;
 pub use world::{EffectKind, EffectPosition, EffectTarget, EffectWorld, Owner};
+pub use worlds::EffectWorlds;
 
 use crate::entity::EntityId;
 
@@ -220,22 +222,10 @@ mod tests {
         let mut buf: Vec<f32> = (0..n)
             .map(|k| (2.0 * std::f32::consts::PI * 10_000.0 * k as f32 / 44100.0).sin())
             .collect();
-        let mut reverb = ReverbWorld::new();
-        let mut compressor = CompressorWorld::new();
-        let mut peq = PeakingEqWorld::new();
-        let mut limiter = LimiterWorld::new();
-        EffectSystem::apply_chain(
-            &meta,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut peq,
-            &mut limiter,
-            &[id],
-            &mut buf,
-            1,
-        );
+        let mut worlds = EffectWorlds::new();
+        // 上で構築した lpf state を worlds に移し替える。
+        worlds.lpf = lpf;
+        EffectSystem::apply_chain(&meta, &mut worlds, &[id], &mut buf, 1);
         let max_abs = buf[2048..].iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
         assert!(
             max_abs < 0.2,
@@ -267,22 +257,9 @@ mod tests {
 
         let mut buf = vec![0.5_f32; 256];
         let original = buf.clone();
-        let mut reverb = ReverbWorld::new();
-        let mut compressor = CompressorWorld::new();
-        let mut peq = PeakingEqWorld::new();
-        let mut limiter = LimiterWorld::new();
-        EffectSystem::apply_chain(
-            &meta,
-            &mut lpf,
-            &mut hpf,
-            &mut reverb,
-            &mut compressor,
-            &mut peq,
-            &mut limiter,
-            &[id],
-            &mut buf,
-            1,
-        );
+        let mut worlds = EffectWorlds::new();
+        worlds.lpf = lpf;
+        EffectSystem::apply_chain(&meta, &mut worlds, &[id], &mut buf, 1);
         assert_eq!(buf, original, "disabled effect must pass through");
     }
 }
