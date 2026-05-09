@@ -9,8 +9,8 @@ use arc_swap::ArcSwap;
 
 use crate::bus::BusWorld;
 use crate::effect::{
-    CompressorParam, CompressorWorld, EffectWorld, HpfParam, HpfWorld, LpfParam, LpfWorld,
-    PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
+    CompressorParam, CompressorWorld, EffectWorld, HpfParam, HpfWorld, LimiterParam, LimiterWorld,
+    LpfParam, LpfWorld, PeakingEqParam, PeakingEqWorld, ReverbParam, ReverbWorld,
 };
 
 /// `Command::ApplySnapshot` 処理本体。Snapshot を resolve + 全エントリを ID 解決 +
@@ -28,6 +28,7 @@ pub(super) fn apply_snapshot(
     reverb_world: &ReverbWorld,
     compressor_world: &CompressorWorld,
     peq_world: &PeakingEqWorld,
+    limiter_world: &LimiterWorld,
 ) {
     let snapshots = shared_snapshots.load();
     let Some(snapshot) = snapshots
@@ -96,6 +97,9 @@ pub(super) fn apply_snapshot(
                 crate::effect::EffectKind::PeakingEq,
                 crate::snapshot::SnapshotEffectKind::PeakingEq,
             ) => read_peq_param(peq_world, state_index, entry.param),
+            (crate::effect::EffectKind::Limiter, crate::snapshot::SnapshotEffectKind::Limiter) => {
+                read_limiter_param(limiter_world, state_index, entry.param)
+            }
             _ => continue,
         };
         active.effect_kind.push(entry.kind);
@@ -121,6 +125,7 @@ pub(super) fn tick_snapshot_interpolation(
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
     peq_world: &mut PeakingEqWorld,
+    limiter_world: &mut LimiterWorld,
 ) {
     // 進行率 t を計算。fade_total_samples == 0 のときは即時 (t = 1.0)。
     let t = if active.fade_total_samples == 0 {
@@ -229,6 +234,13 @@ pub(super) fn tick_snapshot_interpolation(
                     peq_world.set_gain_db(state_dense, v);
                 }
             }
+            crate::snapshot::SnapshotEffectKind::Limiter => {
+                if param == LimiterParam::CeilingDb as u8 {
+                    limiter_world.set_ceiling_db(state_dense, v);
+                } else if param == LimiterParam::ReleaseMs as u8 {
+                    limiter_world.set_release_ms(state_dense, v);
+                }
+            }
         }
     }
 
@@ -307,6 +319,20 @@ fn read_compressor_param(world: &CompressorWorld, state_dense: u32, param: u8) -
         knee
     } else if param == CompressorParam::MakeupDb as u8 {
         makeup
+    } else {
+        0.0
+    }
+}
+
+#[inline]
+fn read_limiter_param(world: &LimiterWorld, state_dense: u32, param: u8) -> f32 {
+    let Some((ceiling, release)) = world.params_at(state_dense) else {
+        return 0.0;
+    };
+    if param == LimiterParam::CeilingDb as u8 {
+        ceiling
+    } else if param == LimiterParam::ReleaseMs as u8 {
+        release
     } else {
         0.0
     }

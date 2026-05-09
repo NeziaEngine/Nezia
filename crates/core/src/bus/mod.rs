@@ -35,6 +35,7 @@ mod tests {
         reverb: crate::effect::ReverbWorld,
         compressor: crate::effect::CompressorWorld,
         peq: crate::effect::PeakingEqWorld,
+        limiter: crate::effect::LimiterWorld,
     }
 
     impl TestFx {
@@ -46,6 +47,7 @@ mod tests {
                 reverb: crate::effect::ReverbWorld::new(),
                 compressor: crate::effect::CompressorWorld::new(),
                 peq: crate::effect::PeakingEqWorld::new(),
+                limiter: crate::effect::LimiterWorld::new(),
             }
         }
 
@@ -64,6 +66,7 @@ mod tests {
                 &mut self.reverb,
                 &mut self.compressor,
                 &mut self.peq,
+                &mut self.limiter,
                 output,
                 channels,
                 sample_count,

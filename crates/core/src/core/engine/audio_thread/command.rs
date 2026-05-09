@@ -11,7 +11,8 @@ use ringbuf::traits::Producer;
 use crate::bus::{BusComponent, BusWorld, SendDestKind};
 use crate::command::{Command, SendDestination};
 use crate::effect::{
-    CompressorWorld, EffectKind, EffectWorld, HpfWorld, LpfWorld, PeakingEqWorld, ReverbWorld,
+    CompressorWorld, EffectKind, EffectWorld, HpfWorld, LimiterWorld, LpfWorld, PeakingEqWorld,
+    ReverbWorld,
 };
 use crate::entity::EntityId;
 use crate::event::Event;
@@ -34,6 +35,7 @@ pub(super) fn process_command(
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
     peq_world: &mut PeakingEqWorld,
+    limiter_world: &mut LimiterWorld,
     event_producer: &mut ringbuf::HeapProd<Event>,
     master_bus_id: EntityId,
     metrics: &EngineMetrics,
@@ -235,6 +237,7 @@ pub(super) fn process_command(
                 reverb_world,
                 compressor_world,
                 peq_world,
+                limiter_world,
             );
         }
         Command::DespawnEffect { id } => {
@@ -248,6 +251,7 @@ pub(super) fn process_command(
                 reverb_world,
                 compressor_world,
                 peq_world,
+                limiter_world,
             );
         }
         Command::SetEffectEnabled { id, enabled } => {
@@ -264,6 +268,7 @@ pub(super) fn process_command(
                 reverb_world,
                 compressor_world,
                 peq_world,
+                limiter_world,
             );
         }
 

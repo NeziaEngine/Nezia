@@ -1,6 +1,7 @@
 mod biquad;
 mod compressor;
 mod hpf;
+mod limiter;
 mod lpf;
 mod peq;
 mod reverb;
@@ -9,6 +10,7 @@ mod world;
 
 pub use compressor::CompressorWorld;
 pub use hpf::HpfWorld;
+pub use limiter::LimiterWorld;
 pub use lpf::LpfWorld;
 pub use peq::PeakingEqWorld;
 pub use reverb::ReverbWorld;
@@ -41,6 +43,10 @@ pub const MAX_COMPRESSORS: usize = 16;
 /// 複数 chain することで構成する。LPF/HPF と同程度の余裕を持たせる。
 pub const MAX_PEQ: usize = 256;
 
+/// Phase 3-5: 単体 Limiter プール上限 (Bus 専用)。master / 集約バスに 1 体載せる
+/// 用途が中心で、Compressor (16) と同程度に抑える。
+pub const MAX_LIMITERS: usize = 16;
+
 /// EffectId は EntityId を再利用する (sparse-set ベースで二層 ID を踏襲)。
 pub type EffectId = EntityId;
 
@@ -69,6 +75,16 @@ pub enum ReverbParam {
     Wet = 2,
     Dry = 3,
     Width = 4,
+}
+
+/// Phase 3-5: 単体 Limiter パラメータインデックス。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimiterParam {
+    /// 出力上限 dB (例: -0.3)。これを超える出力は brick-wall で抑制される。
+    CeilingDb = 0,
+    /// リリース時間 ms (gain reduction の回復速度)。
+    ReleaseMs = 1,
 }
 
 /// Phase 3-5: PeakingEq パラメータインデックス。
@@ -130,6 +146,13 @@ impl EffectParamId for ReverbParam {
 
 impl EffectParamId for CompressorParam {
     const KIND: EffectKind = EffectKind::Compressor;
+    fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+impl EffectParamId for LimiterParam {
+    const KIND: EffectKind = EffectKind::Limiter;
     fn as_u8(self) -> u8 {
         self as u8
     }
@@ -200,6 +223,7 @@ mod tests {
         let mut reverb = ReverbWorld::new();
         let mut compressor = CompressorWorld::new();
         let mut peq = PeakingEqWorld::new();
+        let mut limiter = LimiterWorld::new();
         EffectSystem::apply_chain(
             &meta,
             &mut lpf,
@@ -207,6 +231,7 @@ mod tests {
             &mut reverb,
             &mut compressor,
             &mut peq,
+            &mut limiter,
             &[id],
             &mut buf,
             1,
@@ -245,6 +270,7 @@ mod tests {
         let mut reverb = ReverbWorld::new();
         let mut compressor = CompressorWorld::new();
         let mut peq = PeakingEqWorld::new();
+        let mut limiter = LimiterWorld::new();
         EffectSystem::apply_chain(
             &meta,
             &mut lpf,
@@ -252,6 +278,7 @@ mod tests {
             &mut reverb,
             &mut compressor,
             &mut peq,
+            &mut limiter,
             &[id],
             &mut buf,
             1,

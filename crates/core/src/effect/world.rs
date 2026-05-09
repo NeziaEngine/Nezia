@@ -20,6 +20,9 @@ pub enum EffectKind {
     /// Phase 3-5: パラメトリック EQ (ピーキング 1 バンド = 1 Effect)。
     /// 複数バンドは同一バスに複数 chain して構成する (Unity ParameterEQ 同設計)。
     PeakingEq = 4,
+    /// Phase 3-5: brick-wall Limiter (Bus 専用)。master / 集約バスに 1 体載せて
+    /// `|out| <= ceiling` を厳密に保証する。
+    Limiter = 5,
 }
 
 /// エフェクトを取り付ける対象。

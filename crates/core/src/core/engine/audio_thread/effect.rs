@@ -7,8 +7,8 @@
 use crate::bus::BusWorld;
 use crate::effect::{
     CompressorParam, CompressorWorld, EffectKind, EffectPosition, EffectTarget, EffectWorld,
-    HpfParam, HpfWorld, LpfParam, LpfWorld, Owner, PeakingEqParam, PeakingEqWorld, ReverbParam,
-    ReverbWorld,
+    HpfParam, HpfWorld, LimiterParam, LimiterWorld, LpfParam, LpfWorld, Owner, PeakingEqParam,
+    PeakingEqWorld, ReverbParam, ReverbWorld,
 };
 use crate::source::SourceWorld;
 
@@ -28,6 +28,7 @@ pub(super) fn spawn_effect(
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
     peq_world: &mut PeakingEqWorld,
+    limiter_world: &mut LimiterWorld,
 ) {
     // 1. owner dense を解決。
     let owner = match target {
@@ -36,8 +37,11 @@ pub(super) fn spawn_effect(
             None => return,
         },
         EffectTarget::Source(src_id) => {
-            // Source 対象 + Reverb / Compressor は Bus 専用 (Aux Bus + Send 経由で利用)。
-            if matches!(kind, EffectKind::Reverb | EffectKind::Compressor) {
+            // Source 対象 + Reverb / Compressor / Limiter は Bus 専用 (Aux Bus + Send 経由で利用)。
+            if matches!(
+                kind,
+                EffectKind::Reverb | EffectKind::Compressor | EffectKind::Limiter
+            ) {
                 return;
             }
             // Phase 2-3 では Source の Post-Spatial も未実装。
@@ -73,6 +77,10 @@ pub(super) fn spawn_effect(
             Some(d) => d,
             None => return,
         },
+        EffectKind::Limiter => match limiter_world.spawn(id) {
+            Some(d) => d,
+            None => return,
+        },
     };
 
     // 3. owner のチェーンに slot を追加。失敗したら state も巻き戻す。
@@ -97,6 +105,9 @@ pub(super) fn spawn_effect(
             }
             EffectKind::PeakingEq => {
                 let _ = peq_world.despawn(state_index);
+            }
+            EffectKind::Limiter => {
+                let _ = limiter_world.despawn(state_index);
             }
         }
         return;
@@ -124,6 +135,7 @@ pub(super) fn despawn_effect(
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
     peq_world: &mut PeakingEqWorld,
+    limiter_world: &mut LimiterWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -153,6 +165,7 @@ pub(super) fn despawn_effect(
         EffectKind::Reverb => reverb_world.despawn(state_index),
         EffectKind::Compressor => compressor_world.despawn(state_index),
         EffectKind::PeakingEq => peq_world.despawn(state_index),
+        EffectKind::Limiter => limiter_world.despawn(state_index),
     };
     if let Some((moved_id, new_state_index)) = moved {
         let _ = moved_id;
@@ -165,6 +178,7 @@ pub(super) fn despawn_effect(
             EffectKind::Reverb => reverb_world.len() as u32,
             EffectKind::Compressor => compressor_world.len() as u32,
             EffectKind::PeakingEq => peq_world.len() as u32,
+            EffectKind::Limiter => limiter_world.len() as u32,
         };
         effect_world.remap_state_index(kind, last_after, new_state_index);
     }
@@ -181,6 +195,7 @@ pub(super) fn apply_effect_param(
     reverb_world: &mut ReverbWorld,
     compressor_world: &mut CompressorWorld,
     peq_world: &mut PeakingEqWorld,
+    limiter_world: &mut LimiterWorld,
 ) {
     let Some(meta_dense) = effect_world.resolve(id) else {
         return;
@@ -237,6 +252,13 @@ pub(super) fn apply_effect_param(
                 peq_world.set_q(state_index, value);
             } else if param == PeakingEqParam::GainDb as u8 {
                 peq_world.set_gain_db(state_index, value);
+            }
+        }
+        EffectKind::Limiter => {
+            if param == LimiterParam::CeilingDb as u8 {
+                limiter_world.set_ceiling_db(state_index, value);
+            } else if param == LimiterParam::ReleaseMs as u8 {
+                limiter_world.set_release_ms(state_index, value);
             }
         }
     }
