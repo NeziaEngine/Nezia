@@ -180,6 +180,13 @@ impl CompressorWorld {
         ))
     }
 
+    /// flat な sidechain_buffer 全体への可変参照 (SourceMixingSystem の Send tap で raw ptr 化して使う)。
+    /// レイアウトは `[dense * MAX_MIX_BUFFER_SIZE .. (dense+1) * MAX_MIX_BUFFER_SIZE]` 固定。
+    #[inline]
+    pub fn sidechain_buffer_mut(&mut self) -> &mut [f32] {
+        &mut self.sidechain_buffer
+    }
+
     /// dense index で sidechain 入力バッファのスライスを取得 (BusSystem の Send tap 書き込み用)。
     #[inline]
     pub fn sidechain_slice_mut(&mut self, dense: u32, sample_count: usize) -> Option<&mut [f32]> {

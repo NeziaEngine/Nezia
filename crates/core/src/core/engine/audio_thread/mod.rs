@@ -165,6 +165,7 @@ impl AudioThread {
                     &self.shared_snapshots,
                     &mut self.active_snapshot,
                     &self.bus_world,
+                    &self.source_world,
                     &self.effect_world,
                     &self.effect_worlds,
                 );
@@ -189,6 +190,7 @@ impl AudioThread {
                 &mut self.active_snapshot,
                 sample_count as u64,
                 &mut self.bus_world,
+                &mut self.source_world,
                 &mut self.effect_worlds,
             );
         }

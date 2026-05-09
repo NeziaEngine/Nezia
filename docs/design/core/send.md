@@ -23,6 +23,7 @@ Unity AudioMixer の Send / Receive / Duck Volume 互換 + 業界標準 (Wwise /
 ### このフェーズでは扱わない
 
 - **Source → Bus Send**。Source は引き続き単一の `output_bus` のみ持つ (`play_to_bus` パターン)。Aux 効果が必要な場合は Source → Bus → (Send) → Aux Bus と中継する。理由は [なぜ Source Send を入れないか](#なぜ-source-send-を入れないか) に詳述。
+  - **追記 (Phase 3-3 後追い)**: Wwise / FMOD の標準機能である **User-Defined Aux Send (per-event aux send)** との parity を取るため、`add_source_send` / `add_source_send_to_compressor` を別途追加した。同じ Reverb Bus を使い回しつつ「銃声は dry、足音は wet」のように音ごとに reverb 量を変えるユースケースに対応する。実装は SoA を `SourceWorld` 側にもう一組持ち、`SourceMixingSystem` が main mix と同じ post-spatial mono 信号を mono_scratch 経由で各 send 宛先に加算する形。SendId プールは bus 起点と共有しているため、`set_send_gain` / `remove_send` / Snapshot は audio thread 側で `bus_world` → `source_world` の二段引きで dispatch する。Source despawn 時は `Event::SourceDespawned` 経由で main thread が SendId を一括解放する (per-event aux send 自動 cleanup の Wwise 規約)。
 - **Send → Effect の sidechain 入力以外のルート**。Send の宛先は「バス」もしくは「Compressor の sidechain 入力」の 2 択であり、任意のエフェクト内部入力に Send することは扱わない。
 - **マルチバンド / ルックアヘッド付き Compressor**。Phase 3-3 はピーク検出 + RMS 平均 + attack/release のシンプルな 1 段。マルチバンドは Phase 3-5 (DSP 拡充) で再検討。
 - **Lookahead サイドチェーン**。Send 経路に遅延を入れるとレイテンシ管理が複雑化するため、当面はゼロレイテンシ Send + ルックアヘッドなし Compressor で固定。

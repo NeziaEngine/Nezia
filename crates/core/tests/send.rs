@@ -74,6 +74,54 @@ fn add_send_cycle_via_existing_send_rejected() {
 }
 
 #[test]
+fn source_send_to_bus_basic() {
+    // Wwise / FMOD 互換の per-event aux send が API として通ることを確認する。
+    // 実音響挙動は source/mod.rs のユニットテスト群で網羅。
+    let mut engine = match SoundEngine::new() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let aux = engine.create_bus(1.0).expect("create aux bus");
+    // 仮想 source EntityId (実際の spawn は audio thread 側、main 側は EntityId 発行のみ)。
+    // ここでは set_send_gain / remove が SendId に効くことだけ検査する。
+    // Source の発行は通常 play_with_callback 等で行うが、ここでは簡略化のため
+    // 任意 EntityId を渡し audio thread 側 silently drop の経路に任せる。
+    let dummy_src = nezia::EntityId {
+        index: 12345,
+        generation: 0,
+    };
+    let sid = engine
+        .add_source_send(dummy_src, aux, SendPosition::Post, 0.4)
+        .expect("add_source_send should succeed (main thread allocates)");
+    assert!(engine.set_send_gain(sid, 0.25));
+    assert!(engine.set_send_position(sid, SendPosition::Pre));
+    assert!(engine.remove_send(sid));
+    assert!(!engine.set_send_gain(sid, 0.1));
+}
+
+#[test]
+fn source_send_with_invalid_dst_rejected() {
+    let mut engine = match SoundEngine::new() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let bogus_dst = nezia::EntityId {
+        index: 9999,
+        generation: 0,
+    };
+    let dummy_src = nezia::EntityId {
+        index: 1,
+        generation: 0,
+    };
+    assert!(
+        engine
+            .add_source_send(dummy_src, bogus_dst, SendPosition::Post, 0.5)
+            .is_none(),
+        "invalid dst should fail at main thread before SendId allocation"
+    );
+}
+
+#[test]
 fn destroy_bus_frees_related_sends() {
     let mut engine = match SoundEngine::new() {
         Ok(e) => e,

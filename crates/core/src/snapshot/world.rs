@@ -123,14 +123,17 @@ pub struct ActiveSnapshot {
     pub effect_to: Vec<f32>,
 
     // ── Send gain (Phase 3-3) ──
-    /// Send 元バス dense (apply 時に resolve_send で取得した bus_dense)。
+    /// Send 元 (bus / source) の dense index (apply 時に resolve_send で取得)。
+    /// `send_gain_is_source[i]` が true なら source dense、false なら bus dense。
     pub send_gain_bus_dense: Vec<u32>,
-    /// 当該バス内 send slot (apply 時に resolve_send で取得)。
+    /// 当該 owner 内 send slot (apply 時に resolve_send で取得)。
     pub send_gain_slot: Vec<u8>,
     /// fade 開始時点の send gain。
     pub send_gain_from: Vec<f32>,
     /// ターゲット send gain。
     pub send_gain_to: Vec<f32>,
+    /// owner 種別 (true = source 起点 / false = bus 起点)。`send_gain_bus_dense` と同じ長さ。
+    pub send_gain_is_source: Vec<bool>,
 
     // ── fade 進行 ──
     /// fade 全長 (サンプル単位)。0 のときは即時適用 + ActiveSnapshot::clear。
@@ -157,6 +160,7 @@ impl ActiveSnapshot {
             send_gain_slot: Vec::new(),
             send_gain_from: Vec::new(),
             send_gain_to: Vec::new(),
+            send_gain_is_source: Vec::new(),
             fade_total_samples: 0,
             fade_remaining_samples: 0,
         }
@@ -198,6 +202,7 @@ impl ActiveSnapshot {
         self.send_gain_slot.clear();
         self.send_gain_from.clear();
         self.send_gain_to.clear();
+        self.send_gain_is_source.clear();
         self.fade_total_samples = 0;
         self.fade_remaining_samples = 0;
     }

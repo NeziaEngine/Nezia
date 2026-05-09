@@ -174,31 +174,136 @@ impl SoundEngine {
             .is_ok()
     }
 
-    /// Send を削除する。stale な SendId なら `false`。
-    #[must_use]
-    pub fn remove_send(&mut self, id: SendId) -> bool {
-        if self.bus_routing.send(id).is_none() {
-            return false;
-        }
-        self.bus_routing.remove_send(id);
-        let order = self.bus_routing.compute_process_order();
+    /// ソース起点 Send (User-Defined Aux Send) を作成する。
+    ///
+    /// Wwise / FMOD の per-event aux send 互換。同じ Reverb Bus を共有しつつ「銃声は dry、
+    /// 足音は wet」のように音ごとに reverb 量を変えるのに使う。
+    ///
+    /// 失敗ケース (戻り値 `None`):
+    /// - `dst` が無効
+    /// - `MAX_SENDS` プール枯渇 / `MAX_SENDS_PER_SOURCE` 超過 (audio thread 側で silently drop)
+    /// - コマンドリングバッファ満杯
+    ///
+    /// `src` の有効性 (= 現在も spawn 中か) は audio thread 側で resolve するため、
+    /// メインスレッドでは早期チェックしない。已に despawn 済みの source に貼った場合は
+    /// audio thread が無視し、`Event::SourceDespawned` 経路で自動解放される。
+    pub fn add_source_send(
+        &mut self,
+        src: EntityId,
+        dst: EntityId,
+        position: SendPosition,
+        gain: f32,
+    ) -> Option<SendId> {
+        let dst_dense = self.bus_routing.resolve_dense(dst)?;
+        let send_id = self.send_slots.alloc()?;
 
         if self
             .command_producer
-            .try_push(Command::RemoveSend { id })
+            .try_push(Command::AddSourceSend {
+                id: send_id,
+                src_entity: src,
+                dst: SendDestination::Bus { dense: dst_dense },
+                position,
+                gain,
+            })
             .is_err()
         {
-            return false;
+            self.send_slots.free(send_id);
+            return None;
         }
-        self.push_process_order(&order);
-        self.send_slots.free(id);
-        true
+        if let Some(slot) = self.source_sends.get_mut(send_id.index as usize) {
+            *slot = Some((send_id, src));
+        }
+        Some(send_id)
+    }
+
+    /// ソース起点 Compressor sidechain Send を作成する。
+    ///
+    /// バス起点版 (`add_send_to_compressor`) と異なり sidechain 駆動はサイクル検出 / topo sort
+    /// に絡まない (source は DAG 内ノードではなく leaf 入力なので)。
+    ///
+    /// 失敗ケース: `compressor` が `EffectKind::Compressor` でない、プール枯渇、コマンド満杯。
+    pub fn add_source_send_to_compressor(
+        &mut self,
+        src: EntityId,
+        compressor: EffectId,
+        position: SendPosition,
+        gain: f32,
+    ) -> Option<SendId> {
+        // 主スレッド側では Compressor の存在確認だけ行う (audio thread が dense 解決)。
+        self.compressor_owners.get(&compressor)?;
+        let send_id = self.send_slots.alloc()?;
+
+        if self
+            .command_producer
+            .try_push(Command::AddSourceSend {
+                id: send_id,
+                src_entity: src,
+                dst: SendDestination::CompressorSidechain { effect: compressor },
+                position,
+                gain,
+            })
+            .is_err()
+        {
+            self.send_slots.free(send_id);
+            return None;
+        }
+        if let Some(slot) = self.source_sends.get_mut(send_id.index as usize) {
+            *slot = Some((send_id, src));
+        }
+        Some(send_id)
+    }
+
+    /// `id` がソース起点 Send (= `source_sends` ミラーに存在) か判定するヘルパ。
+    fn is_source_send(&self, id: SendId) -> bool {
+        self.source_sends
+            .get(id.index as usize)
+            .and_then(|s| s.as_ref())
+            .map(|(sid, _)| sid.generation == id.generation)
+            .unwrap_or(false)
+    }
+
+    /// Send を削除する。stale な SendId なら `false`。
+    #[must_use]
+    pub fn remove_send(&mut self, id: SendId) -> bool {
+        // バス起点 → 既存ロジック (DAG 反映 + topo sort 再計算)。
+        if self.bus_routing.send(id).is_some() {
+            self.bus_routing.remove_send(id);
+            let order = self.bus_routing.compute_process_order();
+
+            if self
+                .command_producer
+                .try_push(Command::RemoveSend { id })
+                .is_err()
+            {
+                return false;
+            }
+            self.push_process_order(&order);
+            self.send_slots.free(id);
+            return true;
+        }
+        // ソース起点 → DAG / topo sort に絡まないので command + slot 解放のみ。
+        if self.is_source_send(id) {
+            if self
+                .command_producer
+                .try_push(Command::RemoveSend { id })
+                .is_err()
+            {
+                return false;
+            }
+            if let Some(slot) = self.source_sends.get_mut(id.index as usize) {
+                *slot = None;
+            }
+            self.send_slots.free(id);
+            return true;
+        }
+        false
     }
 
     /// Send の gain を設定する。
     #[must_use]
     pub fn set_send_gain(&mut self, id: SendId, gain: f32) -> bool {
-        if self.bus_routing.send(id).is_none() {
+        if self.bus_routing.send(id).is_none() && !self.is_source_send(id) {
             return false;
         }
         self.command_producer
@@ -209,7 +314,7 @@ impl SoundEngine {
     /// Send のタップ位置 (Pre-Fader / Post-Fader) を変更する。
     #[must_use]
     pub fn set_send_position(&mut self, id: SendId, position: SendPosition) -> bool {
-        if self.bus_routing.send(id).is_none() {
+        if self.bus_routing.send(id).is_none() && !self.is_source_send(id) {
             return false;
         }
         self.command_producer

@@ -268,13 +268,21 @@ pub(super) fn process_command(
             &mut effect_worlds.compressor,
         ),
         Command::RemoveSend { id } => {
-            bus_world.remove_send(id);
+            // SendId プールは bus / source 起点で共有しているため、bus 側で
+            // 見つからなければ source 側に dispatch する。
+            if !bus_world.remove_send(id) {
+                let _ = source_world.remove_send(id);
+            }
         }
         Command::SetSendGain { id, gain } => {
-            bus_world.set_send_gain(id, gain);
+            if !bus_world.set_send_gain(id, gain) {
+                let _ = source_world.set_send_gain(id, gain);
+            }
         }
         Command::SetSendPosition { id, position } => {
-            bus_world.set_send_position(id, position);
+            if !bus_world.set_send_position(id, position) {
+                let _ = source_world.set_send_position(id, position);
+            }
         }
         Command::SetCompressorSidechainEnabled { id, enabled } => {
             handle_set_compressor_sidechain(
@@ -284,6 +292,22 @@ pub(super) fn process_command(
                 &mut effect_worlds.compressor,
             );
         }
+        Command::AddSourceSend {
+            id,
+            src_entity,
+            dst,
+            position,
+            gain,
+        } => handle_add_source_send(
+            id,
+            src_entity,
+            dst,
+            position,
+            gain,
+            source_world,
+            effect_world,
+            &mut effect_worlds.compressor,
+        ),
     }
 }
 
@@ -383,6 +407,41 @@ fn handle_add_send(
         }
     };
     bus_world.add_send(src_dense as usize, id, dst_dense, dest_kind, gain, position);
+}
+
+/// `Command::AddSourceSend` 本体。`src_entity` を source dense に解決し、`dst` が
+/// CompressorSidechain の場合は effect_id → CompressorWorld dense に解決する。
+/// 解決失敗 / 種別不一致は no-op (= main 側で発行済みの SendId は使われずに浮く)。
+#[allow(clippy::too_many_arguments)]
+fn handle_add_source_send(
+    id: crate::bus::SendId,
+    src_entity: EntityId,
+    dst: SendDestination,
+    position: crate::bus::SendPosition,
+    gain: f32,
+    source_world: &mut crate::source::SourceWorld,
+    effect_world: &EffectWorld,
+    compressor_world: &mut CompressorWorld,
+) {
+    let Some(src_dense) = source_world.resolve(src_entity) else {
+        return;
+    };
+    let (dst_dense, dest_kind) = match dst {
+        SendDestination::Bus { dense } => (dense, SendDestKind::Bus),
+        SendDestination::CompressorSidechain { effect } => {
+            let Some(meta_dense) = effect_world.resolve(effect) else {
+                return;
+            };
+            if effect_world.kinds()[meta_dense] != EffectKind::Compressor {
+                return;
+            }
+            let state_dense = effect_world.state_indices()[meta_dense];
+            // Sidechain mode を自動で有効化 (`bind_compressor_sidechain` の暗黙呼出)。
+            compressor_world.set_use_sidechain(state_dense, true);
+            (state_dense, SendDestKind::CompressorSidechain)
+        }
+    };
+    source_world.add_send(src_dense, id, dst_dense, dest_kind, gain, position);
 }
 
 /// `Command::SetCompressorSidechainEnabled` 本体。Compressor 以外の effect_id は no-op。

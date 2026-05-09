@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
+use crate::bus::{MAX_MIX_BUFFER_SIZE, SendDestKind};
 use crate::effect::{EffectSystem, EffectWorld, EffectWorlds};
 use crate::spatial::{AttenuationCurve, SpatialSystem, SpatialWorld};
 
+use super::MAX_SENDS_PER_SOURCE;
 use super::virtualizer::VoiceVirtualizer;
 use super::world::{SourceState, SourceWorld};
 
@@ -74,6 +76,20 @@ impl SourceMixingSystem {
         // Scheduled は state != Playing で virtualizer から自然に除外される。
         VoiceVirtualizer::rebalance(world, spatial);
 
+        // Source 起点 Send 用の Compressor sidechain_buffer raw ptr を 1 度だけ取得。
+        // mix_static / mix_streaming へ &mut EffectWorlds を渡すために raw ptr を別経路で
+        // 持ち回る (借用衝突を回避)。bus_mix_buffer も同様。
+        // SAFETY: 本ループ中 sidechain_buffer / bus_mix_buffer のサイズは変わらない
+        //   (audio thread 上 spawn/despawn は前段の process_command で完了済み)。
+        //   send 宛先と本線 bus_buf が同一バスを指す場合は加算ミックス (`+=`) のみで
+        //   正常動作する (順序は決定的だが意味は変わらない)。
+        let (sidechain_ptr, sidechain_len) = {
+            let buf = effect_worlds.compressor.sidechain_buffer_mut();
+            (buf.as_mut_ptr(), buf.len())
+        };
+        let bus_mix_ptr = bus_mix_buffer.as_mut_ptr();
+        let bus_mix_len = bus_mix_buffer.len();
+
         // Phase 2: ミキシング。
         for source_i in 0..source_count {
             if world.state[source_i] != SourceState::Playing {
@@ -134,6 +150,58 @@ impl SourceMixingSystem {
             let chain_copy: [crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_SOURCE] =
                 world.pre_chain[source_i];
 
+            // Source 起点 Send (User-Defined Aux Send) を解決して raw ptr 化する。
+            // 宛先は Bus mix_buffer の `dest_dense` 区間か Compressor sidechain_buffer の
+            // 同区間。sub_byte_offset を本線と揃えて先頭を一致させる (PlayScheduled で
+            // 途中発音した場合に send 側もその offset から書き始める)。
+            let send_count = world.send_count[source_i] as usize;
+            let mut send_outputs: [SendOutput; MAX_SENDS_PER_SOURCE] = [SendOutput {
+                dest_ptr: std::ptr::null_mut(),
+                dest_len: 0,
+                gain: 0.0,
+            };
+                MAX_SENDS_PER_SOURCE];
+            let mut active_sends = 0usize;
+            for slot in 0..send_count {
+                let (dest_dense, gain, _pos_u8, kind_u8) = world.send_at(source_i, slot);
+                let kind = match SendDestKind::from_u8(kind_u8) {
+                    Some(k) => k,
+                    None => continue,
+                };
+                let (base_ptr, base_len, area_start) = match kind {
+                    SendDestKind::Bus => {
+                        let start = dest_dense as usize * MAX_MIX_BUFFER_SIZE;
+                        (bus_mix_ptr, bus_mix_len, start)
+                    }
+                    SendDestKind::CompressorSidechain => {
+                        let start = dest_dense as usize * MAX_MIX_BUFFER_SIZE;
+                        (sidechain_ptr, sidechain_len, start)
+                    }
+                };
+                let area_end = area_start + MAX_MIX_BUFFER_SIZE;
+                if area_end > base_len {
+                    continue;
+                }
+                let write_start = area_start + sub_byte_offset;
+                let write_end = area_start + process_len;
+                if write_start >= write_end || write_end > base_len {
+                    continue;
+                }
+                // SAFETY: write_start..write_end は base buffer 内の有効範囲で、本線
+                //   bus_buf と同一区間を指す可能性はあるが、`apply_send_outputs` は
+                //   `+=` のみで書き込むためアトミック性以外の挙動上の問題はない
+                //   (audio thread は単一スレッドなのでアトミック性も不要)。
+                let dest_ptr = unsafe { base_ptr.add(write_start) };
+                let dest_len = write_end - write_start;
+                send_outputs[active_sends] = SendOutput {
+                    dest_ptr,
+                    dest_len,
+                    gain,
+                };
+                active_sends += 1;
+            }
+            let send_outputs_slice: &[SendOutput] = &send_outputs[..active_sends];
+
             // ── per-source 1 度の cold dispatch: 静的か streaming か ──
             if let Some(samples) = audio_buf.static_samples() {
                 let src_frame_count = audio_buf.frame_count();
@@ -154,6 +222,7 @@ impl SourceMixingSystem {
                     mono_scratch,
                     effect_world,
                     effect_worlds,
+                    send_outputs_slice,
                 );
                 world.sample_offset[source_i] = new_offset;
             } else if let Some(stream) = audio_buf.streaming_state() {
@@ -171,6 +240,7 @@ impl SourceMixingSystem {
                     mono_scratch,
                     effect_world,
                     effect_worlds,
+                    send_outputs_slice,
                 );
                 // streaming の sample_offset は累積消費フレーム数 (file-frame ではない)。
                 world.sample_offset[source_i] += consumed as f32;
@@ -238,6 +308,62 @@ fn activate_scheduled(
     }
 }
 
+/// 1 個の send 宛先 (raw pointer + 長さ + 線形 gain)。
+///
+/// 宛先は `BusWorld::mix_buffer` の一部か `CompressorWorld::sidechain_buffer` の一部。
+/// `apply_send_outputs` で post-spatial mono 信号を `(left_gain, right_gain)` × `gain`
+/// で interleaved に加算ミックスする。raw ptr を使うのは「宛先と本線 bus_buf が重複しないこと」
+/// (source の `output_bus_dense` と send `dest_dense` が異なる、もしくは `CompressorWorld`
+/// 側) を呼出側で保証しているため、Rust の借用チェッカでは表現できない 2 個目以上の
+/// `&mut [f32]` を持ち回るのを避けるため。
+#[derive(Copy, Clone)]
+struct SendOutput {
+    dest_ptr: *mut f32,
+    dest_len: usize,
+    gain: f32,
+}
+
+/// `mono_scratch[..total_frames]` を `(left_gain, right_gain) × send.gain` で interleaved に
+/// 各 send 宛先へ加算する。`device_channels >= 3` のときは L/R 平均をその他チャネルに流す
+/// (本線 bus_buf と同一規約)。
+#[inline]
+fn apply_send_outputs(
+    mono_scratch: &[f32],
+    total_frames: usize,
+    left_gain: f32,
+    right_gain: f32,
+    device_channels: usize,
+    send_outputs: &[SendOutput],
+) {
+    if send_outputs.is_empty() {
+        return;
+    }
+    for out in send_outputs {
+        if out.dest_ptr.is_null() || out.dest_len == 0 {
+            continue;
+        }
+        // SAFETY: 呼出側が dest_ptr/dest_len の有効性と非エイリアスを保証する。
+        let dest = unsafe { std::slice::from_raw_parts_mut(out.dest_ptr, out.dest_len) };
+        let l = left_gain * out.gain;
+        let r = right_gain * out.gain;
+        for (n, frame) in dest
+            .chunks_mut(device_channels)
+            .take(total_frames)
+            .enumerate()
+        {
+            let s = mono_scratch[n];
+            for (ch, slot) in frame.iter_mut().enumerate() {
+                let g = match ch {
+                    0 => l,
+                    1 => r,
+                    _ => (l + r) * 0.5,
+                };
+                *slot += s * g;
+            }
+        }
+    }
+}
+
 /// 静的バッファのミキシング (looping wrap あり、random access)。
 /// Phase 2-3 までの実装をそのまま関数化。
 #[allow(clippy::too_many_arguments)]
@@ -258,11 +384,16 @@ fn mix_static(
     mono_scratch: &mut [f32],
     effect_world: &EffectWorld,
     effect_worlds: &mut EffectWorlds,
+    send_outputs: &[SendOutput],
 ) -> f32 {
     let frame_count_f = src_frame_count as f32;
     let mut offset = initial_offset;
 
-    if pre_count > 0 && total_frames <= mono_scratch.len() {
+    // Send が貼られていれば pre-chain 有無に関わらず mono_scratch 経由で書き出す。
+    // `pre_count == 0 && send_outputs.is_empty()` の最速経路は従来通り interleaved 直書き。
+    let needs_mono_path = pre_count > 0 || !send_outputs.is_empty();
+
+    if needs_mono_path && total_frames <= mono_scratch.len() {
         let mut local_offset = offset;
         for n in 0..total_frames {
             if looping && local_offset >= frame_count_f {
@@ -294,13 +425,15 @@ fn mix_static(
             mono_scratch[n] = acc / src_channels.max(1) as f32;
             local_offset += advance;
         }
-        EffectSystem::apply_chain(
-            effect_world,
-            effect_worlds,
-            &chain_copy[..pre_count],
-            &mut mono_scratch[..total_frames],
-            1,
-        );
+        if pre_count > 0 {
+            EffectSystem::apply_chain(
+                effect_world,
+                effect_worlds,
+                &chain_copy[..pre_count],
+                &mut mono_scratch[..total_frames],
+                1,
+            );
+        }
         for (n, frame) in bus_buf
             .chunks_mut(device_channels)
             .take(total_frames)
@@ -316,6 +449,14 @@ fn mix_static(
                 *out += s * gain;
             }
         }
+        apply_send_outputs(
+            mono_scratch,
+            total_frames,
+            left_gain,
+            right_gain,
+            device_channels,
+            send_outputs,
+        );
         offset = local_offset;
     } else {
         for frame in bus_buf.chunks_mut(device_channels) {
@@ -374,6 +515,7 @@ fn mix_streaming(
     mono_scratch: &mut [f32],
     effect_world: &EffectWorld,
     effect_worlds: &mut EffectWorlds,
+    send_outputs: &[SendOutput],
 ) -> usize {
     // ring から最大限の contiguous slice を peek (lookahead +2 frame で線形補間用)。
     let needed = ((total_frames as f32 * advance.abs()).ceil() as usize).saturating_add(2);
@@ -393,7 +535,9 @@ fn mix_streaming(
     // looping wrap は worker 責務なので静的版の `frame_count_f` 比較は不要。
     // 線形補間の上限を win_frames - 1 で守るだけ。
 
-    if pre_count > 0 && total_frames <= mono_scratch.len() {
+    let needs_mono_path = pre_count > 0 || !send_outputs.is_empty();
+
+    if needs_mono_path && total_frames <= mono_scratch.len() {
         let mut local_offset = 0.0_f32;
         let mut underrun_at: Option<usize> = None;
         for (n, slot) in mono_scratch.iter_mut().take(total_frames).enumerate() {
@@ -419,13 +563,15 @@ fn mix_streaming(
             }
             stream.mark_underrun();
         }
-        EffectSystem::apply_chain(
-            effect_world,
-            effect_worlds,
-            &chain_copy[..pre_count],
-            &mut mono_scratch[..total_frames],
-            1,
-        );
+        if pre_count > 0 {
+            EffectSystem::apply_chain(
+                effect_world,
+                effect_worlds,
+                &chain_copy[..pre_count],
+                &mut mono_scratch[..total_frames],
+                1,
+            );
+        }
         for (n, frame) in bus_buf
             .chunks_mut(device_channels)
             .take(total_frames)
@@ -441,6 +587,14 @@ fn mix_streaming(
                 *out += s * gain;
             }
         }
+        apply_send_outputs(
+            mono_scratch,
+            total_frames,
+            left_gain,
+            right_gain,
+            device_channels,
+            send_outputs,
+        );
         let consumed = (local_offset.floor() as usize).min(win_frames);
         stream.ring.advance_read(consumed);
         return consumed;

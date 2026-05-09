@@ -241,3 +241,33 @@ fn snapshot_with_reverb_param_applies() {
     thread::sleep(Duration::from_millis(200));
     engine.destroy_snapshot(snap);
 }
+
+#[test]
+fn snapshot_with_source_send_gain_compiles() {
+    // Wwise 互換の per-event aux send。Snapshot で gain 補間の対象にできることを確認する。
+    // 実装上 SendId は bus / source 起点を区別せず受け付け、apply 時に
+    // source_world.resolve_send を経由する。ここでは API パスの疎通のみを確認する
+    // (実 source 状態は audio thread 上で独立に変動するため波形検証は別途)。
+    use nezia::SendPosition;
+    let mut engine = match SoundEngine::new() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let aux = engine.create_bus(1.0).expect("create aux");
+    let dummy_src = nezia::EntityId {
+        index: 1,
+        generation: 0,
+    };
+    let sid = engine
+        .add_source_send(dummy_src, aux, SendPosition::Post, 0.5)
+        .expect("source send");
+    let snap = engine
+        .snapshot_builder()
+        .set_send_gain(sid, 0.0)
+        .commit()
+        .unwrap();
+    assert!(engine.apply_snapshot(snap, 0.05));
+    thread::sleep(Duration::from_millis(120));
+    engine.destroy_snapshot(snap);
+    assert!(engine.remove_send(sid));
+}
