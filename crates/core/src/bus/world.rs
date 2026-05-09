@@ -3,30 +3,8 @@ use crate::effect::{EffectId, MAX_EFFECTS_PER_BUS};
 use crate::entity::EntityId;
 
 use super::send::{SendDestKind, SendId, SendPosition};
+use super::send_table::SendTable;
 use super::{MAX_BUSES, MAX_MIX_BUFFER_SIZE, MAX_SENDS, MAX_SENDS_PER_BUS};
-
-/// SendId.index → (bus_dense, slot) の逆引きエントリ。
-///
-/// `bus_dense == u32::MAX` は未割当。`generation` は割当時の SendId.generation を保持し、
-/// stale な操作 (slot 再利用後の古い SendId) を弾くのに使う。
-#[derive(Copy, Clone, Debug)]
-pub(super) struct SendLookup {
-    pub(super) bus_dense: u32,
-    pub(super) slot: u8,
-    pub(super) generation: u32,
-}
-
-impl SendLookup {
-    pub(super) const EMPTY: SendLookup = SendLookup {
-        bus_dense: u32::MAX,
-        slot: 0,
-        generation: 0,
-    };
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.bus_dense == u32::MAX
-    }
-}
 
 /// バス生成時の初期パラメータ。mute は含まない。
 pub struct BusComponent {
@@ -62,24 +40,8 @@ pub struct BusWorld {
     pub(super) post_count: Vec<u8>,
 
     // ── Send (Phase 3-3) ──
-    /// 各バスから出ていく Send の宛先 dense index。
-    /// `send_dest_kind` の値によって BusWorld dense か CompressorWorld dense かが変わる。
-    pub(super) send_dest_dense: Vec<[u32; MAX_SENDS_PER_BUS]>,
-    /// 各 Send の gain。
-    pub(super) send_gain: Vec<[f32; MAX_SENDS_PER_BUS]>,
-    /// 各 Send のタップ位置 (`SendPosition` を u8 で格納)。
-    pub(super) send_position: Vec<[u8; MAX_SENDS_PER_BUS]>,
-    /// 各 Send の宛先種別 (`SendDestKind` を u8 で格納、PR2)。
-    pub(super) send_dest_kind: Vec<[u8; MAX_SENDS_PER_BUS]>,
-    /// 各 Send の SendId (despawn / Set 系の逆引きと整合確認用)。
-    pub(super) send_id: Vec<[SendId; MAX_SENDS_PER_BUS]>,
-    /// 各バスの有効 Send 数 (0..=MAX_SENDS_PER_BUS)。
-    pub(super) send_count: Vec<u8>,
-
-    /// SendId.index → (bus_dense, slot) の逆引き。`SendLookup::EMPTY` で未割当。
-    /// audio thread 側 (このフィールド) と main thread 側 (`SendIdAllocator`) の generation を
-    /// 突き合わせて stale 検出する。サイズは `MAX_SENDS` で固定確保。
-    send_lookup: Vec<SendLookup>,
+    /// バス起点 Send の SoA + SendId 逆引き。`SourceWorld::sends` と同形 (`SendTable<CAP>`)。
+    pub(super) sends: SendTable<MAX_SENDS_PER_BUS>,
 
     // ── ミキシング ──
     /// フラットな中間ミキシングバッファ。
@@ -112,13 +74,7 @@ impl BusWorld {
             pre_count: Vec::with_capacity(MAX_BUSES),
             post_chain: Vec::with_capacity(MAX_BUSES),
             post_count: Vec::with_capacity(MAX_BUSES),
-            send_dest_dense: Vec::with_capacity(MAX_BUSES),
-            send_gain: Vec::with_capacity(MAX_BUSES),
-            send_position: Vec::with_capacity(MAX_BUSES),
-            send_dest_kind: Vec::with_capacity(MAX_BUSES),
-            send_id: Vec::with_capacity(MAX_BUSES),
-            send_count: Vec::with_capacity(MAX_BUSES),
-            send_lookup: vec![SendLookup::EMPTY; MAX_SENDS],
+            sends: SendTable::new(MAX_BUSES, MAX_SENDS),
             mix_buffer: vec![0.0; MAX_BUSES * MAX_MIX_BUFFER_SIZE],
             process_order: Vec::with_capacity(MAX_BUSES),
             master_entity,
@@ -162,22 +118,19 @@ impl BusWorld {
             }; MAX_EFFECTS_PER_BUS],
         );
         self.post_count.push(0);
-        self.send_dest_dense.push([0; MAX_SENDS_PER_BUS]);
-        self.send_gain.push([0.0; MAX_SENDS_PER_BUS]);
-        self.send_position.push([0; MAX_SENDS_PER_BUS]);
-        self.send_dest_kind.push([0; MAX_SENDS_PER_BUS]);
-        self.send_id.push([SendId::INVALID; MAX_SENDS_PER_BUS]);
-        self.send_count.push(0);
+        self.sends.push_empty_row();
     }
 
-    /// バス despawn 時に Send 関連の dense 配列を pop して整合を保つ（内部用）。
-    fn pop_send_components(&mut self) {
-        self.send_dest_dense.pop();
-        self.send_gain.pop();
-        self.send_position.pop();
-        self.send_dest_kind.pop();
-        self.send_id.pop();
-        self.send_count.pop();
+    /// alloc 失敗時に push 済みコンポーネントを巻き戻す（内部用）。
+    fn pop_components(&mut self) {
+        self.gain.pop();
+        self.muted.pop();
+        self.output_bus_dense.pop();
+        self.pre_chain.pop();
+        self.pre_count.pop();
+        self.post_chain.pop();
+        self.post_count.pop();
+        self.sends.pop_row();
     }
 
     /// 指定した EntityId でバスを生成する（サウンドスレッド用）。
@@ -187,15 +140,7 @@ impl BusWorld {
     pub fn spawn_with_id(&mut self, id: EntityId, params: BusComponent) -> bool {
         self.insert_components(params.gain, params.output_bus_dense);
         let Some((_id, _dense)) = self.entities.alloc_at_index(id.index) else {
-            // alloc 失敗時、push したコンポーネントを除去する。
-            self.gain.pop();
-            self.muted.pop();
-            self.output_bus_dense.pop();
-            self.pre_chain.pop();
-            self.pre_count.pop();
-            self.post_chain.pop();
-            self.post_count.pop();
-            self.pop_send_components();
+            self.pop_components();
             return false;
         };
         true
@@ -205,15 +150,7 @@ impl BusWorld {
     pub fn spawn(&mut self, params: BusComponent) -> Option<EntityId> {
         self.insert_components(params.gain, params.output_bus_dense);
         let Some((id, _dense)) = self.entities.alloc() else {
-            // alloc 失敗時、push したコンポーネントを除去する。
-            self.gain.pop();
-            self.muted.pop();
-            self.output_bus_dense.pop();
-            self.pre_chain.pop();
-            self.pre_count.pop();
-            self.post_chain.pop();
-            self.post_count.pop();
-            self.pop_send_components();
+            self.pop_components();
             return None;
         };
         Some(id)
@@ -235,35 +172,11 @@ impl BusWorld {
         let dense_u32 = dense_index as u32;
         let last_u32 = last_dense as u32;
 
-        // 1. 当該バスから出ていた Send の send_lookup を全クリア (本体は後で swap_remove)。
-        let originating_count = self.send_count[dense_index] as usize;
-        for slot in 0..originating_count {
-            let sid = self.send_id[dense_index][slot];
-            if sid.is_valid() && (sid.index as usize) < self.send_lookup.len() {
-                let lk = &self.send_lookup[sid.index as usize];
-                if lk.generation == sid.generation {
-                    self.send_lookup[sid.index as usize] = SendLookup::EMPTY;
-                }
-            }
-        }
+        // 1. 当該バスを宛先としていた他バスの Send を一括除去 (本人 row は次の swap_remove_row で処理)。
+        self.sends
+            .remove_destinations_matching(dense_u32, dense_index);
 
-        // 2. 当該バスを宛先としていた他バスの Send を一括除去。
-        for src_dense in 0..self.gain.len() {
-            if src_dense == dense_index {
-                continue;
-            }
-            let mut s = 0;
-            while s < self.send_count[src_dense] as usize {
-                if self.send_dest_dense[src_dense][s] == dense_u32 {
-                    self.swap_remove_send_slot(src_dense, s);
-                    // s はそのまま (末尾要素が入った)。
-                } else {
-                    s += 1;
-                }
-            }
-        }
-
-        // 3. mix_buffer の swap (last_dense → dense_index)。
+        // 2. mix_buffer の swap (last_dense → dense_index)。
         if dense_index != last_dense {
             let src_start = last_dense * MAX_MIX_BUFFER_SIZE;
             let dst_start = dense_index * MAX_MIX_BUFFER_SIZE;
@@ -271,7 +184,7 @@ impl BusWorld {
                 .copy_within(src_start..src_start + MAX_MIX_BUFFER_SIZE, dst_start);
         }
 
-        // 4. SoA 列を swap_remove。
+        // 3. SoA 列を swap_remove (Send 部分は SendTable に委譲)。
         self.gain.swap_remove(dense_index);
         self.muted.swap_remove(dense_index);
         self.output_bus_dense.swap_remove(dense_index);
@@ -279,14 +192,9 @@ impl BusWorld {
         self.pre_count.swap_remove(dense_index);
         self.post_chain.swap_remove(dense_index);
         self.post_count.swap_remove(dense_index);
-        self.send_dest_dense.swap_remove(dense_index);
-        self.send_gain.swap_remove(dense_index);
-        self.send_position.swap_remove(dense_index);
-        self.send_dest_kind.swap_remove(dense_index);
-        self.send_id.swap_remove(dense_index);
-        self.send_count.swap_remove(dense_index);
+        self.sends.swap_remove_row(dense_index);
 
-        // 5. output_bus_dense / send_dest_dense の再マップ:
+        // 4. output_bus_dense / send_dest_dense の再マップ:
         //    - dense_index を指していた参照はマスター (0) にフォールバック
         //    - last_dense を指していた参照は dense_index に書き換え
         for d in 0..self.output_bus_dense.len() {
@@ -296,68 +204,10 @@ impl BusWorld {
                 self.output_bus_dense[d] = dense_u32;
             }
         }
-        for d in 0..self.send_count.len() {
-            let n = self.send_count[d] as usize;
-            for s in 0..n {
-                let dest = self.send_dest_dense[d][s];
-                if dest == dense_u32 {
-                    self.send_dest_dense[d][s] = 0;
-                } else if dest == last_u32 && dense_index != last_dense {
-                    self.send_dest_dense[d][s] = dense_u32;
-                }
-            }
-        }
-
-        // 6. last_dense にあった Send 群が dense_index に移動したので send_lookup を更新。
-        if dense_index != last_dense && dense_index < self.send_count.len() {
-            let n = self.send_count[dense_index] as usize;
-            for slot in 0..n {
-                let sid = self.send_id[dense_index][slot];
-                if sid.is_valid() && (sid.index as usize) < self.send_lookup.len() {
-                    let lk = &mut self.send_lookup[sid.index as usize];
-                    if lk.bus_dense == last_u32 && lk.generation == sid.generation {
-                        lk.bus_dense = dense_u32;
-                    }
-                }
-            }
-        }
+        self.sends
+            .remap_destinations_after_swap(dense_u32, last_u32, 0);
 
         true
-    }
-
-    /// 内部用: バス `bus_dense` の slot `slot` にある Send を swap-remove する。
-    /// `send_lookup` の整合も維持する (除去された Send をクリア、移動された Send の slot を更新)。
-    fn swap_remove_send_slot(&mut self, bus_dense: usize, slot: usize) {
-        let count = self.send_count[bus_dense] as usize;
-        debug_assert!(slot < count);
-
-        // 除去対象の lookup をクリア。
-        let removed_sid = self.send_id[bus_dense][slot];
-        if removed_sid.is_valid() && (removed_sid.index as usize) < self.send_lookup.len() {
-            let lk = &self.send_lookup[removed_sid.index as usize];
-            if lk.generation == removed_sid.generation {
-                self.send_lookup[removed_sid.index as usize] = SendLookup::EMPTY;
-            }
-        }
-
-        let last = count - 1;
-        if slot != last {
-            self.send_dest_dense[bus_dense][slot] = self.send_dest_dense[bus_dense][last];
-            self.send_gain[bus_dense][slot] = self.send_gain[bus_dense][last];
-            self.send_position[bus_dense][slot] = self.send_position[bus_dense][last];
-            self.send_dest_kind[bus_dense][slot] = self.send_dest_kind[bus_dense][last];
-            self.send_id[bus_dense][slot] = self.send_id[bus_dense][last];
-
-            // 移動した Send の lookup slot を更新。
-            let moved_sid = self.send_id[bus_dense][slot];
-            if moved_sid.is_valid() && (moved_sid.index as usize) < self.send_lookup.len() {
-                let lk = &mut self.send_lookup[moved_sid.index as usize];
-                if lk.bus_dense == bus_dense as u32 && lk.generation == moved_sid.generation {
-                    lk.slot = slot as u8;
-                }
-            }
-        }
-        self.send_count[bus_dense] -= 1;
     }
 
     /// EntityId が有効か確認する。
@@ -545,112 +395,54 @@ impl BusWorld {
         gain: f32,
         position: SendPosition,
     ) -> bool {
-        if bus_dense >= self.send_count.len() {
-            return false;
-        }
-        let count = self.send_count[bus_dense] as usize;
-        if count >= MAX_SENDS_PER_BUS {
-            return false;
-        }
-        if (id.index as usize) >= self.send_lookup.len() {
-            return false;
-        }
-        self.send_dest_dense[bus_dense][count] = dest_dense;
-        self.send_gain[bus_dense][count] = gain;
-        self.send_position[bus_dense][count] = position as u8;
-        self.send_dest_kind[bus_dense][count] = dest_kind as u8;
-        self.send_id[bus_dense][count] = id;
-        self.send_count[bus_dense] = (count + 1) as u8;
-        self.send_lookup[id.index as usize] = SendLookup {
-            bus_dense: bus_dense as u32,
-            slot: count as u8,
-            generation: id.generation,
-        };
-        true
+        self.sends
+            .add_send(bus_dense, id, dest_dense, dest_kind as u8, gain, position as u8)
     }
 
     /// SendId で Send を削除する。stale (generation 不一致) または未存在で `false`。
     pub fn remove_send(&mut self, id: SendId) -> bool {
-        let Some((bus_dense, slot)) = self.resolve_send(id) else {
-            return false;
-        };
-        self.swap_remove_send_slot(bus_dense, slot);
-        true
+        self.sends.remove_by_id(id)
     }
 
     /// SendId の現在位置 `(bus_dense, slot)` を返す。stale なら `None`。
     pub fn resolve_send(&self, id: SendId) -> Option<(usize, usize)> {
-        if !id.is_valid() {
-            return None;
-        }
-        let lookup_idx = id.index as usize;
-        let lk = self.send_lookup.get(lookup_idx)?;
-        if lk.is_empty() || lk.generation != id.generation {
-            return None;
-        }
-        Some((lk.bus_dense as usize, lk.slot as usize))
+        self.sends.resolve(id)
     }
 
     /// SendId の gain を設定する。
     pub fn set_send_gain(&mut self, id: SendId, gain: f32) -> bool {
-        if let Some((bus_dense, slot)) = self.resolve_send(id) {
-            self.send_gain[bus_dense][slot] = gain;
-            true
-        } else {
-            false
-        }
+        self.sends.set_gain(id, gain)
     }
 
     /// SendId のタップ位置を変更する。
     pub fn set_send_position(&mut self, id: SendId, position: SendPosition) -> bool {
-        if let Some((bus_dense, slot)) = self.resolve_send(id) {
-            self.send_position[bus_dense][slot] = position as u8;
-            true
-        } else {
-            false
-        }
+        self.sends.set_position(id, position as u8)
     }
 
     /// dense index 指定で send_gain を直接書き込む (Snapshot 補間で使用)。
     #[inline]
     pub fn write_send_gain_by_dense(&mut self, bus_dense: usize, slot: usize, gain: f32) {
-        if let Some(arr) = self.send_gain.get_mut(bus_dense)
-            && slot < MAX_SENDS_PER_BUS
-        {
-            arr[slot] = gain;
-        }
+        self.sends.write_gain_by_dense(bus_dense, slot, gain);
     }
 
     /// dense index 指定で send_gain を読み出す (Snapshot apply 時の現在値キャプチャ用)。
     #[inline]
     #[must_use]
     pub fn send_gain_at(&self, bus_dense: usize, slot: usize) -> Option<f32> {
-        self.send_gain
-            .get(bus_dense)
-            .and_then(|arr| arr.get(slot))
-            .copied()
+        self.sends.gain_at(bus_dense, slot)
     }
 
     /// バス `bus_dense` の Send 数。
     #[inline]
     pub fn send_count_at(&self, bus_dense: usize) -> usize {
-        self.send_count
-            .get(bus_dense)
-            .copied()
-            .map(|c| c as usize)
-            .unwrap_or(0)
+        self.sends.count_at(bus_dense)
     }
 
     /// バス `bus_dense` の slot `slot` にある Send 情報 `(dest_dense, gain, position, dest_kind)`。
     /// `BusSystem` の hot loop から読まれる。
     #[inline]
     pub fn send_at(&self, bus_dense: usize, slot: usize) -> (u32, f32, u8, u8) {
-        (
-            self.send_dest_dense[bus_dense][slot],
-            self.send_gain[bus_dense][slot],
-            self.send_position[bus_dense][slot],
-            self.send_dest_kind[bus_dense][slot],
-        )
+        self.sends.send_at(bus_dense, slot)
     }
 }
 

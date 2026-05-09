@@ -171,7 +171,7 @@ impl SourceMixingSystem {
             // 宛先は Bus mix_buffer の `dest_dense` 区間か Compressor sidechain_buffer の
             // 同区間。sub_byte_offset を本線と揃えて先頭を一致させる (PlayScheduled で
             // 途中発音した場合に send 側もその offset から書き始める)。
-            let send_count = world.send_count[source_i] as usize;
+            let send_count = world.send_count_at(source_i);
             let mut send_outputs: [SendOutput; MAX_SENDS_PER_SOURCE] =
                 [SendOutput::NULL; MAX_SENDS_PER_SOURCE];
             let mut active_sends = 0usize;
