@@ -27,6 +27,9 @@ impl SourceLifecycleSystem {
         for source_i in (0..world.vol.len()).rev() {
             let natural_finish = match world.state[source_i] {
                 SourceState::Stopped => false,
+                // Phase 3-4: 予約再生中は発音前なので natural finish しない。
+                // Stop された場合のみ後段の `should_despawn` で despawn される。
+                SourceState::Scheduled => false,
                 SourceState::Playing => {
                     if world.looping[source_i] {
                         false

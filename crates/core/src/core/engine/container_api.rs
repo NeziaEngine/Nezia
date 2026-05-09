@@ -66,6 +66,7 @@ impl SoundEngine {
                 output_bus_dense,
                 token: 0,
                 looping,
+                start_dsp_frame: 0,
             })
             .is_ok()
     }
@@ -102,6 +103,7 @@ impl SoundEngine {
                 output_bus_dense,
                 token: 0,
                 looping,
+                start_dsp_frame: 0,
             })
             .is_err()
         {
@@ -156,6 +158,7 @@ impl SoundEngine {
                 output_bus_dense,
                 token,
                 looping,
+                start_dsp_frame: 0,
             })
             .is_ok();
         if !ok {

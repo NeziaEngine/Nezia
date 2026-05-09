@@ -58,6 +58,7 @@ pub(super) fn process_command(
             pitch,
             token,
             looping,
+            start_dsp_frame,
         } => {
             try_spawn_source(
                 source_world,
@@ -65,7 +66,15 @@ pub(super) fn process_command(
                 event_producer,
                 metrics,
                 None,
-                build_source_component(audio_buffer_index, vol, pitch, 0, token, looping),
+                build_source_component(
+                    audio_buffer_index,
+                    vol,
+                    pitch,
+                    0,
+                    token,
+                    looping,
+                    start_dsp_frame,
+                ),
             );
         }
         Command::PlayToBus {
@@ -75,6 +84,7 @@ pub(super) fn process_command(
             output_bus_dense,
             token,
             looping,
+            start_dsp_frame,
         } => {
             try_spawn_source(
                 source_world,
@@ -89,6 +99,7 @@ pub(super) fn process_command(
                     output_bus_dense,
                     token,
                     looping,
+                    start_dsp_frame,
                 ),
             );
         }
@@ -100,6 +111,7 @@ pub(super) fn process_command(
             output_bus_dense,
             token,
             looping,
+            start_dsp_frame,
         } => {
             try_spawn_source(
                 source_world,
@@ -114,6 +126,7 @@ pub(super) fn process_command(
                     output_bus_dense,
                     token,
                     looping,
+                    start_dsp_frame,
                 ),
             );
         }
@@ -277,6 +290,7 @@ pub(super) fn process_command(
 /// Play / PlayToBus / SpawnSource の SoA フィールド組み立てを共通化する。
 /// `priority` のデフォルト 128、`sample_offset` 0 はここで集約する。
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn build_source_component(
     audio_buffer_index: u32,
     vol: f32,
@@ -284,6 +298,7 @@ fn build_source_component(
     output_bus: u32,
     token: u32,
     looping: bool,
+    start_dsp_frame: u64,
 ) -> SourceComponent {
     SourceComponent {
         vol,
@@ -294,6 +309,7 @@ fn build_source_component(
         token,
         looping,
         priority: 128,
+        start_dsp_frame,
     }
 }
 

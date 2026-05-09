@@ -52,6 +52,11 @@ pub(in crate::core::engine) struct AudioThread {
     /// Source Pre-Spatial chain 適用用の事前確保 mono スクラッチ。
     /// 容量は `MAX_MIX_BUFFER_SIZE / 1ch` でフレーム単位。サウンドスレッド alloc 0。
     mono_scratch: Vec<f32>,
+    /// Phase 3-4: 予約再生のサブコールバック開始 frame オフセット (per-source)。
+    /// `activate_scheduled` が dense index ごとに「この callback の何 frame 目から鳴らすか」
+    /// を書き、mix system が `bus_buf[off * channels..]` で消費する。
+    /// 容量 `MAX_SOURCES`、毎 callback 冒頭で 0 リセット。
+    start_offset_scratch: Vec<u32>,
     shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>>,
     /// Phase 3-1: Custom Attenuation Curve のレジストリ snapshot。
     /// `compute_gains` が `AttenuationModel::Custom` 指定ソースで参照する。
@@ -119,6 +124,7 @@ impl AudioThread {
             effect_world,
             effect_worlds,
             mono_scratch: vec![0.0; crate::bus::MAX_MIX_BUFFER_SIZE],
+            start_offset_scratch: vec![0; crate::source::MAX_SOURCES],
             shared_buffers,
             shared_curves,
             shared_snapshots,
@@ -243,6 +249,12 @@ impl AudioThread {
         // Phase 3-1: Custom Attenuation Curve のレジストリも snapshot 取得。
         let curves = self.shared_curves.load();
 
+        // Phase 3-4: 予約再生用に「この callback の冒頭での DSP clock」を読む。
+        // dsp_time_frames は callback 末尾で fetch_add されるため、ここでの load は
+        // 「直前 callback まで完了済みの累積 frame」= 「この callback の最初の frame の DSP 時刻」。
+        let clock_at_callback_start = self.dsp_time_frames.load(Ordering::Relaxed);
+        let frames_in_callback = (sample_count / self.device_channels.max(1)) as u64;
+
         // Source ミキシング → BusWorld の mix_buffer に加算。
         {
             let mix_buf = self.bus_world.mix_buffer_mut();
@@ -252,11 +264,14 @@ impl AudioThread {
                 &self.effect_world,
                 &mut self.effect_worlds,
                 &mut self.mono_scratch,
+                &mut self.start_offset_scratch,
                 mix_buf,
                 crate::bus::MAX_MIX_BUFFER_SIZE,
                 sample_count,
                 self.device_channels,
                 self.device_sample_rate,
+                clock_at_callback_start,
+                frames_in_callback,
                 &buffers,
                 &curves,
             );
