@@ -1,10 +1,5 @@
-use super::compressor::CompressorWorld;
-use super::hpf::HpfWorld;
-use super::limiter::LimiterWorld;
-use super::lpf::LpfWorld;
-use super::peq::PeakingEqWorld;
-use super::reverb::ReverbWorld;
 use super::world::{EffectKind, EffectPosition, EffectWorld, Owner};
+use super::worlds::EffectWorlds;
 
 /// エフェクト適用 System。
 ///
@@ -15,15 +10,9 @@ pub struct EffectSystem;
 
 impl EffectSystem {
     /// 1 つのチェーン (target/position 指定) に対し、`buf` を in-place 処理する。
-    #[allow(clippy::too_many_arguments)]
     pub fn apply_chain(
         meta: &EffectWorld,
-        lpf: &mut LpfWorld,
-        hpf: &mut HpfWorld,
-        reverb: &mut ReverbWorld,
-        compressor: &mut CompressorWorld,
-        peq: &mut PeakingEqWorld,
-        limiter: &mut LimiterWorld,
+        worlds: &mut EffectWorlds,
         chain: &[crate::effect::EffectId],
         buf: &mut [f32],
         channels: usize,
@@ -40,12 +29,16 @@ impl EffectSystem {
             let state_index = meta.state_indices()[meta_dense];
             // 二段階 dispatch: kind → algo。Phase 2-3/3-3/3-5 では各種別 1 アルゴリズム (algo == 0) のみ。
             match kind {
-                EffectKind::Lpf if algo == 0 => lpf.apply(state_index, buf, channels),
-                EffectKind::Hpf if algo == 0 => hpf.apply(state_index, buf, channels),
-                EffectKind::Reverb if algo == 0 => reverb.apply(state_index, buf, channels),
-                EffectKind::Compressor if algo == 0 => compressor.apply(state_index, buf, channels),
-                EffectKind::PeakingEq if algo == 0 => peq.apply(state_index, buf, channels),
-                EffectKind::Limiter if algo == 0 => limiter.apply(state_index, buf, channels),
+                EffectKind::Lpf if algo == 0 => worlds.lpf.apply(state_index, buf, channels),
+                EffectKind::Hpf if algo == 0 => worlds.hpf.apply(state_index, buf, channels),
+                EffectKind::Reverb if algo == 0 => worlds.reverb.apply(state_index, buf, channels),
+                EffectKind::Compressor if algo == 0 => {
+                    worlds.compressor.apply(state_index, buf, channels)
+                }
+                EffectKind::PeakingEq if algo == 0 => worlds.peq.apply(state_index, buf, channels),
+                EffectKind::Limiter if algo == 0 => {
+                    worlds.limiter.apply(state_index, buf, channels)
+                }
                 _ => {}
             }
         }

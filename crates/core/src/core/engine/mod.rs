@@ -33,9 +33,7 @@ use crate::capture::{CaptureReader, CaptureShared};
 use crate::command::Command;
 use crate::container::ContainerWorld;
 use crate::core::bus_routing::BusRoutingMirror;
-use crate::effect::{
-    CompressorWorld, EffectWorld, HpfWorld, LimiterWorld, LpfWorld, PeakingEqWorld, ReverbWorld,
-};
+use crate::effect::{EffectWorld, EffectWorlds};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::metrics::{DropoutStats, DspStats, EngineMetrics};
@@ -250,12 +248,7 @@ impl SoundEngine {
         let source_world = SourceWorld::new();
         let spatial_world = SpatialWorld::new();
         let effect_world = EffectWorld::new();
-        let lpf_world = LpfWorld::new();
-        let hpf_world = HpfWorld::new();
-        let reverb_world = ReverbWorld::new();
-        let compressor_world = CompressorWorld::new();
-        let peq_world = PeakingEqWorld::new();
-        let limiter_world = LimiterWorld::new();
+        let effect_worlds = EffectWorlds::new();
 
         let live_params = Arc::new(SourceLiveParams::new());
         let live_params_audio = Arc::clone(&live_params);
@@ -291,12 +284,7 @@ impl SoundEngine {
             source_world,
             spatial_world,
             effect_world,
-            lpf_world,
-            hpf_world,
-            reverb_world,
-            compressor_world,
-            peq_world,
-            limiter_world,
+            effect_worlds,
             shared_buffers_clone,
             shared_curves_clone,
             shared_snapshots_clone,

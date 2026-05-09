@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use crate::audio::AudioBuffer;
-use crate::effect::{
-    CompressorWorld, EffectSystem, EffectWorld, HpfWorld, LimiterWorld, LpfWorld, PeakingEqWorld,
-    ReverbWorld,
-};
+use crate::effect::{EffectSystem, EffectWorld, EffectWorlds};
 use crate::spatial::{AttenuationCurve, SpatialSystem, SpatialWorld};
 
 use super::virtualizer::VoiceVirtualizer;
@@ -40,12 +37,7 @@ impl SourceMixingSystem {
         world: &mut SourceWorld,
         spatial: &mut SpatialWorld,
         effect_world: &EffectWorld,
-        lpf_world: &mut LpfWorld,
-        hpf_world: &mut HpfWorld,
-        reverb_world: &mut ReverbWorld,
-        compressor_world: &mut CompressorWorld,
-        peq_world: &mut PeakingEqWorld,
-        limiter_world: &mut LimiterWorld,
+        effect_worlds: &mut EffectWorlds,
         mono_scratch: &mut [f32],
         bus_mix_buffer: &mut [f32],
         bus_stride: usize,
@@ -128,12 +120,7 @@ impl SourceMixingSystem {
                     &chain_copy,
                     mono_scratch,
                     effect_world,
-                    lpf_world,
-                    hpf_world,
-                    reverb_world,
-                    compressor_world,
-                    peq_world,
-                    limiter_world,
+                    effect_worlds,
                 );
                 world.sample_offset[source_i] = new_offset;
             } else if let Some(stream) = audio_buf.streaming_state() {
@@ -150,12 +137,7 @@ impl SourceMixingSystem {
                     &chain_copy,
                     mono_scratch,
                     effect_world,
-                    lpf_world,
-                    hpf_world,
-                    reverb_world,
-                    compressor_world,
-                    peq_world,
-                    limiter_world,
+                    effect_worlds,
                 );
                 // streaming の sample_offset は累積消費フレーム数 (file-frame ではない)。
                 world.sample_offset[source_i] += consumed as f32;
@@ -183,12 +165,7 @@ fn mix_static(
     chain_copy: &[crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_SOURCE],
     mono_scratch: &mut [f32],
     effect_world: &EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    effect_worlds: &mut EffectWorlds,
 ) -> f32 {
     let frame_count_f = src_frame_count as f32;
     let mut offset = initial_offset;
@@ -227,12 +204,7 @@ fn mix_static(
         }
         EffectSystem::apply_chain(
             effect_world,
-            lpf_world,
-            hpf_world,
-            reverb_world,
-            compressor_world,
-            peq_world,
-            limiter_world,
+            effect_worlds,
             &chain_copy[..pre_count],
             &mut mono_scratch[..total_frames],
             1,
@@ -309,12 +281,7 @@ fn mix_streaming(
     chain_copy: &[crate::effect::EffectId; crate::effect::MAX_EFFECTS_PER_SOURCE],
     mono_scratch: &mut [f32],
     effect_world: &EffectWorld,
-    lpf_world: &mut LpfWorld,
-    hpf_world: &mut HpfWorld,
-    reverb_world: &mut ReverbWorld,
-    compressor_world: &mut CompressorWorld,
-    peq_world: &mut PeakingEqWorld,
-    limiter_world: &mut LimiterWorld,
+    effect_worlds: &mut EffectWorlds,
 ) -> usize {
     // ring から最大限の contiguous slice を peek (lookahead +2 frame で線形補間用)。
     let needed = ((total_frames as f32 * advance.abs()).ceil() as usize).saturating_add(2);
@@ -362,12 +329,7 @@ fn mix_streaming(
         }
         EffectSystem::apply_chain(
             effect_world,
-            lpf_world,
-            hpf_world,
-            reverb_world,
-            compressor_world,
-            peq_world,
-            limiter_world,
+            effect_worlds,
             &chain_copy[..pre_count],
             &mut mono_scratch[..total_frames],
             1,

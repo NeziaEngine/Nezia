@@ -26,28 +26,18 @@ mod tests {
     use crate::entity::EntityId;
 
     /// テスト用に空の effect world 一式をまとめて生成し、`BusSystem::update` 呼び出しを薄く
-    /// ラップするヘルパ。エフェクト種別の追加で BusSystem シグネチャが伸びても、
-    /// 各テストの呼び出し形は変わらない。
+    /// ラップするヘルパ。種別追加で `EffectWorlds` のフィールドが増えても、各テストの
+    /// 呼び出し形は変わらない。
     struct TestFx {
         effect: crate::effect::EffectWorld,
-        lpf: crate::effect::LpfWorld,
-        hpf: crate::effect::HpfWorld,
-        reverb: crate::effect::ReverbWorld,
-        compressor: crate::effect::CompressorWorld,
-        peq: crate::effect::PeakingEqWorld,
-        limiter: crate::effect::LimiterWorld,
+        worlds: crate::effect::EffectWorlds,
     }
 
     impl TestFx {
         fn new() -> Self {
             Self {
                 effect: crate::effect::EffectWorld::new(),
-                lpf: crate::effect::LpfWorld::new(),
-                hpf: crate::effect::HpfWorld::new(),
-                reverb: crate::effect::ReverbWorld::new(),
-                compressor: crate::effect::CompressorWorld::new(),
-                peq: crate::effect::PeakingEqWorld::new(),
-                limiter: crate::effect::LimiterWorld::new(),
+                worlds: crate::effect::EffectWorlds::new(),
             }
         }
 
@@ -61,12 +51,7 @@ mod tests {
             BusSystem::update(
                 world,
                 &self.effect,
-                &mut self.lpf,
-                &mut self.hpf,
-                &mut self.reverb,
-                &mut self.compressor,
-                &mut self.peq,
-                &mut self.limiter,
+                &mut self.worlds,
                 output,
                 channels,
                 sample_count,
