@@ -4,8 +4,8 @@
 //! 実機オーディオデバイスが無い環境では `SoundEngine::new()` が失敗するため
 //! early return で skip する (CI 互換、既存テストと同じパターン)。
 //!
-//! サンプル精度の発音タイミング検証は `source::system::scheduled_tests`
-//! (lib unit test) で `activate_scheduled` を直接駆動して行う。本ファイルでは
+//! サンプル精度の発音タイミング検証は `source::mixing::scheduled` の unit test
+//! で `activate_scheduled` を直接駆動して行う。本ファイルでは
 //! API 経路 (engine API → command → audio_thread) の到達と挙動だけを確認する。
 
 use nezia::SoundEngine;

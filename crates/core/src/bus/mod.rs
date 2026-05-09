@@ -1,6 +1,9 @@
 mod send;
+mod send_table;
 mod system;
 mod world;
+
+pub(crate) use send_table::SendTable;
 
 pub use send::{SendDestKind, SendId, SendPosition};
 pub use system::BusSystem;

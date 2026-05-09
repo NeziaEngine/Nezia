@@ -1,34 +1,9 @@
-use crate::bus::{MAX_SENDS, SendDestKind, SendId, SendPosition};
+use crate::bus::{MAX_SENDS, SendDestKind, SendId, SendPosition, SendTable};
 use crate::core::sparse_set::SparseSet;
 use crate::effect::{EffectId, MAX_EFFECTS_PER_SOURCE};
 use crate::entity::EntityId;
 
 use super::{MAX_SENDS_PER_SOURCE, MAX_SOURCES};
-
-/// SendId.index → (source_dense, slot) の逆引きエントリ (source 起点 send 用)。
-///
-/// `BusWorld::SendLookup` と同形だが、source 用と bus 用は別 SendId 集合 (= 別 entity owner)
-/// を扱うため、audio thread の SetSendGain / RemoveSend ハンドラは「先に bus を引き、
-/// 見つからなければ source を引く」二段引きで dispatch する。`source_dense == u32::MAX`
-/// で未割当を表す。
-#[derive(Copy, Clone, Debug)]
-pub(super) struct SourceSendLookup {
-    pub(super) source_dense: u32,
-    pub(super) slot: u8,
-    pub(super) generation: u32,
-}
-
-impl SourceSendLookup {
-    pub(super) const EMPTY: SourceSendLookup = SourceSendLookup {
-        source_dense: u32::MAX,
-        slot: 0,
-        generation: 0,
-    };
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.source_dense == u32::MAX
-    }
-}
 
 /// Source 生成時の初期パラメータ。
 pub struct SourceComponent {
@@ -132,18 +107,10 @@ pub struct SourceWorld {
 
     // ── Source 起点 Send (User-Defined Aux Send) ──
     /// Wwise / FMOD 互換の per-event aux send。各ソースから他バス / Compressor sidechain
-    /// への副ルートを最大 `MAX_SENDS_PER_SOURCE` 本まで張れる。バス起点 Send (`BusWorld::send_*`)
-    /// と SoA 形式は揃えてあるが、SendId プールは共通なので audio thread のハンドラは
-    /// 両方を見て dispatch する。
-    pub(super) send_dest_dense: Vec<[u32; MAX_SENDS_PER_SOURCE]>,
-    pub(super) send_gain: Vec<[f32; MAX_SENDS_PER_SOURCE]>,
-    pub(super) send_position: Vec<[u8; MAX_SENDS_PER_SOURCE]>,
-    pub(super) send_dest_kind: Vec<[u8; MAX_SENDS_PER_SOURCE]>,
-    pub(super) send_id: Vec<[SendId; MAX_SENDS_PER_SOURCE]>,
-    pub(super) send_count: Vec<u8>,
-    /// SendId.index → (source_dense, slot) の逆引き。サイズは `MAX_SENDS` で固定。
-    /// generation 不一致は stale 扱い。
-    send_lookup: Vec<SourceSendLookup>,
+    /// への副ルートを最大 `MAX_SENDS_PER_SOURCE` 本まで張れる。`BusWorld::sends` と同形
+    /// (`SendTable<CAP>`)。SendId プールは Bus / Source で共有なので、audio thread の
+    /// dispatcher は両方を引いて dispatch する。
+    pub(super) sends: SendTable<MAX_SENDS_PER_SOURCE>,
 }
 
 impl Default for SourceWorld {
@@ -170,41 +137,12 @@ impl SourceWorld {
             pre_chain: Vec::with_capacity(MAX_SOURCES),
             pre_count: Vec::with_capacity(MAX_SOURCES),
             start_dsp_frame: Vec::with_capacity(MAX_SOURCES),
-            send_dest_dense: Vec::with_capacity(MAX_SOURCES),
-            send_gain: Vec::with_capacity(MAX_SOURCES),
-            send_position: Vec::with_capacity(MAX_SOURCES),
-            send_dest_kind: Vec::with_capacity(MAX_SOURCES),
-            send_id: Vec::with_capacity(MAX_SOURCES),
-            send_count: Vec::with_capacity(MAX_SOURCES),
-            send_lookup: vec![SourceSendLookup::EMPTY; MAX_SENDS],
+            sends: SendTable::new(MAX_SOURCES, MAX_SENDS),
         }
     }
 
-    /// 内部用: spawn 時に send 関連 dense 配列を空状態で push する。
-    fn push_empty_send_components(&mut self) {
-        self.send_dest_dense.push([0; MAX_SENDS_PER_SOURCE]);
-        self.send_gain.push([0.0; MAX_SENDS_PER_SOURCE]);
-        self.send_position.push([0; MAX_SENDS_PER_SOURCE]);
-        self.send_dest_kind.push([0; MAX_SENDS_PER_SOURCE]);
-        self.send_id.push([SendId::INVALID; MAX_SENDS_PER_SOURCE]);
-        self.send_count.push(0);
-    }
-
-    /// 内部用: spawn 失敗時に push 済み send 関連 dense 配列を巻き戻す。
-    fn pop_send_components(&mut self) {
-        self.send_dest_dense.pop();
-        self.send_gain.pop();
-        self.send_position.pop();
-        self.send_dest_kind.pop();
-        self.send_id.pop();
-        self.send_count.pop();
-    }
-
-    /// Source を追加し、EntityId を返す（fire-and-forget 用）。
-    ///
-    /// `MAX_SOURCES` に達している場合は `None` を返す。
-    pub fn spawn(&mut self, params: SourceComponent) -> Option<EntityId> {
-        let (id, _dense) = self.entities.alloc()?;
+    /// 内部用: spawn 時に non-Send 系の dense 配列に初期値を push する。
+    fn push_components(&mut self, params: &SourceComponent) {
         self.vol.push(params.vol);
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
@@ -232,7 +170,15 @@ impl SourceWorld {
         );
         self.pre_count.push(0);
         self.start_dsp_frame.push(params.start_dsp_frame);
-        self.push_empty_send_components();
+        self.sends.push_empty_row();
+    }
+
+    /// Source を追加し、EntityId を返す（fire-and-forget 用）。
+    ///
+    /// `MAX_SOURCES` に達している場合は `None` を返す。
+    pub fn spawn(&mut self, params: SourceComponent) -> Option<EntityId> {
+        let (id, _dense) = self.entities.alloc()?;
+        self.push_components(&params);
         Some(id)
     }
 
@@ -244,30 +190,7 @@ impl SourceWorld {
         let Some(_dense) = self.entities.alloc_with_id(id) else {
             return false;
         };
-        self.vol.push(params.vol);
-        self.pitch.push(params.pitch);
-        self.sample_offset.push(params.sample_offset);
-        self.audio_buffer_index.push(params.audio_buffer_index);
-        let initial_state = if params.start_dsp_frame == 0 {
-            SourceState::Playing
-        } else {
-            SourceState::Scheduled
-        };
-        self.state.push(initial_state);
-        self.output_bus.push(params.output_bus);
-        self.token.push(params.token);
-        self.looping.push(params.looping);
-        self.priority.push(params.priority);
-        self.is_virtual.push(false);
-        self.pre_chain.push(
-            [EffectId {
-                index: 0,
-                generation: 0,
-            }; MAX_EFFECTS_PER_SOURCE],
-        );
-        self.pre_count.push(0);
-        self.start_dsp_frame.push(params.start_dsp_frame);
-        self.push_empty_send_components();
+        self.push_components(&params);
         true
     }
 
@@ -285,25 +208,8 @@ impl SourceWorld {
         true
     }
 
-    /// 内部用: dense_index の SoA 全フィールドを swap_remove し、send_lookup を整合させる。
+    /// 内部用: dense_index の SoA 全フィールドを swap_remove する。
     fn swap_remove_dense(&mut self, dense_index: usize) {
-        // 1. 当該ソースから出ていた send の lookup を全クリア (本体は後で swap_remove)。
-        let originating_count = self.send_count[dense_index] as usize;
-        for slot in 0..originating_count {
-            let sid = self.send_id[dense_index][slot];
-            if sid.is_valid() && (sid.index as usize) < self.send_lookup.len() {
-                let lk = &self.send_lookup[sid.index as usize];
-                if lk.generation == sid.generation {
-                    self.send_lookup[sid.index as usize] = SourceSendLookup::EMPTY;
-                }
-            }
-        }
-
-        let last_dense = self.vol.len() - 1;
-        let dense_u32 = dense_index as u32;
-        let last_u32 = last_dense as u32;
-
-        // 2. SoA 列を swap_remove。
         self.vol.swap_remove(dense_index);
         self.pitch.swap_remove(dense_index);
         self.sample_offset.swap_remove(dense_index);
@@ -317,26 +223,8 @@ impl SourceWorld {
         self.pre_chain.swap_remove(dense_index);
         self.pre_count.swap_remove(dense_index);
         self.start_dsp_frame.swap_remove(dense_index);
-        self.send_dest_dense.swap_remove(dense_index);
-        self.send_gain.swap_remove(dense_index);
-        self.send_position.swap_remove(dense_index);
-        self.send_dest_kind.swap_remove(dense_index);
-        self.send_id.swap_remove(dense_index);
-        self.send_count.swap_remove(dense_index);
-
-        // 3. 末尾にあった source が dense_index に移動したので send_lookup を更新。
-        if dense_index != last_dense && dense_index < self.send_count.len() {
-            let n = self.send_count[dense_index] as usize;
-            for slot in 0..n {
-                let sid = self.send_id[dense_index][slot];
-                if sid.is_valid() && (sid.index as usize) < self.send_lookup.len() {
-                    let lk = &mut self.send_lookup[sid.index as usize];
-                    if lk.source_dense == last_u32 && lk.generation == sid.generation {
-                        lk.source_dense = dense_u32;
-                    }
-                }
-            }
-        }
+        // Send 部分は SendTable に委譲 (lookup 整合も内部で維持)。
+        self.sends.swap_remove_row(dense_index);
     }
 
     /// EntityId が有効か確認する。
@@ -571,144 +459,58 @@ impl SourceWorld {
         gain: f32,
         position: SendPosition,
     ) -> bool {
-        if source_dense >= self.send_count.len() {
-            return false;
-        }
-        let count = self.send_count[source_dense] as usize;
-        if count >= MAX_SENDS_PER_SOURCE {
-            return false;
-        }
-        if (id.index as usize) >= self.send_lookup.len() {
-            return false;
-        }
-        self.send_dest_dense[source_dense][count] = dest_dense;
-        self.send_gain[source_dense][count] = gain;
-        self.send_position[source_dense][count] = position as u8;
-        self.send_dest_kind[source_dense][count] = dest_kind as u8;
-        self.send_id[source_dense][count] = id;
-        self.send_count[source_dense] = (count + 1) as u8;
-        self.send_lookup[id.index as usize] = SourceSendLookup {
-            source_dense: source_dense as u32,
-            slot: count as u8,
-            generation: id.generation,
-        };
-        true
+        self.sends.add_send(
+            source_dense,
+            id,
+            dest_dense,
+            dest_kind as u8,
+            gain,
+            position as u8,
+        )
     }
 
     /// SendId で send を削除する。stale (generation 不一致) または未存在で `false`。
     pub fn remove_send(&mut self, id: SendId) -> bool {
-        let Some((source_dense, slot)) = self.resolve_send(id) else {
-            return false;
-        };
-        self.swap_remove_send_slot(source_dense, slot);
-        true
+        self.sends.remove_by_id(id)
     }
 
     /// SendId の現在位置 `(source_dense, slot)` を返す。stale なら `None`。
     pub fn resolve_send(&self, id: SendId) -> Option<(usize, usize)> {
-        if !id.is_valid() {
-            return None;
-        }
-        let lookup_idx = id.index as usize;
-        let lk = self.send_lookup.get(lookup_idx)?;
-        if lk.is_empty() || lk.generation != id.generation {
-            return None;
-        }
-        Some((lk.source_dense as usize, lk.slot as usize))
+        self.sends.resolve(id)
     }
 
     /// SendId の gain を設定する。
     pub fn set_send_gain(&mut self, id: SendId, gain: f32) -> bool {
-        if let Some((source_dense, slot)) = self.resolve_send(id) {
-            self.send_gain[source_dense][slot] = gain;
-            true
-        } else {
-            false
-        }
+        self.sends.set_gain(id, gain)
     }
 
     /// SendId のタップ位置を変更する。
     pub fn set_send_position(&mut self, id: SendId, position: SendPosition) -> bool {
-        if let Some((source_dense, slot)) = self.resolve_send(id) {
-            self.send_position[source_dense][slot] = position as u8;
-            true
-        } else {
-            false
-        }
+        self.sends.set_position(id, position as u8)
     }
 
     /// dense index 指定で send_gain を直接書き込む (Snapshot 補間で使用)。
     #[inline]
     pub fn write_send_gain_by_dense(&mut self, source_dense: usize, slot: usize, gain: f32) {
-        if let Some(arr) = self.send_gain.get_mut(source_dense)
-            && slot < MAX_SENDS_PER_SOURCE
-        {
-            arr[slot] = gain;
-        }
+        self.sends.write_gain_by_dense(source_dense, slot, gain);
     }
 
     /// dense index 指定で send_gain を読み出す (Snapshot apply 時の現在値キャプチャ用)。
     #[inline]
     #[must_use]
     pub fn send_gain_at(&self, source_dense: usize, slot: usize) -> Option<f32> {
-        self.send_gain
-            .get(source_dense)
-            .and_then(|arr| arr.get(slot))
-            .copied()
+        self.sends.gain_at(source_dense, slot)
     }
 
     /// ソース `source_dense` の send 数。
     #[inline]
     pub fn send_count_at(&self, source_dense: usize) -> usize {
-        self.send_count
-            .get(source_dense)
-            .copied()
-            .map(|c| c as usize)
-            .unwrap_or(0)
+        self.sends.count_at(source_dense)
     }
 
     /// ソース `source_dense` の slot `slot` にある send 情報 `(dest_dense, gain, position, dest_kind)`。
     #[inline]
     pub fn send_at(&self, source_dense: usize, slot: usize) -> (u32, f32, u8, u8) {
-        (
-            self.send_dest_dense[source_dense][slot],
-            self.send_gain[source_dense][slot],
-            self.send_position[source_dense][slot],
-            self.send_dest_kind[source_dense][slot],
-        )
-    }
-
-    /// 内部用: ソース `source_dense` の slot を swap-remove し send_lookup を整合させる。
-    fn swap_remove_send_slot(&mut self, source_dense: usize, slot: usize) {
-        let count = self.send_count[source_dense] as usize;
-        debug_assert!(slot < count);
-
-        // 除去対象の lookup をクリア。
-        let removed_sid = self.send_id[source_dense][slot];
-        if removed_sid.is_valid() && (removed_sid.index as usize) < self.send_lookup.len() {
-            let lk = &self.send_lookup[removed_sid.index as usize];
-            if lk.generation == removed_sid.generation {
-                self.send_lookup[removed_sid.index as usize] = SourceSendLookup::EMPTY;
-            }
-        }
-
-        let last = count - 1;
-        if slot != last {
-            self.send_dest_dense[source_dense][slot] = self.send_dest_dense[source_dense][last];
-            self.send_gain[source_dense][slot] = self.send_gain[source_dense][last];
-            self.send_position[source_dense][slot] = self.send_position[source_dense][last];
-            self.send_dest_kind[source_dense][slot] = self.send_dest_kind[source_dense][last];
-            self.send_id[source_dense][slot] = self.send_id[source_dense][last];
-
-            // 移動した send の lookup slot を更新。
-            let moved_sid = self.send_id[source_dense][slot];
-            if moved_sid.is_valid() && (moved_sid.index as usize) < self.send_lookup.len() {
-                let lk = &mut self.send_lookup[moved_sid.index as usize];
-                if lk.source_dense == source_dense as u32 && lk.generation == moved_sid.generation {
-                    lk.slot = slot as u8;
-                }
-            }
-        }
-        self.send_count[source_dense] -= 1;
+        self.sends.send_at(source_dense, slot)
     }
 }

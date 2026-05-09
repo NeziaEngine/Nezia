@@ -1,10 +1,10 @@
 mod lifecycle;
-mod system;
+mod mixing;
 mod virtualizer;
 mod world;
 
 pub use lifecycle::SourceLifecycleSystem;
-pub use system::SourceMixingSystem;
+pub use mixing::SourceMixingSystem;
 pub use world::{SourceComponent, SourceState, SourceWorld};
 
 /// 最大論理ソース数 (`SourceWorld` の上限)。
