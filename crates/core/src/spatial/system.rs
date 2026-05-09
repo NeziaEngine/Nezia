@@ -66,6 +66,13 @@ impl SpatialSystem {
         let lvz = world.listener.velocity[2];
         let sound_speed = world.sound_speed.max(1e-3);
 
+        // フレーム頭で 1 回だけ判定する hoist 系フラグ。
+        // - listener_static: リスナー速度全 0。Doppler の per-source 静止判定をショートカット。
+        // - distance_focus_active: distance focus が効いているか (= vpos_dist != listener.position)。
+        //   無効ならば SIMD で計算済みの dist (vpos_dist 基準) を Doppler でそのまま流用できる。
+        let listener_static = lvx == 0.0 && lvy == 0.0 && lvz == 0.0;
+        let distance_focus_active = world.listener.distance_focus_level > 0.0;
+
         // SIMD パス: 4 ソースずつ距離と方向成分を計算する。
         let simd_end = n / 4 * 4;
         let mut i = 0;
@@ -90,11 +97,14 @@ impl SpatialSystem {
                 world.positions_z[i + 3],
             ]);
 
-            // 距離は vpos_dist 基準。
+            // 距離は vpos_dist 基準。Doppler でも focus 無効時は同じベクトルを再利用する。
             let ddx = px - f32x4::splat(ldx);
             let ddy = py - f32x4::splat(ldy);
             let ddz = pz - f32x4::splat(ldz);
             let dist: [f32; 4] = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt().into();
+            let ddx_arr: [f32; 4] = ddx.into();
+            let ddy_arr: [f32; 4] = ddy.into();
+            let ddz_arr: [f32; 4] = ddz.into();
 
             // パンニングは vpos_pan 基準。
             let pdx = px - f32x4::splat(lpx);
@@ -106,10 +116,21 @@ impl SpatialSystem {
                 (pdx * f32x4::splat(fx) + pdy * f32x4::splat(fy) + pdz * f32x4::splat(fz)).into();
 
             for j in 0..4 {
-                apply_gains(world, vols, curves, i + j, dist[j], local_x[j], local_z[j]);
+                let idx = i + j;
+                let enabled = world.spatial_enabled[idx];
+                apply_gains(
+                    world, vols, curves, idx, enabled, dist[j], local_x[j], local_z[j],
+                );
                 apply_doppler(
                     world,
-                    i + j,
+                    idx,
+                    enabled,
+                    listener_static,
+                    distance_focus_active,
+                    ddx_arr[j],
+                    ddy_arr[j],
+                    ddz_arr[j],
+                    dist[j],
                     lpos_x,
                     lpos_y,
                     lpos_z,
@@ -136,8 +157,26 @@ impl SpatialSystem {
             let local_x = pdx * rx + pdy * ry + pdz * rz;
             let local_z = pdx * fx + pdy * fy + pdz * fz;
 
-            apply_gains(world, vols, curves, i, dist, local_x, local_z);
-            apply_doppler(world, i, lpos_x, lpos_y, lpos_z, lvx, lvy, lvz, sound_speed);
+            let enabled = world.spatial_enabled[i];
+            apply_gains(world, vols, curves, i, enabled, dist, local_x, local_z);
+            apply_doppler(
+                world,
+                i,
+                enabled,
+                listener_static,
+                distance_focus_active,
+                ddx,
+                ddy,
+                ddz,
+                dist,
+                lpos_x,
+                lpos_y,
+                lpos_z,
+                lvx,
+                lvy,
+                lvz,
+                sound_speed,
+            );
             i += 1;
         }
     }
@@ -151,11 +190,25 @@ impl SpatialSystem {
 /// ```
 /// `v_*_toward` は対側に向かう速度成分（接近正・離反負）。
 /// `dopplerLevel` (Unity) で速度成分をスケールし、効果の強弱を制御する。
+///
+/// 呼出側 (`compute_gains`) から:
+/// - `spatial_enabled` を 1 回だけ読んだ値を渡す (`apply_gains` と共有して 2 重 load 回避)。
+/// - `listener_static` (リスナー速度全 0) を frame 頭で 1 度判定して渡す。
+/// - `focus_active = false` のときは SIMD/scalar path で計算済みの `(ddx, ddy, ddz, dist)`
+///   をそのまま流用する (vpos_dist == listener.position が保証される)。`focus_active = true`
+///   のときだけ実リスナー基準の (dx, dy, dz, dist) を再計算する。
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn apply_doppler(
     world: &mut SpatialWorld,
     i: usize,
+    spatial_enabled: bool,
+    listener_static: bool,
+    focus_active: bool,
+    ddx: f32,
+    ddy: f32,
+    ddz: f32,
+    precomputed_dist: f32,
     lpos_x: f32,
     lpos_y: f32,
     lpos_z: f32,
@@ -164,30 +217,43 @@ fn apply_doppler(
     lvz: f32,
     sound_speed: f32,
 ) {
-    // spatial 無効・Doppler レベル 0・両者静止 のいずれかなら即 1.0 で抜ける。
+    // spatial 無効・Doppler レベル 0 ならば即 1.0 で抜ける。
     let level = world.doppler_levels[i];
-    if !world.spatial_enabled[i] || level <= 0.0 {
+    if !spatial_enabled || level <= 0.0 {
         world.doppler_pitches[i] = 1.0;
         return;
     }
     let svx = world.velocities_x[i];
     let svy = world.velocities_y[i];
     let svz = world.velocities_z[i];
-    if lvx == 0.0 && lvy == 0.0 && lvz == 0.0 && svx == 0.0 && svy == 0.0 && svz == 0.0 {
+    if listener_static && svx == 0.0 && svy == 0.0 && svz == 0.0 {
         world.doppler_pitches[i] = 1.0;
         return;
     }
 
-    // listener → source の単位ベクトル。距離 0 近傍では方向不定なので無効化。
-    let dx = world.positions_x[i] - lpos_x;
-    let dy = world.positions_y[i] - lpos_y;
-    let dz = world.positions_z[i] - lpos_z;
-    let dist_sq = dx * dx + dy * dy + dz * dz;
-    if dist_sq < 1e-8 {
-        world.doppler_pitches[i] = 1.0;
-        return;
-    }
-    let inv_dist = 1.0 / dist_sq.sqrt();
+    // listener → source の単位ベクトル。focus 無効時は SIMD path で計算済みの値を流用する
+    // (vpos_dist == listener.position なので (ddx, ddy, ddz, precomputed_dist) が
+    // そのまま実リスナー基準と一致する)。focus 有効時のみ実リスナー位置から再計算する。
+    let (dx, dy, dz, dist) = if focus_active {
+        let dx = world.positions_x[i] - lpos_x;
+        let dy = world.positions_y[i] - lpos_y;
+        let dz = world.positions_z[i] - lpos_z;
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+        if dist_sq < 1e-8 {
+            world.doppler_pitches[i] = 1.0;
+            return;
+        }
+        (dx, dy, dz, dist_sq.sqrt())
+    } else {
+        // precomputed_dist は (ddx² + ddy² + ddz²).sqrt() で既に算出済み。
+        // 距離 0 近傍は方向不定なので無効化 (dist_sq < 1e-8 ↔ dist < 1e-4)。
+        if precomputed_dist < 1e-4 {
+            world.doppler_pitches[i] = 1.0;
+            return;
+        }
+        (ddx, ddy, ddz, precomputed_dist)
+    };
+    let inv_dist = 1.0 / dist;
     let nx = dx * inv_dist;
     let ny = dy * inv_dist;
     let nz = dz * inv_dist;
@@ -217,19 +283,24 @@ fn apply_doppler(
 }
 
 /// ソース 1 体分のゲインを計算して `SpatialWorld` に書き込む。
+///
+/// `spatial_enabled` は呼出側が 1 度だけ load した値を渡す (`apply_doppler` と共有して
+/// 2 重 load 回避)。
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn apply_gains(
     world: &mut SpatialWorld,
     vols: &[f32],
     curves: &[Option<Arc<AttenuationCurve>>],
     i: usize,
+    spatial_enabled: bool,
     dist: f32,
     local_x: f32,
     local_z: f32,
 ) {
     let vol = vols[i];
 
-    if !world.spatial_enabled[i] {
+    if !spatial_enabled {
         world.left_gains[i] = vol;
         world.right_gains[i] = vol;
         return;
