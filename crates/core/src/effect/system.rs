@@ -1,5 +1,6 @@
 use super::compressor::CompressorWorld;
 use super::hpf::HpfWorld;
+use super::limiter::LimiterWorld;
 use super::lpf::LpfWorld;
 use super::peq::PeakingEqWorld;
 use super::reverb::ReverbWorld;
@@ -22,6 +23,7 @@ impl EffectSystem {
         reverb: &mut ReverbWorld,
         compressor: &mut CompressorWorld,
         peq: &mut PeakingEqWorld,
+        limiter: &mut LimiterWorld,
         chain: &[crate::effect::EffectId],
         buf: &mut [f32],
         channels: usize,
@@ -43,6 +45,7 @@ impl EffectSystem {
                 EffectKind::Reverb if algo == 0 => reverb.apply(state_index, buf, channels),
                 EffectKind::Compressor if algo == 0 => compressor.apply(state_index, buf, channels),
                 EffectKind::PeakingEq if algo == 0 => peq.apply(state_index, buf, channels),
+                EffectKind::Limiter if algo == 0 => limiter.apply(state_index, buf, channels),
                 _ => {}
             }
         }

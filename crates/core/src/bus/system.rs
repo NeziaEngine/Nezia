@@ -1,6 +1,6 @@
 use crate::effect::{
-    CompressorWorld, EffectPosition, EffectSystem, EffectWorld, HpfWorld, LpfWorld, PeakingEqWorld,
-    ReverbWorld,
+    CompressorWorld, EffectPosition, EffectSystem, EffectWorld, HpfWorld, LimiterWorld, LpfWorld,
+    PeakingEqWorld, ReverbWorld,
 };
 
 use super::send::{SendDestKind, SendPosition};
@@ -24,6 +24,7 @@ impl BusSystem {
         reverb_world: &mut ReverbWorld,
         compressor_world: &mut CompressorWorld,
         peq_world: &mut PeakingEqWorld,
+        limiter_world: &mut LimiterWorld,
         output_buffer: &mut [f32],
         device_channels: usize,
         sample_count: usize,
@@ -51,6 +52,7 @@ impl BusSystem {
                     reverb_world,
                     compressor_world,
                     peq_world,
+                    limiter_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
@@ -93,6 +95,7 @@ impl BusSystem {
                     reverb_world,
                     compressor_world,
                     peq_world,
+                    limiter_world,
                     &chain_copy[..chain_len],
                     buf,
                     device_channels,
