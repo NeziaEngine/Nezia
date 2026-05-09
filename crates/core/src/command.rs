@@ -35,6 +35,8 @@ pub enum Command {
         token: u32,
         /// ループ再生フラグ。
         looping: bool,
+        /// Phase 3-4: 予約再生開始時刻 (絶対 DSP frame)。`0` で即時再生。
+        start_dsp_frame: u64,
     },
     /// ボイスを指定バス（密配列インデックス）に再生する（fire-and-forget）。
     PlayToBus {
@@ -47,6 +49,8 @@ pub enum Command {
         token: u32,
         /// ループ再生フラグ。
         looping: bool,
+        /// Phase 3-4: 予約再生開始時刻 (絶対 DSP frame)。`0` で即時再生。
+        start_dsp_frame: u64,
     },
     /// EntityId 付きでソースをスポーンする（3D ソース用）。
     ///
@@ -63,6 +67,8 @@ pub enum Command {
         token: u32,
         /// ループ再生フラグ。
         looping: bool,
+        /// Phase 3-4: 予約再生開始時刻 (絶対 DSP frame)。`0` で即時再生。
+        start_dsp_frame: u64,
     },
     /// すべてのボイスを停止する。
     StopAll,

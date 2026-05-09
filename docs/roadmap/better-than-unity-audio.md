@@ -179,7 +179,7 @@ Phase 6  ── 中長期 ──
 | 3-3 | D | ~~**Send / Receive + Sidechain Ducking**~~ **実装済** (#20, #21) | 2〜3 週間 |
 
 > **Reverb の運用パターン補足**: Phase 2-3 では Reverb は Bus 専用で実装する (Source 対象は API 段階で拒否)。Wwise/FMOD/Unity いずれも技術的には per-voice Reverb が可能だが、業界標準の運用は **Aux Bus + Send/Return で 1 個の Reverb を全ソースで共有**する形であり、per-voice はほぼ使われない。NEZIA も Phase 3-3 で Send/Return が入った時点で同じ標準パターンが組めるようになり、Source 単位 Reverb の直接挿入機能を別途追加する必要はない。Phase 2-3 の Bus 専用制約はこの段階までの暫定対応である。
-| 3-4 | E | **PlayScheduled (サンプル精度の予約再生)** | 1〜2 週間 |
+| 3-4 | E | ~~**PlayScheduled (サンプル精度の予約再生)**~~ **実装済** ([設計](../design/core/scheduling.md)) | 1〜2 週間 |
 | 3-5 | B | ~~**DSP 拡充: ParamEQ / Compressor / Limiter**~~ **実装済** (Compressor #21 / PeakingEq / 単体 Limiter / master soft limiter すべて完了) | 2 週間 |
 
 **判断ポイント**:

@@ -20,6 +20,10 @@ pub struct SourceComponent {
     /// Voice Virtualization 用優先度。Wwise / CRI ADX2 互換 (0..255、**高いほど高優先**)。
     /// 既定値 128 (中央値)。Wwise は 0..100、ADX2 は 0..255 だが、いずれも「高い値ほど重要」が共通。
     pub priority: u8,
+    /// Phase 3-4: 予約再生開始時刻 (絶対 DSP frame)。
+    /// `0` は「未指定 = 即時再生」のセンチネル。それ以外は engine の DSP clock
+    /// (`SoundEngine::dsp_time_samples`) 基準で発音開始する frame。
+    pub start_dsp_frame: u64,
 }
 
 impl Default for SourceComponent {
@@ -33,6 +37,7 @@ impl Default for SourceComponent {
             token: 0,
             looping: false,
             priority: 128,
+            start_dsp_frame: 0,
         }
     }
 }
@@ -46,6 +51,12 @@ pub enum SourceState {
     Pausing,
     /// 停止済み。次の update で despawn される。
     Stopped,
+    /// Phase 3-4: 発音待機中 (PlayScheduled)。
+    /// `start_dsp_frame > clock_at_callback_start` の間は mixing をスキップし、
+    /// virtualizer のスコアリング対象外 (Playing でないため自然に除外される)。
+    /// callback 冒頭で `start_dsp_frame <= clock_at_callback_start + frames_in_callback`
+    /// になった時点で `Playing` へ遷移し、必要なら sub-callback offset を伴って発音する。
+    Scheduled,
 }
 
 /// Source ワールド。
@@ -86,6 +97,12 @@ pub struct SourceWorld {
     /// Pre-Spatial エフェクトチェーン (resampler 後、Spatial 適用前のモノラル信号に作用)。
     pub(super) pre_chain: Vec<[EffectId; MAX_EFFECTS_PER_SOURCE]>,
     pub(super) pre_count: Vec<u8>,
+
+    // ── 予約再生 (Phase 3-4) ──
+    /// 予約再生開始時刻 (絶対 DSP frame)。`0` で即時再生。
+    /// `state == Scheduled` のソースは `start_dsp_frame > clock_at_callback_start` の間
+    /// 発音されず待機する。
+    pub(super) start_dsp_frame: Vec<u64>,
 }
 
 impl Default for SourceWorld {
@@ -111,6 +128,7 @@ impl SourceWorld {
             is_virtual: Vec::with_capacity(MAX_SOURCES),
             pre_chain: Vec::with_capacity(MAX_SOURCES),
             pre_count: Vec::with_capacity(MAX_SOURCES),
+            start_dsp_frame: Vec::with_capacity(MAX_SOURCES),
         }
     }
 
@@ -123,7 +141,15 @@ impl SourceWorld {
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
         self.audio_buffer_index.push(params.audio_buffer_index);
-        self.state.push(SourceState::Playing);
+        // Phase 3-4: start_dsp_frame == 0 は即時再生のセンチネル。それ以外は
+        // Scheduled としてミキシングを待機させ、audio thread の `activate_scheduled`
+        // で実 DSP clock と比較して Playing 化する (過去指定もそこで吸収する)。
+        let initial_state = if params.start_dsp_frame == 0 {
+            SourceState::Playing
+        } else {
+            SourceState::Scheduled
+        };
+        self.state.push(initial_state);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
         self.looping.push(params.looping);
@@ -137,6 +163,7 @@ impl SourceWorld {
             }; MAX_EFFECTS_PER_SOURCE],
         );
         self.pre_count.push(0);
+        self.start_dsp_frame.push(params.start_dsp_frame);
         Some(id)
     }
 
@@ -152,7 +179,12 @@ impl SourceWorld {
         self.pitch.push(params.pitch);
         self.sample_offset.push(params.sample_offset);
         self.audio_buffer_index.push(params.audio_buffer_index);
-        self.state.push(SourceState::Playing);
+        let initial_state = if params.start_dsp_frame == 0 {
+            SourceState::Playing
+        } else {
+            SourceState::Scheduled
+        };
+        self.state.push(initial_state);
         self.output_bus.push(params.output_bus);
         self.token.push(params.token);
         self.looping.push(params.looping);
@@ -165,6 +197,7 @@ impl SourceWorld {
             }; MAX_EFFECTS_PER_SOURCE],
         );
         self.pre_count.push(0);
+        self.start_dsp_frame.push(params.start_dsp_frame);
         true
     }
 
@@ -190,6 +223,7 @@ impl SourceWorld {
         self.is_virtual.swap_remove(dense_index);
         self.pre_chain.swap_remove(dense_index);
         self.pre_count.swap_remove(dense_index);
+        self.start_dsp_frame.swap_remove(dense_index);
         true
     }
 
@@ -333,6 +367,7 @@ impl SourceWorld {
         self.is_virtual.swap_remove(dense_index);
         self.pre_chain.swap_remove(dense_index);
         self.pre_count.swap_remove(dense_index);
+        self.start_dsp_frame.swap_remove(dense_index);
     }
 
     // ── Voice Virtualization アクセサ ────────────────────────────────
@@ -366,6 +401,14 @@ impl SourceWorld {
     }
     pub fn states(&self) -> &[SourceState] {
         &self.state
+    }
+    /// SoA 一括書き換え用 (audio thread の `activate_scheduled` で `Scheduled → Playing` 遷移に使う)。
+    pub fn states_mut(&mut self) -> &mut [SourceState] {
+        &mut self.state
+    }
+    /// 予約再生開始時刻 (絶対 DSP frame) の dense 配列。
+    pub fn start_dsp_frames(&self) -> &[u64] {
+        &self.start_dsp_frame
     }
     pub fn pitches(&self) -> &[f32] {
         &self.pitch
