@@ -3,28 +3,30 @@ mod buffer_api;
 mod buffer_reader;
 mod bus_api;
 mod callback_registry;
+mod capture_api;
 mod container_api;
 mod effect_alloc;
 mod effect_api;
+mod event_dispatch;
 mod live_params;
+mod metrics_api;
+mod query_api;
 mod send_alloc;
 mod send_api;
 mod slot_allocator;
 mod snapshot_api;
 mod source_api;
+mod source_state_cache;
 mod spatial_api;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use arc_swap::ArcSwap;
 use cpal::Stream;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::{
-    HeapRb,
-    traits::{Consumer, Split},
-};
+use ringbuf::{HeapRb, traits::Split};
 
 use crate::audio::AudioBuffer;
 use crate::buffer_pool::AudioBufferPool;
@@ -36,84 +38,21 @@ use crate::core::bus_routing::BusRoutingMirror;
 use crate::effect::{EffectWorld, EffectWorlds};
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
-use crate::metrics::{DropoutStats, DspStats, EngineMetrics};
+use crate::metrics::EngineMetrics;
 use crate::snapshot::{Snapshot, SnapshotRegistry};
 use crate::source::{MAX_SOURCES, SourceWorld};
 use crate::spatial::{AttenuationCurve, CurveRegistry, ListenerState, SpatialWorld};
 
 use audio_thread::AudioThread;
-use callback_registry::{CallbackKind, CallbackRegistry};
+use callback_registry::CallbackRegistry;
 use effect_alloc::EffectIdAllocator;
 pub(crate) use live_params::SourceLiveParams;
 use send_alloc::SendIdAllocator;
 use slot_allocator::SourceSlotAllocator;
+pub(crate) use source_state_cache::SourceSnapshot;
+use source_state_cache::{SourceStateCache, build_source_snapshots_buffer};
 
 pub use buffer_reader::BufferReader;
-
-/// メインスレッドからソースの生存・再生位置を確認するためのスナップショット。
-///
-/// サウンドスレッドが各オーディオコールバック末尾で publish し、メインスレッドが
-/// `poll_events()` で取り込む。`SourceWorld` の所有自体はサウンドスレッド側に残し、
-/// クエリだけが triple buffer 経由で同期される。
-///
-/// triple buffer に乗せる側は AoS（フォーマットが固定で扱いやすい）、
-/// メインスレッド側のクエリキャッシュは SoA（連続スキャンが速い）で持つ。
-#[derive(Debug, Clone, Copy)]
-pub(super) struct SourceSnapshot {
-    pub(super) index: u32,
-    pub(super) generation: u32,
-    pub(super) sample_offset: f32,
-}
-
-/// メインスレッド側のクエリキャッシュ（SoA）。
-///
-/// `is_source_alive` / `source_position` の単発検索でも、`batch_*` の一括検索でも
-/// 共通でこの構造を線形スキャンする。`indices` 配列だけ触れば generation 一致を
-/// 確認するときまで他の配列にアクセスしないので、L1 効率が高い。
-#[derive(Default)]
-pub(super) struct SourceStateCache {
-    pub(super) indices: Vec<u32>,
-    pub(super) generations: Vec<u32>,
-    pub(super) sample_offsets: Vec<f32>,
-}
-
-impl SourceStateCache {
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            indices: Vec::with_capacity(cap),
-            generations: Vec::with_capacity(cap),
-            sample_offsets: Vec::with_capacity(cap),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.indices.clear();
-        self.generations.clear();
-        self.sample_offsets.clear();
-    }
-
-    fn refill_from(&mut self, snapshots: &[SourceSnapshot]) {
-        self.clear();
-        for s in snapshots {
-            self.indices.push(s.index);
-            self.generations.push(s.generation);
-            self.sample_offsets.push(s.sample_offset);
-        }
-    }
-
-    /// `id` の dense 位置を返す（generation も一致する場合のみ）。
-    /// 未存在 / stale generation なら `None`。
-    #[inline]
-    fn find(&self, id: EntityId) -> Option<usize> {
-        // hot path: indices をシーケンシャルに走査。マッチしたら generation を確認。
-        for (i, &idx) in self.indices.iter().enumerate() {
-            if idx == id.index && self.generations[i] == id.generation {
-                return Some(i);
-            }
-        }
-        None
-    }
-}
 
 /// コマンドリングバッファの容量。
 const COMMAND_RING_CAPACITY: usize = 128;
@@ -133,11 +72,19 @@ const CAPTURE_RING_SECONDS: f32 = 1.0;
 /// - [`source_api`] — Source の再生・ライブ制御
 /// - [`spatial_api`] — リスナー / 3D 位置情報の publish
 /// - [`bus_api`] — バスの生成・削除・ルーティング
+/// - [`effect_api`] — DSP エフェクトの spawn / param
+/// - [`send_api`] — Send / Sidechain ルーティング
+/// - [`snapshot_api`] — Mixer Snapshot
+/// - [`container_api`] — Container (Random / Switch / Sequence)
+/// - [`capture_api`] — マスター出力キャプチャと出力フォーマット
+/// - [`metrics_api`] — ベンチマーク用メトリクスの読み出し
+/// - [`query_api`] — 生存判定 / 再生位置クエリ
+/// - [`event_dispatch`] — `poll_events()` でのコールバック dispatch
 pub struct SoundEngine {
     /// コマンドリングバッファのプロデューサ側（メインスレッドが所有）。
     pub(super) command_producer: ringbuf::HeapProd<Command>,
     /// イベントリングバッファのコンシューマ側（メインスレッドが所有）。
-    event_consumer: ringbuf::HeapCons<Event>,
+    pub(super) event_consumer: ringbuf::HeapCons<Event>,
     /// リスナー姿勢の triple buffer 入力側（newest-wins, alloc 無し）。
     pub(super) listener_input: triple_buffer::Input<ListenerState>,
     /// ソース位置更新の triple buffer 入力側（newest-wins, alloc 無し）。
@@ -190,14 +137,14 @@ pub struct SoundEngine {
     /// デバイス出力チャンネル数 (通常 2)。`output_format()` で公開する。
     pub(super) device_channels: u16,
     /// マスター出力キャプチャの enabled フラグ + ドロップ累積。audio thread と共有。
-    capture_shared: Arc<CaptureShared>,
+    pub(super) capture_shared: Arc<CaptureShared>,
     /// 初回 `enable_master_capture()` 呼び出しで `take()` される唯一のリーダー。
     /// 取った後は再 enable しても `None` のまま (既存ハンドルが流量を受け続ける)。
-    capture_reader: Option<CaptureReader>,
+    pub(super) capture_reader: Option<CaptureReader>,
     /// エンジン起動以降の累積処理フレーム数。`dsp_time_samples()` で公開。
-    dsp_time_frames: Arc<AtomicU64>,
+    pub(super) dsp_time_frames: Arc<AtomicU64>,
     /// audio thread と共有するベンチマーク用ランタイム計測値。
-    metrics: Arc<EngineMetrics>,
+    pub(super) metrics: Arc<EngineMetrics>,
 }
 
 impl SoundEngine {
@@ -342,221 +289,6 @@ impl SoundEngine {
             metrics,
         })
     }
-
-    /// マスター出力 PCM のキャプチャを有効化し、リーダーハンドルを返す。
-    ///
-    /// 戻り値は **初回呼び出し時のみ Some**。リーダーは 1 個しか発行されないため、
-    /// 2 回目以降は `None` を返す (既に取得済みのハンドルが流量を受け続けている)。
-    /// `disable_master_capture()` 後に再度 enable しても新しいリーダーは発行されない。
-    ///
-    /// 取得後は任意スレッドから `CaptureReader::read_interleaved()` を呼んでよい。
-    /// Unity Recorder からは Unity 側のオーディオスレッドや専用録音スレッドで drain 可能。
-    pub fn enable_master_capture(&mut self) -> Option<CaptureReader> {
-        let reader = self.capture_reader.take()?;
-        self.capture_shared.enabled.store(true, Ordering::Release);
-        Some(reader)
-    }
-
-    /// マスター出力キャプチャを無効化する。
-    ///
-    /// audio thread はこれ以降リングへ push しない。既存リーダーはリング内に残る
-    /// サンプルを最後まで drain してよい。再 enable も可能 (フラグを再 store するだけ)。
-    pub fn disable_master_capture(&self) {
-        self.capture_shared.enabled.store(false, Ordering::Release);
-    }
-
-    /// デバイス出力フォーマットを `(sample_rate_hz, channels)` で返す。
-    ///
-    /// Unity Recorder の wav/mp4 mux 設定や、自前の録音 muxer 構築に使う。
-    #[must_use]
-    pub fn output_format(&self) -> (u32, u16) {
-        (self.device_sample_rate as u32, self.device_channels)
-    }
-
-    /// エンジン起動以降に audio thread が処理した累積フレーム数 (per-channel sample count)。
-    ///
-    /// 任意スレッドから lock-free に読める (atomic relaxed load)。Unity の `Time.time` /
-    /// 動画フレーム位置と相関を取って、録音 PCM とビデオの同期点を決めるのに使う。
-    #[must_use]
-    pub fn dsp_time_samples(&self) -> u64 {
-        self.dsp_time_frames.load(Ordering::Relaxed)
-    }
-
-    /// `dsp_time_samples()` を秒に換算した値。
-    #[must_use]
-    pub fn dsp_time_seconds(&self) -> f64 {
-        let frames = self.dsp_time_samples() as f64;
-        let sr = self.device_sample_rate as f64;
-        if sr <= 0.0 { 0.0 } else { frames / sr }
-    }
-
-    /// 直近 audio callback の DSP CPU 計測値スナップショットを返す。
-    ///
-    /// 任意スレッドから lock-free に読める (各カウンタは relaxed atomic load)。
-    /// ベンチマークで Unity の `AudioSettings.GetCPULoad()` 相当として使う。
-    #[must_use]
-    pub fn dsp_stats(&self) -> DspStats {
-        DspStats {
-            last_callback_ns: self.metrics.last_callback_ns.load(Ordering::Relaxed),
-            peak_callback_ns: self.metrics.peak_callback_ns.load(Ordering::Relaxed),
-            callback_count: self.metrics.callback_count.load(Ordering::Relaxed),
-            callback_total_ns: self.metrics.callback_total_ns.load(Ordering::Relaxed),
-            last_callback_budget_ns: self.metrics.last_callback_budget_ns.load(Ordering::Relaxed),
-        }
-    }
-
-    /// 直近 audio callback 末尾で観測された生存ソース数 (Playing/Pausing/Stopped 含む)。
-    ///
-    /// `poll_events()` 経由のスナップショットではなく、audio thread が atomic に
-    /// 公開した最新値。ベンチマーク時に「実際にいま鳴っているボイス本数」を
-    /// 計測するのに使う。`poll_events()` 不要。
-    #[must_use]
-    pub fn active_source_count(&self) -> u32 {
-        self.metrics.active_source_count.load(Ordering::Relaxed)
-    }
-
-    /// 直近 audio callback 末尾で virtualized (mix スキップ) 状態だったボイス数。
-    #[must_use]
-    pub fn virtualized_voice_count(&self) -> u32 {
-        self.metrics.virtualized_voice_count.load(Ordering::Relaxed)
-    }
-
-    /// ドロップアウト系カウンタのスナップショット (cumulative)。
-    ///
-    /// - `voice_steal`: callback ごとの virtualized voice 数の累積和 (voice-frame 単位)。
-    ///   現状の Nezia は MAX_PHYSICAL_VOICES 超過時に「古いボイスを止める」のではなく
-    ///   「優先度下位を一時的に mix スキップ」する設計のため、伝統的な voice steal とは
-    ///   意味が異なる点に注意。
-    /// - `streaming_underrun`: ストリーミングバッファ underrun の累積発生回数。
-    /// - `dropped_play_calls`: `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
-    #[must_use]
-    pub fn dropouts(&self) -> DropoutStats {
-        DropoutStats {
-            voice_steal: self.metrics.voice_steal_count.load(Ordering::Relaxed),
-            streaming_underrun: self
-                .metrics
-                .streaming_underrun_count
-                .load(Ordering::Relaxed),
-            dropped_play_calls: self.metrics.dropped_play_calls.load(Ordering::Relaxed),
-        }
-    }
-
-    /// ゲームループの毎フレーム末尾で呼ぶ。
-    ///
-    /// サウンドスレッドからのイベントをドレインし、登録済みの `on_finish` コールバックを呼び出す。
-    pub fn poll_events(&mut self) {
-        while let Some(ev) = self.event_consumer.try_pop() {
-            match ev {
-                Event::SourceFinished { token } => {
-                    match self.callbacks.complete(token) {
-                        CallbackKind::Native { f, user_data } => {
-                            // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
-                            // ABI 越境を最小化するため fn ptr を直呼びする（Box ナシ）。
-                            unsafe { f(user_data as *mut std::ffi::c_void) };
-                        }
-                        CallbackKind::Rust(closure) => closure(),
-                        CallbackKind::Empty => {}
-                    }
-                }
-                Event::PlayFailed { token } => {
-                    // コールバックを解放するのみ（呼び出しは行わない）。
-                    self.callbacks.cancel(token);
-                }
-                Event::SourceDespawned { id } => {
-                    // 当該ソース起点の Send ハンドルを一括解放する (Wwise / FMOD 互換の
-                    // per-event aux send 自動 cleanup 規約)。audio thread 側は
-                    // `SourceWorld::despawn_by_dense_index` で send_lookup を既にクリア済み。
-                    for slot in 0..self.source_sends.len() {
-                        if let Some((send_id, src)) = self.source_sends[slot]
-                            && src == id
-                        {
-                            self.source_sends[slot] = None;
-                            self.send_slots.free(send_id);
-                        }
-                    }
-                    // スロット index を再利用キューに戻す。
-                    self.source_slots.free(id);
-                }
-                Event::StreamingUnderrun { buffer } => {
-                    // 現状は通知のみ。アプリ側がコールバック経由で観測するための
-                    // 公開 API を Phase 2-4 後半で追加予定。
-                    let _ = buffer;
-                }
-                Event::CaptureOverflow { dropped_samples } => {
-                    // 通知のみ。累積カウンタ (`CaptureReader::dropped_samples`) で値は取れる。
-                    // 連続発火時のレート抑制は audio thread 側に閉じる方針。
-                    let _ = dropped_samples;
-                }
-            }
-        }
-
-        // ソース状態スナップショットを取り込む（AoS → SoA への詰め替え）。
-        if self.source_snapshots_output.update() {
-            let snapshots = self.source_snapshots_output.output_buffer_mut();
-            self.source_state_cache.refill_from(snapshots);
-        }
-    }
-
-    /// ソースが現在 SourceWorld に存在するかを最新スナップショットで確認する。
-    ///
-    /// スナップショットは `poll_events()` でのみ更新されるため、最後の poll
-    /// 以降の生成・終了は反映されない。フレーム末尾で poll する想定。
-    #[must_use]
-    pub fn is_source_alive(&self, id: EntityId) -> bool {
-        self.source_state_cache.find(id).is_some()
-    }
-
-    /// ソースの再生位置（フレーム単位）を最新スナップショットから取得する。
-    #[must_use]
-    pub fn source_position(&self, id: EntityId) -> Option<f32> {
-        self.source_state_cache
-            .find(id)
-            .map(|i| self.source_state_cache.sample_offsets[i])
-    }
-
-    /// 複数ソースの生存を一括判定する。
-    ///
-    /// `ids` と `out_alive` は同じ長さを持つ前提。`out_alive[i]` には
-    /// `ids[i]` が現在の最新スナップショットに存在し generation も一致する場合 `1`、
-    /// それ以外は `0` が書き込まれる。スナップショットは `poll_events()` でのみ
-    /// 更新されるため、最後の poll 以降の生成・終了は反映されない。
-    pub fn batch_is_source_alive(&self, ids: &[EntityId], out_alive: &mut [u8]) {
-        let n = ids.len().min(out_alive.len());
-        for i in 0..n {
-            out_alive[i] = self.source_state_cache.find(ids[i]).is_some() as u8;
-        }
-    }
-
-    /// 複数ソースの再生位置を一括取得する。
-    ///
-    /// `ids` / `out_positions` / `out_alive` は同じ長さを持つ前提。
-    /// alive でない場合は `out_positions[i]` に `f32::NAN`、`out_alive[i]` に `0`。
-    /// `out_alive` を不要なら `&mut []` を渡してもよい（その場合は alive 判定は
-    /// `out_positions[i].is_nan()` で代替できる）。
-    pub fn batch_source_positions(
-        &self,
-        ids: &[EntityId],
-        out_positions: &mut [f32],
-        out_alive: &mut [u8],
-    ) {
-        let n = ids.len().min(out_positions.len());
-        for i in 0..n {
-            match self.source_state_cache.find(ids[i]) {
-                Some(idx) => {
-                    out_positions[i] = self.source_state_cache.sample_offsets[idx];
-                    if i < out_alive.len() {
-                        out_alive[i] = 1;
-                    }
-                }
-                None => {
-                    out_positions[i] = f32::NAN;
-                    if i < out_alive.len() {
-                        out_alive[i] = 0;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// ソース位置更新用の triple buffer を初期化する。
@@ -570,29 +302,6 @@ type PositionUpdatesOut = triple_buffer::Output<Vec<SourcePositionUpdate>>;
 
 type VelocityUpdatesIn = triple_buffer::Input<Vec<SourceVelocityUpdate>>;
 type VelocityUpdatesOut = triple_buffer::Output<Vec<SourceVelocityUpdate>>;
-
-type SourceSnapshotsIn = triple_buffer::Input<Vec<SourceSnapshot>>;
-type SourceSnapshotsOut = triple_buffer::Output<Vec<SourceSnapshot>>;
-
-/// ソーススナップショット用の triple buffer を初期化する。
-///
-/// 全 3 スロットに `MAX_SOURCES` ぶんの capacity を確保しておくことで、
-/// サウンドスレッドの `clear + push` で再確保が起きないようにする。
-fn build_source_snapshots_buffer() -> (SourceSnapshotsIn, SourceSnapshotsOut) {
-    let initial: Vec<SourceSnapshot> = vec![
-        SourceSnapshot {
-            index: 0,
-            generation: 0,
-            sample_offset: 0.0
-        };
-        MAX_SOURCES
-    ];
-    let (mut input, mut output) = triple_buffer::triple_buffer(&initial);
-    input.input_buffer_mut().clear();
-    input.publish();
-    output.update();
-    (input, output)
-}
 
 fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
     let positions_initial: Vec<SourcePositionUpdate> = vec![
@@ -629,86 +338,4 @@ fn build_velocity_updates_buffer() -> (VelocityUpdatesIn, VelocityUpdatesOut) {
     input.publish();
     output.update();
     (input, output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn snap(index: u32, generation: u32, sample_offset: f32) -> SourceSnapshot {
-        SourceSnapshot {
-            index,
-            generation,
-            sample_offset,
-        }
-    }
-
-    #[test]
-    fn cache_find_returns_none_when_empty() {
-        let cache = SourceStateCache::default();
-        assert!(
-            cache
-                .find(EntityId {
-                    index: 0,
-                    generation: 0
-                })
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn cache_find_matches_index_and_generation() {
-        let mut cache = SourceStateCache::with_capacity(4);
-        cache.refill_from(&[snap(3, 7, 100.0), snap(5, 1, 200.0)]);
-        assert_eq!(
-            cache.find(EntityId {
-                index: 3,
-                generation: 7
-            }),
-            Some(0)
-        );
-        assert_eq!(
-            cache.find(EntityId {
-                index: 5,
-                generation: 1
-            }),
-            Some(1)
-        );
-        assert_eq!(
-            cache.find(EntityId {
-                index: 3,
-                generation: 8
-            }),
-            None
-        );
-        assert_eq!(
-            cache.find(EntityId {
-                index: 99,
-                generation: 0
-            }),
-            None
-        );
-    }
-
-    #[test]
-    fn cache_refill_clears_old_entries() {
-        let mut cache = SourceStateCache::with_capacity(4);
-        cache.refill_from(&[snap(3, 7, 100.0)]);
-        cache.refill_from(&[snap(5, 1, 200.0)]);
-        assert!(
-            cache
-                .find(EntityId {
-                    index: 3,
-                    generation: 7
-                })
-                .is_none()
-        );
-        assert_eq!(
-            cache.find(EntityId {
-                index: 5,
-                generation: 1
-            }),
-            Some(0)
-        );
-    }
 }
