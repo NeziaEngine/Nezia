@@ -3,6 +3,7 @@ mod buffer_pool;
 mod bus;
 mod capture;
 mod command;
+mod config;
 mod container;
 mod core;
 mod effect;
@@ -21,6 +22,9 @@ mod streaming;
 
 /// サウンドエンジン本体。
 pub use core::engine::SoundEngine;
+
+/// エンジン初期化時のキャパシティ設定 (`SoundEngine::with_config` に渡す)。
+pub use config::EngineConfig;
 
 /// メモリ上のバイト列からオーディオメタデータを取得する。
 pub use audio::{AudioMetadata, peek_metadata};

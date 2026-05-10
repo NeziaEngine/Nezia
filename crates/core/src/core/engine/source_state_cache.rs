@@ -7,7 +7,6 @@
 //! 同期される構造。
 
 use crate::entity::EntityId;
-use crate::source::MAX_SOURCES;
 
 /// メインスレッドからソースの生存・再生位置を確認するためのスナップショット。
 ///
@@ -78,14 +77,16 @@ pub(crate) type SourceSnapshotsOut = triple_buffer::Output<Vec<SourceSnapshot>>;
 /// サウンドスレッドの `clear + push` で再確保が起きないようにする。
 /// 入力側は publish 直後に空 Vec で 1 回 publish しておき、初回 `update()` で
 /// ダミー位置データが apply されるのを防ぐ。
-pub(crate) fn build_source_snapshots_buffer() -> (SourceSnapshotsIn, SourceSnapshotsOut) {
+pub(crate) fn build_source_snapshots_buffer(
+    max_sources: usize,
+) -> (SourceSnapshotsIn, SourceSnapshotsOut) {
     let initial: Vec<SourceSnapshot> = vec![
         SourceSnapshot {
             index: 0,
             generation: 0,
             sample_offset: 0.0
         };
-        MAX_SOURCES
+        max_sources
     ];
     let (mut input, mut output) = triple_buffer::triple_buffer(&initial);
     input.input_buffer_mut().clear();

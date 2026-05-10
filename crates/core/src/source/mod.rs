@@ -7,17 +7,24 @@ pub use lifecycle::SourceLifecycleSystem;
 pub use mixing::SourceMixingSystem;
 pub use world::{SourceComponent, SourceState, SourceWorld};
 
-/// 最大論理ソース数 (`SourceWorld` の上限)。
+/// 最大論理ソース数のデフォルト値 (`EngineConfig::default().max_sources`)。
 ///
-/// `MAX_PHYSICAL_VOICES` を超えるソースは spawn 直後の rebalance で `is_virtual = true`
+/// `EngineConfig` で上書きでき、超えるソースは spawn 直後の rebalance で `is_virtual = true`
 /// となり、ミキシング段でスキップされる (sample_offset は前進する)。
-pub const MAX_SOURCES: usize = 4096;
+pub const DEFAULT_MAX_SOURCES: usize = 4096;
 
-/// 物理ボイス数 (実 DSP / ミキシングを行うボイスの上限)。
+/// 物理ボイス数のデフォルト値 (`EngineConfig::default().max_physical_voices`)。
 ///
 /// この数を超えるソースは Voice Virtualization で仮想化され、ミキシング処理がスキップされる。
-/// Unity / Wwise / FMOD と同様、論理上限 (`MAX_SOURCES`) より小さく設定する。
-pub const MAX_PHYSICAL_VOICES: usize = 32;
+/// Unity / Wwise / FMOD と同様、論理上限 (`max_sources`) より小さく設定する。
+pub const DEFAULT_MAX_PHYSICAL_VOICES: usize = 32;
+
+// 旧名のエイリアス (内部の固定長スタック配列やテストが参照する compile-time 上限)。
+// `MAX_PHYSICAL_VOICES` は runtime で `EngineConfig` から差し込まれるため、こちら
+// は単なる「DEFAULT 値の旧名」として残す (削除しても良いが既存コメント / 設計
+// ドキュメントの参照を潰さないために維持)。
+#[doc(hidden)]
+pub const MAX_SOURCES: usize = DEFAULT_MAX_SOURCES;
 
 /// Source 起点 Send 上限 (ソース 1 体あたりの user-defined aux send 数)。
 /// Wwise / FMOD の per-event aux send が 1〜2 本で済むケースが大半なので、

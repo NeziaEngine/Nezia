@@ -1,6 +1,5 @@
 use crate::spatial::SpatialWorld;
 
-use super::MAX_PHYSICAL_VOICES;
 use super::world::{SourceState, SourceWorld};
 
 /// Voice Virtualization システム。
@@ -28,18 +27,18 @@ impl VoiceVirtualizer {
     /// # 計算量
     /// O(N + N log N)。N = `source_world.len() <= MAX_SOURCES = 256` で実用上は微少。
     /// quickselect で O(N) にできるが Phase 2 では sort で十分。
-    pub fn rebalance(world: &mut SourceWorld, spatial: &SpatialWorld) {
+    pub fn rebalance(world: &mut SourceWorld, spatial: &SpatialWorld, max_physical_voices: usize) {
         let n = world.len();
         if n == 0 {
             return;
         }
-        // Playing ソースが MAX_PHYSICAL_VOICES 以下なら全部物理化して即終了 (高速経路)。
+        // Playing ソースが max_physical_voices 以下なら全部物理化して即終了 (高速経路)。
         let playing_count = world
             .states()
             .iter()
             .filter(|s| **s == SourceState::Playing)
             .count();
-        if playing_count <= MAX_PHYSICAL_VOICES {
+        if playing_count <= max_physical_voices {
             let virtuals = world.is_virtuals_mut();
             virtuals[..n].fill(false);
             return;
@@ -85,8 +84,8 @@ impl VoiceVirtualizer {
         let virtuals = world.is_virtuals_mut();
         // 一旦すべて virtual 候補に。
         virtuals[..n].fill(true);
-        // 上位 MAX_PHYSICAL_VOICES を物理化。
-        let physical_count = score_count.min(MAX_PHYSICAL_VOICES);
+        // 上位 max_physical_voices を物理化。
+        let physical_count = score_count.min(max_physical_voices);
         for &(_, dense) in scores[..physical_count].iter() {
             virtuals[dense as usize] = false;
         }
@@ -102,6 +101,7 @@ impl VoiceVirtualizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::DEFAULT_MAX_PHYSICAL_VOICES as MAX_PHYSICAL_VOICES;
     use crate::source::world::SourceComponent;
     use crate::spatial::SpatialWorld;
 
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn under_budget_keeps_all_physical() {
         let (mut world, spatial) = make_world(MAX_PHYSICAL_VOICES);
-        VoiceVirtualizer::rebalance(&mut world, &spatial);
+        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
         for &v in world.is_virtuals() {
             assert!(!v);
         }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn over_budget_virtualizes_excess() {
         let (mut world, spatial) = make_world(MAX_PHYSICAL_VOICES + 8);
-        VoiceVirtualizer::rebalance(&mut world, &spatial);
+        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
         let phys = world.is_virtuals().iter().filter(|v| !**v).count();
         let virt = world.is_virtuals().iter().filter(|v| **v).count();
         assert_eq!(phys, MAX_PHYSICAL_VOICES);
@@ -169,7 +169,7 @@ mod tests {
                 high_prio_id = Some(id);
             }
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial);
+        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
         let high_dense = world.resolve(high_prio_id.unwrap()).unwrap();
         assert!(
             !world.is_virtuals()[high_dense],
@@ -199,7 +199,7 @@ mod tests {
                 loud_id = Some(id);
             }
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial);
+        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
         let dense = world.resolve(loud_id.unwrap()).unwrap();
         assert!(
             !world.is_virtuals()[dense],
@@ -217,7 +217,7 @@ mod tests {
             let id = world.entity_at_dense(dense).unwrap();
             world.set_state(id, SourceState::Pausing);
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial);
+        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
         for dense in 0..MAX_PHYSICAL_VOICES {
             assert!(
                 !world.is_virtuals()[dense],

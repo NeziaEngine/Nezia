@@ -7,34 +7,40 @@
 //! これにより、ライブパラメータ用の `[AtomicU64; MAX_SOURCES]` を fixed-size 配列で持てる。
 
 use crate::entity::EntityId;
-use crate::source::MAX_SOURCES;
 
 /// Source の `EntityId` を発行・回収する。
 ///
-/// - `next_index` は未使用のスロットを上から順に消費する（最大 `MAX_SOURCES`）。
+/// - `next_index` は未使用のスロットを上から順に消費する（最大 `max_sources`）。
 /// - `free_list` は despawn 通知で戻ってきたスロットを LIFO で再利用する。
 /// - `generation` は各スロットごとに spawn のたびに 1 ずつ増える。
 pub(crate) struct SourceSlotAllocator {
     free_list: Vec<u32>,
     next_index: u32,
+    max_sources: u32,
     /// 各スロットの「次に発行する generation」。スロット再利用時にインクリメント済み。
-    generation: [u32; MAX_SOURCES],
+    generation: Box<[u32]>,
 }
 
 impl SourceSlotAllocator {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_capacity(crate::source::DEFAULT_MAX_SOURCES)
+    }
+
+    pub(crate) fn with_capacity(max_sources: usize) -> Self {
         Self {
-            free_list: Vec::with_capacity(MAX_SOURCES),
+            free_list: Vec::with_capacity(max_sources),
             next_index: 0,
-            generation: [0; MAX_SOURCES],
+            max_sources: max_sources as u32,
+            generation: vec![0u32; max_sources].into_boxed_slice(),
         }
     }
 
-    /// 新しい `EntityId` を確保する。`MAX_SOURCES` 上限で `None`。
+    /// 新しい `EntityId` を確保する。`max_sources` 上限で `None`。
     pub(crate) fn alloc(&mut self) -> Option<EntityId> {
         let index = if let Some(reused) = self.free_list.pop() {
             reused
-        } else if (self.next_index as usize) < MAX_SOURCES {
+        } else if self.next_index < self.max_sources {
             let i = self.next_index;
             self.next_index += 1;
             i
@@ -50,7 +56,7 @@ impl SourceSlotAllocator {
     /// generation が一致しない通知（重複・古い）は無視する。
     pub(crate) fn free(&mut self, id: EntityId) {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.generation.len() {
             return;
         }
         if self.generation[i] != id.generation {
@@ -87,7 +93,7 @@ mod tests {
     #[test]
     fn capacity_limit() {
         let mut a = SourceSlotAllocator::new();
-        for _ in 0..MAX_SOURCES {
+        for _ in 0..crate::source::DEFAULT_MAX_SOURCES {
             assert!(a.alloc().is_some());
         }
         assert!(a.alloc().is_none());
