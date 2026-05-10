@@ -179,12 +179,16 @@ pub unsafe extern "C" fn nezia_engine_get_active_source_count(
 ///   ベンチマーク観点では「mix されなかった voice-frame の数」と読める。
 /// - `out_underrun`: ストリーミングバッファ underrun の累積発生回数。
 /// - `out_dropped_play_calls`: `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
+/// - `out_command_queue_full`: SPSC コマンドリングが満杯で `try_push` が失敗した累積回数。
+///   `dropped_play_calls` (= MAX_SOURCES 到達) と原因が異なる: 1 フレームで API バーストし
+///   audio thread が drain する前にリングが詰まったケースを示す。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nezia_engine_get_dropouts(
     engine: *mut NeziaEngine,
     out_voice_steal: *mut u64,
     out_underrun: *mut u64,
     out_dropped_play_calls: *mut u64,
+    out_command_queue_full: *mut u64,
 ) -> NeziaResult {
     guard_result(|| {
         let Some(engine) = (unsafe { engine.as_ref() }) else {
@@ -199,6 +203,9 @@ pub unsafe extern "C" fn nezia_engine_get_dropouts(
         }
         if !out_dropped_play_calls.is_null() {
             unsafe { *out_dropped_play_calls = d.dropped_play_calls };
+        }
+        if !out_command_queue_full.is_null() {
+            unsafe { *out_command_queue_full = d.command_queue_full };
         }
         NeziaResult::Ok
     })

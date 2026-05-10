@@ -7,7 +7,7 @@ use crate::engine::NeziaEngine;
 use crate::panic::{guard_entity, guard_result, guard_value};
 use crate::types::{
     NeziaAttenuationModel, NeziaBufferId, NeziaEntityId, NeziaFinishCallback, NeziaResult,
-    NeziaSourcePositionUpdate,
+    NeziaSourcePositionUpdate, NeziaSpawnSpatialInit,
 };
 use nezia_core::SourcePositionUpdate;
 
@@ -207,6 +207,53 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
             ),
         };
         result
+            .map(NeziaEntityId::from_core)
+            .unwrap_or(NeziaEntityId::INVALID)
+    })
+}
+
+/// `nezia_source_play_with_handle` の spawn-時 priority/spatial 一括初期化版。
+///
+/// 旧 API は spawn 後に `nezia_source_set_priority` /
+/// `nezia_source_set_spatial_params` / `nezia_source_set_spatial_enabled` /
+/// `nezia_source_set_doppler_level` / `nezia_source_set_attenuation_curve` を
+/// 個別に発行する設計だったため、3D ソース 1 ボイスあたり 4〜5 個の SPSC コマンドを
+/// 消費していた。1 フレームで多数の Play を行うとリングが drain される前に詰まり、
+/// 後続の Spawn が黙って失敗するというバーストの罠があった。
+///
+/// この関数は priority と spatial 設定を `Command::SpawnSource` に同梱し、
+/// 1 ボイス = 1 コマンドに圧縮する。`spatial_init.enabled = 0` の 2D ソースは
+/// 旧 `nezia_source_play_with_handle(callback=None)` と同等。
+///
+/// 失敗時 (バッファ不正・MAX_SOURCES 到達・**コマンドリング満杯**) は `INVALID` を返す。
+/// リング満杯のケースは `nezia_engine_get_dropouts` の `out_command_queue_full` で
+/// 観測できる。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_play_with_handle_init(
+    engine: *mut NeziaEngine,
+    buffer: NeziaBufferId,
+    volume: f32,
+    pitch: f32,
+    bus: NeziaEntityId,
+    looping: u8,
+    priority: u8,
+    spatial_init: NeziaSpawnSpatialInit,
+) -> NeziaEntityId {
+    guard_entity(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return NeziaEntityId::INVALID;
+        };
+        engine
+            .inner
+            .play_with_handle_init(
+                buffer.to_core(),
+                volume,
+                pitch,
+                bus.to_core(),
+                looping != 0,
+                priority,
+                spatial_init.to_core(),
+            )
             .map(NeziaEntityId::from_core)
             .unwrap_or(NeziaEntityId::INVALID)
     })
