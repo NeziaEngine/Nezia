@@ -27,7 +27,7 @@ use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::limiter::apply_soft_clip;
 use crate::metrics::{EngineMetrics, update_peak};
-use crate::source::{SourceLifecycleSystem, SourceMixingSystem, SourceWorld};
+use crate::source::{SourceLifecycleSystem, SourceMixingSystem, SourceWorld, VoiceVirtualizer};
 use crate::spatial::{AttenuationCurve, ListenerState, SpatialWorld};
 
 use super::SourceLiveParams;
@@ -75,6 +75,8 @@ pub(in crate::core::engine) struct AudioThread {
     device_channels: usize,
     /// Voice Virtualization の物理ボイス上限 (`EngineConfig::max_physical_voices`)。
     max_physical_voices: usize,
+    /// Voice Virtualizer (スコア・state スナップショットのスクラッチを保持)。
+    virtualizer: VoiceVirtualizer,
     /// マスター出力キャプチャ用 SPSC リングの producer。
     /// `capture_shared.enabled` が false のときは触らない (hot path コスト 0)。
     capture_producer: HeapProd<f32>,
@@ -138,6 +140,7 @@ impl AudioThread {
             device_sample_rate,
             device_channels,
             max_physical_voices,
+            virtualizer: VoiceVirtualizer::with_capacity(max_sources),
             capture_producer,
             capture_shared,
             dsp_time_frames,
@@ -282,6 +285,7 @@ impl AudioThread {
                 &buffers,
                 &curves,
                 self.max_physical_voices,
+                &mut self.virtualizer,
             );
         }
 

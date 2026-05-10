@@ -155,6 +155,9 @@ pub struct SoundEngine {
     /// マスター出力キャプチャ SPSC リングの確保バイト (= capacity_samples * 4)。
     /// `device_sample_rate` × `device_channels` × `CAPTURE_RING_SECONDS` から init 時に算出。
     pub(super) capture_ring_bytes: u64,
+    /// 設定値の論理ソース上限 (`EngineConfig::max_sources`)。
+    /// `batch_set_source_positions` 等の入力切り捨て上限として参照する。
+    pub(super) max_sources: usize,
 }
 
 impl SoundEngine {
@@ -218,7 +221,7 @@ impl SoundEngine {
         let master_bus_id = bus_world.master_entity();
 
         let source_world = SourceWorld::with_capacity(config.max_sources);
-        let spatial_world = SpatialWorld::new();
+        let spatial_world = SpatialWorld::with_capacity(config.max_sources);
         let effect_world = EffectWorld::new();
         let effect_worlds = EffectWorlds::new();
 
@@ -312,7 +315,7 @@ impl SoundEngine {
             container_world: ContainerWorld::new(),
             compressor_owners: HashMap::new(),
             live_params,
-            callbacks: CallbackRegistry::new(),
+            callbacks: CallbackRegistry::with_capacity(config.max_sources),
             source_snapshots_output,
             source_state_cache: SourceStateCache::with_capacity(config.max_sources),
             device_channels: device_channels as u16,
@@ -322,6 +325,7 @@ impl SoundEngine {
             metrics,
             audio_thread_static_bytes,
             capture_ring_bytes,
+            max_sources: config.max_sources,
         })
     }
 

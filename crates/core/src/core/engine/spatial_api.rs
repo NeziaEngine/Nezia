@@ -1,6 +1,5 @@
 use crate::command::Command;
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
-use crate::source::MAX_SOURCES;
 use crate::spatial::AttenuationModel;
 
 use super::SoundEngine;
@@ -84,13 +83,13 @@ impl SoundEngine {
     /// 複数ソースの位置を一括更新する（毎フレーム用）。
     ///
     /// triple buffer 経由で publish するため、リングバッファ詰まりで失敗しない。
-    /// `MAX_SOURCES` を超える分は切り捨てる（事前確保された容量を超えると
+    /// `EngineConfig::max_sources` を超える分は切り捨てる（事前確保された容量を超えると
     /// メインスレッド側で realloc が発生し、リアルタイム制約とは関係ないが
     /// alloc コストが上がるため）。
     pub fn batch_set_source_positions(&mut self, updates: &[SourcePositionUpdate]) {
         let buf = self.position_updates_input.input_buffer_mut();
         buf.clear();
-        let take = updates.len().min(MAX_SOURCES);
+        let take = updates.len().min(self.max_sources);
         buf.extend_from_slice(&updates[..take]);
         self.position_updates_input.publish();
     }
@@ -103,7 +102,7 @@ impl SoundEngine {
     pub fn batch_set_source_velocities(&mut self, updates: &[SourceVelocityUpdate]) {
         let buf = self.velocity_updates_input.input_buffer_mut();
         buf.clear();
-        let take = updates.len().min(MAX_SOURCES);
+        let take = updates.len().min(self.max_sources);
         buf.extend_from_slice(&updates[..take]);
         self.velocity_updates_input.publish();
     }

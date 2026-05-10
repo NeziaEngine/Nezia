@@ -5,6 +5,7 @@ mod world;
 
 pub use lifecycle::SourceLifecycleSystem;
 pub use mixing::SourceMixingSystem;
+pub use virtualizer::VoiceVirtualizer;
 pub use world::{SourceComponent, SourceState, SourceWorld};
 
 /// 最大論理ソース数のデフォルト値 (`EngineConfig::default().max_sources`)。
@@ -19,12 +20,6 @@ pub const DEFAULT_MAX_SOURCES: usize = 4096;
 /// Unity / Wwise / FMOD と同様、論理上限 (`max_sources`) より小さく設定する。
 pub const DEFAULT_MAX_PHYSICAL_VOICES: usize = 32;
 
-// 旧名のエイリアス (内部の固定長スタック配列やテストが参照する compile-time 上限)。
-// `MAX_PHYSICAL_VOICES` は runtime で `EngineConfig` から差し込まれるため、こちら
-// は単なる「DEFAULT 値の旧名」として残す (削除しても良いが既存コメント / 設計
-// ドキュメントの参照を潰さないために維持)。
-#[doc(hidden)]
-pub const MAX_SOURCES: usize = DEFAULT_MAX_SOURCES;
 
 /// Source 起点 Send 上限 (ソース 1 体あたりの user-defined aux send 数)。
 /// Wwise / FMOD の per-event aux send が 1〜2 本で済むケースが大半なので、
@@ -184,11 +179,11 @@ mod tests {
     #[test]
     fn spawn_returns_none_at_capacity() {
         let mut world = SourceWorld::new();
-        for _ in 0..MAX_SOURCES {
+        for _ in 0..DEFAULT_MAX_SOURCES {
             assert!(world.spawn(SourceComponent::default()).is_some());
         }
         assert!(world.spawn(SourceComponent::default()).is_none());
-        assert_eq!(world.len(), MAX_SOURCES);
+        assert_eq!(world.len(), DEFAULT_MAX_SOURCES);
     }
 
     // ── Source 起点 Send (User-Defined Aux Send) のユニットテスト ──
