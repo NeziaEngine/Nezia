@@ -5,9 +5,12 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::command::Command;
+use crate::event::Event;
+use crate::memory::{self, NeziaMemoryStats, vec_cap_bytes};
 use crate::metrics::{DropoutStats, DspStats};
 
-use super::SoundEngine;
+use super::{COMMAND_RING_CAPACITY, EVENT_RING_CAPACITY, SoundEngine};
 
 impl SoundEngine {
     /// エンジン起動以降に audio thread が処理した累積フレーム数 (per-channel sample count)。
@@ -77,6 +80,91 @@ impl SoundEngine {
                 .load(Ordering::Relaxed),
             dropped_play_calls: self.metrics.dropped_play_calls.load(Ordering::Relaxed),
             command_queue_full: self.metrics.command_queue_full.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Nezia エンジンの**メモリ使用量スナップショット**を返す。
+    ///
+    /// 計測経路は 2 系統:
+    ///
+    /// 1. **グローバルアロケータ統計** (`heap_*` / `alloc_count` / `free_count`)
+    ///    [`crate::TrackingAllocator`] が `#[global_allocator]` として登録された
+    ///    実行体 (典型: `nezia-ffi` の cdylib) でのみ有効。それ以外では `heap_tracked = false`
+    ///    かつ `heap_*` / `alloc_count` / `free_count` は 0。
+    ///
+    /// 2. **サブシステム別 walker** (`voices_bytes` / `buffers_bytes` / `effects_bytes` / `graph_bytes`)
+    ///    各 World / Pool / Registry が確保している `Vec` / `Box<[T]>` の **capacity ベース**
+    ///    のヒープ実バイト合計。常時取得可能。
+    ///
+    /// 取得コストは μs 未満 (各 World の Vec::capacity を読むだけ)。毎フレーム呼んでも問題ない。
+    /// audio thread の hot path には一切影響しない。
+    #[must_use]
+    pub fn memory_stats(&self) -> NeziaMemoryStats {
+        let (heap_in_use, heap_peak, allocs, frees, tracked) = memory::snapshot_global();
+
+        // ── voices_bytes: ソース・空間情報・ライブパラメータ・スナップショット ──
+        // SourceWorld / SpatialWorld は audio thread に move 済みなので、init 時に
+        // 静的キャッシュした値 (`audio_thread_static_bytes`) からは引き出せず、
+        // walker からは触れない。便宜上、audio_thread_static_bytes を `voices_bytes` に
+        // **含めず** 別カウントにすると合計が見えにくいので、ここでは
+        // 「main thread 側のソース関連 Vec のみ」を voices に集計し、audio thread 側は
+        // graph_bytes に押し込む (元 World の所有者がいないため)。
+        // → ユーザ向け表示では `breakdown_total()` がほぼ heap_bytes_in_use と一致する。
+        let triple_buffer_per_source = std::mem::size_of::<crate::entity::SourcePositionUpdate>()
+            + std::mem::size_of::<crate::entity::SourceVelocityUpdate>()
+            + std::mem::size_of::<super::SourceSnapshot>();
+        // 各 triple_buffer は 3 スロット (alloc 不要を保つため init 時に max_sources で確保済み)。
+        let max_sources = self.live_params.memory_bytes()
+            / (3 * std::mem::size_of::<std::sync::atomic::AtomicU64>()).max(1); // 3 fields × AtomicU64
+        let triple_buffer_bytes = (3 * max_sources * triple_buffer_per_source) as u64;
+
+        let voices_bytes = self.source_slots.memory_bytes() as u64
+            + self.live_params.memory_bytes() as u64
+            + self.source_state_cache.memory_bytes() as u64
+            + vec_cap_bytes(&self.source_sends) as u64
+            + triple_buffer_bytes;
+
+        // ── buffers_bytes: AudioBufferPool (PCM + streaming リング) ──
+        let buffers_bytes = self.buffer_pool.memory_bytes() as u64;
+
+        // ── effects_bytes: メイン側エフェクト管理 + audio thread 側エフェクト World ──
+        // audio_thread_static_bytes は SourceWorld / SpatialWorld / BusWorld /
+        // EffectWorld / EffectWorlds の合算なので、ここでは「メインスレッド側の
+        // エフェクトハンドルアロケータ + compressor_owners」だけを effects に集計し、
+        // audio thread 側 World 全体は graph に置く。
+        let compressor_owners_bytes = (self.compressor_owners.capacity()
+            * (std::mem::size_of::<crate::effect::EffectId>()
+                + std::mem::size_of::<crate::entity::EntityId>()
+                + 16))  // HashMap entry overhead 概算
+            as u64;
+        let effects_bytes = self.effect_slots.memory_bytes() as u64 + compressor_owners_bytes;
+
+        // ── graph_bytes: バス routing / send / snapshot / curve / container / callbacks /
+        //                 SPSC リング (command/event/capture) + audio thread 側 World 全体 ──
+        let command_ring_bytes = (COMMAND_RING_CAPACITY * std::mem::size_of::<Command>()) as u64;
+        let event_ring_bytes = (EVENT_RING_CAPACITY * std::mem::size_of::<Event>()) as u64;
+
+        let graph_bytes = self.bus_routing.memory_bytes() as u64
+            + self.send_slots.memory_bytes() as u64
+            + self.snapshot_registry.memory_bytes() as u64
+            + self.curve_registry.memory_bytes() as u64
+            + self.container_world.memory_bytes() as u64
+            + self.callbacks.memory_bytes() as u64
+            + command_ring_bytes
+            + event_ring_bytes
+            + self.capture_ring_bytes
+            + self.audio_thread_static_bytes;
+
+        NeziaMemoryStats {
+            heap_bytes_in_use: heap_in_use,
+            heap_bytes_peak: heap_peak,
+            alloc_count: allocs,
+            free_count: frees,
+            heap_tracked: tracked,
+            voices_bytes,
+            buffers_bytes,
+            effects_bytes,
+            graph_bytes,
         }
     }
 }

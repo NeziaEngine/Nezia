@@ -2,7 +2,6 @@
 //!
 //! 宣言的ビルダーで Snapshot を構築し、`apply_snapshot` でクロスフェード適用する。
 
-
 use crate::bus::SendId;
 use crate::command::Command;
 use crate::effect::{EffectId, EffectParamId};

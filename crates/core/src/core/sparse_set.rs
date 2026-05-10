@@ -46,6 +46,14 @@ impl SparseSet {
         self.dense_to_sparse.is_empty()
     }
 
+    /// 内部 `Vec` の確保容量を実バイト数で返す (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.sparse)
+            + vec_cap_bytes(&self.dense_to_sparse)
+            + vec_cap_bytes(&self.free_list)
+    }
+
     /// EntityId を検証し、有効なら密配列インデックスを返す。
     pub fn resolve(&self, id: EntityId) -> Option<usize> {
         let entry = self.sparse.get(id.index as usize)?.as_ref()?;

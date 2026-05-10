@@ -20,7 +20,10 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate, SourceVelocityUpdate, SpawnSpatialInit};
+use nezia::{
+    AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate, SourceVelocityUpdate,
+    SpawnSpatialInit,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");

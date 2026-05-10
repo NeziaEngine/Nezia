@@ -45,6 +45,22 @@ impl SnapshotRegistry {
         }
     }
 
+    /// レジストリ全体のヒープ実バイト数 (`memory_stats` walker 用)。
+    /// 各 `Snapshot` 内 SoA Vec も再帰的に集計する (Arc 共有分は registry 側で 1 回計上)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        let mut total = vec_cap_bytes(&self.slots)
+            + vec_cap_bytes(&self.snapshots)
+            + vec_cap_bytes(&self.free_list);
+        for s in self.snapshots.iter().flatten() {
+            total += vec_cap_bytes(&s.bus_gains)
+                + vec_cap_bytes(&s.bus_muted)
+                + vec_cap_bytes(&s.effect_params)
+                + vec_cap_bytes(&s.send_gains);
+        }
+        total
+    }
+
     /// Snapshot を登録してハンドルを返す。`MAX_SNAPSHOTS` 超過時は `None`。
     pub fn create(&mut self, snapshot: Snapshot) -> Option<SnapshotId> {
         if self.slots.len() >= MAX_SNAPSHOTS && self.free_list.is_empty() {

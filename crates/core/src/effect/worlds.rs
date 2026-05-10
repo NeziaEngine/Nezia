@@ -58,4 +58,14 @@ impl EffectWorlds {
     pub fn clear_compressor_sidechain_buffers(&mut self, sample_count: usize) {
         self.compressor.clear_sidechain_buffers(sample_count);
     }
+
+    /// 全種別 World が確保しているヒープ実バイト数の合計 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        self.lpf.memory_bytes()
+            + self.hpf.memory_bytes()
+            + self.reverb.memory_bytes()
+            + self.compressor.memory_bytes()
+            + self.peq.memory_bytes()
+            + self.limiter.memory_bytes()
+    }
 }

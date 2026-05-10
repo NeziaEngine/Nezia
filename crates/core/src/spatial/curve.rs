@@ -113,6 +113,19 @@ impl CurveRegistry {
         }
     }
 
+    /// レジストリ全体のヒープ実バイト数 (`memory_stats` walker 用)。
+    /// 登録済み `AttenuationCurve` は固定長サンプル配列 (`[f32; CURVE_SAMPLES]`) を持つので
+    /// occupied slot 数 × `size_of::<AttenuationCurve>()` を加算する。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        let curve_size = std::mem::size_of::<AttenuationCurve>();
+        let occupied = self.curves.iter().filter(|c| c.is_some()).count();
+        vec_cap_bytes(&self.slots)
+            + vec_cap_bytes(&self.curves)
+            + vec_cap_bytes(&self.free_list)
+            + occupied * curve_size
+    }
+
     /// カーブを登録してハンドルを返す。`MAX_CURVES` 超過時は `None`。
     pub fn create(&mut self, curve: AttenuationCurve) -> Option<AttenuationCurveId> {
         if self.slots.len() >= MAX_CURVES && self.free_list.is_empty() {

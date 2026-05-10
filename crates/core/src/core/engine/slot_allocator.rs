@@ -36,6 +36,12 @@ impl SourceSlotAllocator {
         }
     }
 
+    /// 内部の `Vec` / `Box<[u32]>` ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        crate::memory::vec_cap_bytes(&self.free_list)
+            + crate::memory::boxed_slice_bytes(&self.generation)
+    }
+
     /// 新しい `EntityId` を確保する。`max_sources` 上限で `None`。
     pub(crate) fn alloc(&mut self) -> Option<EntityId> {
         let index = if let Some(reused) = self.free_list.pop() {

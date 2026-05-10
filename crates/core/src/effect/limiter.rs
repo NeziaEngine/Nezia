@@ -72,6 +72,10 @@ impl LimiterWorld {
         self.states.is_empty()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        crate::memory::vec_cap_bytes(&self.states)
+    }
+
     /// 新規 Limiter を確保。容量超過時は `None`。
     /// デフォルト: ceiling = -0.3 dB / release = 50 ms。
     pub fn spawn(&mut self, effect_id: EffectId) -> Option<u32> {
