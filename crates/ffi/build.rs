@@ -20,6 +20,7 @@ fn main() {
         "src/container.rs",
         "src/attenuation_curve.rs",
         "src/streaming.rs",
+        "src/memory.rs"
     ];
 
     let mut builder = csbindgen::Builder::default()
