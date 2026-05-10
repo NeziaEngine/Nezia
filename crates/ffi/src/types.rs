@@ -141,6 +141,50 @@ impl NeziaAttenuationModel {
     }
 }
 
+/// `nezia_source_play_with_handle` に渡す spawn 時の spatial 初期化パラメータ。
+///
+/// 旧経路は spawn 後に `set_priority` / `set_spatial_params` / `set_doppler_level` /
+/// `set_attenuation_curve` を個別 FFI 呼び出しで送るため、1 ボイスあたり最大 4〜5 個の
+/// SPSC コマンドを消費していた。本構造体に同梱して 1 コマンドで済ませることで、
+/// 1 フレーム内のバースト Play (例: 群衆・弾幕) でリングが詰まる問題を構造的に解消する。
+///
+/// `enabled = 0` (= 2D) のときは spatial 系プロパティはダミー値で構わない。
+/// `model = Custom` 以外のとき `curve_index` は無視される。`curve_index = 0xFFFF_FFFF`
+/// は「未指定」を表すセンチネル (`CURVE_INDEX_NONE` 相当)。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NeziaSpawnSpatialInit {
+    /// 0 = 2D ソース (旧 `set_spatial_enabled(0)` 相当) / 非 0 = 3D ソース。
+    pub enabled: u8,
+    /// 1 byte alignment padding。常に 0。
+    pub _pad0: u8,
+    pub _pad1: u16,
+    /// 距離減衰モデル (`enabled = 0` のとき無視)。
+    pub model: NeziaAttenuationModel,
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub rolloff: f32,
+    /// `[0.0, 1.0]`。Unity `AudioSource.dopplerLevel` 互換。
+    pub doppler_level: f32,
+    /// `model = Custom` のときのみ参照。`0xFFFF_FFFF` で未指定。
+    pub curve_index: u32,
+}
+
+impl NeziaSpawnSpatialInit {
+    #[inline]
+    pub(crate) fn to_core(self) -> nezia_core::SpawnSpatialInit {
+        nezia_core::SpawnSpatialInit {
+            enabled: self.enabled != 0,
+            model: self.model.to_core(),
+            min_distance: self.min_distance,
+            max_distance: self.max_distance,
+            rolloff: self.rolloff,
+            doppler_level: self.doppler_level,
+            curve_index: self.curve_index,
+        }
+    }
+}
+
 /// `nezia_source_batch_set_positions` の入力要素。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

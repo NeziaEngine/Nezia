@@ -1,5 +1,3 @@
-use ringbuf::traits::Producer;
-
 use crate::bus::MAX_BUSES;
 use crate::command::Command;
 use crate::entity::EntityId;
@@ -10,9 +8,7 @@ impl SoundEngine {
     /// マスター音量を設定する（0.0〜1.0）。マスターバスの gain を変更する。
     #[must_use]
     pub fn set_volume(&mut self, volume: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetVolume(volume))
-            .is_ok()
+        self.try_send_command(Command::SetVolume(volume))
     }
 
     /// マスターバスの EntityId を返す。
@@ -46,15 +42,11 @@ impl SoundEngine {
             generation: 0,
         };
 
-        if self
-            .command_producer
-            .try_push(Command::SpawnBus {
-                id: new_id,
-                gain,
-                output_bus_dense: parent_dense,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::SpawnBus {
+            id: new_id,
+            gain,
+            output_bus_dense: parent_dense,
+        }) {
             let _ = self.bus_routing.remove(new_index);
             self.bus_routing.next_index -= 1;
             return None;
@@ -82,11 +74,7 @@ impl SoundEngine {
 
         let order = self.bus_routing.compute_process_order();
 
-        if self
-            .command_producer
-            .try_push(Command::DespawnBus { id })
-            .is_err()
-        {
+        if !self.try_send_command(Command::DespawnBus { id }) {
             return false;
         }
         self.push_process_order(&order);
@@ -96,17 +84,13 @@ impl SoundEngine {
     /// バスのゲインを設定する。
     #[must_use]
     pub fn set_bus_gain(&mut self, id: EntityId, gain: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetBusGain { id, gain })
-            .is_ok()
+        self.try_send_command(Command::SetBusGain { id, gain })
     }
 
     /// バスのミュートを設定する。
     #[must_use]
     pub fn set_bus_muted(&mut self, id: EntityId, muted: bool) -> bool {
-        self.command_producer
-            .try_push(Command::SetBusMuted { id, muted })
-            .is_ok()
+        self.try_send_command(Command::SetBusMuted { id, muted })
     }
 
     /// バスの出力先を変更する。ループが検出された場合は `false` を返す。
@@ -128,14 +112,10 @@ impl SoundEngine {
         self.bus_routing.set_parent(id.index, parent.index);
         let order = self.bus_routing.compute_process_order();
 
-        if self
-            .command_producer
-            .try_push(Command::SetBusOutput {
-                id,
-                output_bus_dense,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::SetBusOutput {
+            id,
+            output_bus_dense,
+        }) {
             return false;
         }
         self.push_process_order(&order);
@@ -146,7 +126,7 @@ impl SoundEngine {
         let mut arr = [0u32; MAX_BUSES];
         let len = order.len().min(MAX_BUSES);
         arr[..len].copy_from_slice(&order[..len]);
-        let _ = self.command_producer.try_push(Command::UpdateProcessOrder {
+        let _ = self.try_send_command(Command::UpdateProcessOrder {
             order: arr,
             len: len as u8,
         });

@@ -2,7 +2,6 @@
 //!
 //! 宣言的ビルダーで Snapshot を構築し、`apply_snapshot` でクロスフェード適用する。
 
-use ringbuf::traits::Producer;
 
 use crate::bus::SendId;
 use crate::command::Command;
@@ -122,12 +121,10 @@ impl SoundEngine {
             return false;
         };
         let fade_samples = fade_seconds_to_samples(fade_seconds, self.device_sample_rate);
-        self.command_producer
-            .try_push(Command::ApplySnapshot {
-                snapshot_index: index,
-                fade_samples,
-            })
-            .is_ok()
+        self.try_send_command(Command::ApplySnapshot {
+            snapshot_index: index,
+            fade_samples,
+        })
     }
 }
 

@@ -12,7 +12,7 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{SoundEngine, StreamingOpts};
+use nezia::{SoundEngine, SpawnSpatialInit, StreamingOpts};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n━━━ 再生 (3 秒)");
     let id = engine
-        .play_with_handle(bgm, 0.6, 1.0, master, false)
+        .play_with_handle(bgm, 0.6, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .ok_or("play_with_handle failed")?;
     thread::sleep(Duration::from_secs(3));
 
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(Duration::from_millis(100));
     engine.set_streaming_loop(bgm, true);
     let id = engine
-        .play_with_handle(bgm, 0.6, 1.0, master, true)
+        .play_with_handle(bgm, 0.6, 1.0, master, true, 128, SpawnSpatialInit::NONE)
         .ok_or("play_with_handle failed")?;
     thread::sleep(Duration::from_secs(3));
 

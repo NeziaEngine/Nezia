@@ -61,6 +61,9 @@ pub use entity::SourceVelocityUpdate;
 /// 距離減衰モデル。
 pub use spatial::AttenuationModel;
 
+/// `play_with_handle()` に渡す spawn 時の spatial 一括初期化パラメータ。
+pub use command::SpawnSpatialInit;
+
 /// Phase 3-1: Custom Attenuation Curve のハンドル。
 pub use spatial::AttenuationCurveId;
 

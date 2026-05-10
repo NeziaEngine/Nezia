@@ -50,6 +50,11 @@ pub(crate) struct EngineMetrics {
     pub streaming_underrun_count: AtomicU64,
     /// `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
     pub dropped_play_calls: AtomicU64,
+    /// SPSC コマンドリングが満杯で `try_push` が失敗した累積回数。
+    /// `dropped_play_calls` (= MAX_SOURCES 到達) と原因が異なる:
+    /// こちらは「1 フレームで大量の API 呼び出しを行ったがリングが drain される前に
+    /// 詰まった」ケースを示す。閾値超えが見えたら容量増加 or API 集約の判断材料に使う。
+    pub command_queue_full: AtomicU64,
 }
 
 impl EngineMetrics {
@@ -105,6 +110,8 @@ pub struct DropoutStats {
     pub streaming_underrun: u64,
     /// `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
     pub dropped_play_calls: u64,
+    /// SPSC コマンドリングが満杯で `try_push` が失敗した累積回数。
+    pub command_queue_full: u64,
 }
 
 /// audio thread 側で `peak_callback_ns` を最大値に更新するヘルパ。

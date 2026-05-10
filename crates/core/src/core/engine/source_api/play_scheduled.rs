@@ -9,10 +9,8 @@
 //! - サブ callback 精度: 1 sample 単位で発音開始位置を制御
 //! - 予約中の `stop_source` でキャンセル可、`pause_source` は no-op (予定通り fire)
 
-use ringbuf::traits::Producer;
-
 use crate::buffer_pool::BufferId;
-use crate::command::Command;
+use crate::command::{Command, SpawnSpatialInit};
 use crate::entity::EntityId;
 
 use super::super::SoundEngine;
@@ -60,16 +58,14 @@ impl SoundEngine {
         let Some(index) = self.buffer_pool.resolve(buffer) else {
             return false;
         };
-        self.command_producer
-            .try_push(Command::Play {
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                token: 0,
-                looping,
-                start_dsp_frame,
-            })
-            .is_ok()
+        self.try_send_command(Command::Play {
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            token: 0,
+            looping,
+            start_dsp_frame,
+        })
     }
 
     /// 現在から `delay_seconds` 後に指定バスで再生する (sample 精度)。
@@ -104,17 +100,15 @@ impl SoundEngine {
         let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
             return false;
         };
-        self.command_producer
-            .try_push(Command::PlayToBus {
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token: 0,
-                looping,
-                start_dsp_frame,
-            })
-            .is_ok()
+        self.try_send_command(Command::PlayToBus {
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token: 0,
+            looping,
+            start_dsp_frame,
+        })
     }
 
     /// 現在から `delay_seconds` 後にハンドル付きで再生する (`stop_source` でキャンセル可)。
@@ -148,20 +142,18 @@ impl SoundEngine {
         let output_bus_dense = self.bus_routing.resolve_dense(bus)?;
         let id = self.source_slots.alloc()?;
         self.live_params.prime(id, vol, pitch);
-        if self
-            .command_producer
-            .try_push(Command::SpawnSource {
-                id,
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token: 0,
-                looping,
-                start_dsp_frame,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::SpawnSource {
+            id,
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token: 0,
+            looping,
+            start_dsp_frame,
+            priority: 128,
+            spatial_init: SpawnSpatialInit::NONE,
+        }) {
             self.source_slots.free(id);
             return None;
         }
@@ -215,19 +207,18 @@ impl SoundEngine {
             self.source_slots.free(id);
             return None;
         };
-        let ok = self
-            .command_producer
-            .try_push(Command::SpawnSource {
-                id,
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token,
-                looping,
-                start_dsp_frame,
-            })
-            .is_ok();
+        let ok = self.try_send_command(Command::SpawnSource {
+            id,
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token,
+            looping,
+            start_dsp_frame,
+            priority: 128,
+            spatial_init: SpawnSpatialInit::NONE,
+        });
         if !ok {
             self.callbacks.cancel(token);
             self.source_slots.free(id);

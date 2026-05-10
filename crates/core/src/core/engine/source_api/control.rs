@@ -5,8 +5,6 @@
 //! (seek / pause / resume / stop / set_loop / set_priority) はコマンド経由で
 //! audio thread に届ける。
 
-use ringbuf::traits::Producer;
-
 use crate::command::Command;
 use crate::entity::EntityId;
 
@@ -19,7 +17,7 @@ impl SoundEngine {
     #[must_use]
     pub fn stop_all(&mut self) -> bool {
         self.callbacks.clear();
-        self.command_producer.try_push(Command::StopAll).is_ok()
+        self.try_send_command(Command::StopAll)
     }
 
     /// ソースの音量を設定する（spawn 後の動的変更）。
@@ -43,41 +41,31 @@ impl SoundEngine {
     /// ソースの再生位置（フレーム単位）をシークする。
     #[must_use]
     pub fn seek_source(&mut self, id: EntityId, frame_offset: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SeekSource { id, frame_offset })
-            .is_ok()
+        self.try_send_command(Command::SeekSource { id, frame_offset })
     }
 
     /// ソースを一時停止する。再生位置は保持される。
     #[must_use]
     pub fn pause_source(&mut self, id: EntityId) -> bool {
-        self.command_producer
-            .try_push(Command::PauseSource { id })
-            .is_ok()
+        self.try_send_command(Command::PauseSource { id })
     }
 
     /// 一時停止中のソースを再開する。
     #[must_use]
     pub fn resume_source(&mut self, id: EntityId) -> bool {
-        self.command_producer
-            .try_push(Command::ResumeSource { id })
-            .is_ok()
+        self.try_send_command(Command::ResumeSource { id })
     }
 
     /// ソースを停止する。次の audio callback で despawn される。
     #[must_use]
     pub fn stop_source(&mut self, id: EntityId) -> bool {
-        self.command_producer
-            .try_push(Command::StopSource { id })
-            .is_ok()
+        self.try_send_command(Command::StopSource { id })
     }
 
     /// ソースのループフラグを動的に変更する。
     #[must_use]
     pub fn set_source_loop(&mut self, id: EntityId, looping: bool) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourceLoop { id, looping })
-            .is_ok()
+        self.try_send_command(Command::SetSourceLoop { id, looping })
     }
 
     /// Voice Virtualization 用優先度を設定する (Wwise / CRI ADX2 互換)。
@@ -90,8 +78,6 @@ impl SoundEngine {
     /// `sample_offset` のみ前進して時間同期を維持)。
     #[must_use]
     pub fn set_source_priority(&mut self, id: EntityId, priority: u8) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourcePriority { id, priority })
-            .is_ok()
+        self.try_send_command(Command::SetSourcePriority { id, priority })
     }
 }

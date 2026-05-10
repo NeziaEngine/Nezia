@@ -1,7 +1,44 @@
 use crate::bus::{MAX_BUSES, SendId, SendPosition};
 use crate::effect::{EffectId, EffectKind, EffectPosition, EffectTarget};
 use crate::entity::EntityId;
-use crate::spatial::AttenuationModel;
+use crate::spatial::{AttenuationModel, CURVE_INDEX_NONE};
+
+/// `Command::SpawnSource` に同梱して送る spatial 初期化パラメータ。
+///
+/// 旧経路では spawn 後に `SetSourcePriority` / `SetSourceSpatialParams` /
+/// `SetSourceDopplerLevel` / `SetSourceAttenuationCurve` を個別 push していたため、
+/// 1 ボイスにつき最大 4〜5 コマンドが SPSC リングを消費していた。
+/// 本構造体で一括同梱することで spawn = 1 コマンドに固定し、
+/// バースト Play 時のリング詰まりを構造的に解消する。
+///
+/// `enabled = false` のときは `audio_thread` 側でフィールドの大半を無視するが、
+/// 既定値 (`Self::NONE`) を素直に書き込むだけのコストなので分岐は最小化している。
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnSpatialInit {
+    /// 3D 空間処理を有効にするか。`false` で 2D ソース (旧 `set_spatial_enabled(0)` 相当)。
+    pub enabled: bool,
+    pub model: AttenuationModel,
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub rolloff: f32,
+    /// `[0.0, 1.0]`。Unity `AudioSource.dopplerLevel` 互換。
+    pub doppler_level: f32,
+    /// `AttenuationModel::Custom` のときのみ参照。`CURVE_INDEX_NONE` で未指定。
+    pub curve_index: u32,
+}
+
+impl SpawnSpatialInit {
+    /// 2D ソース用デフォルト (`enabled = false`)。spatial 系プロパティはダミー値。
+    pub const NONE: Self = Self {
+        enabled: false,
+        model: AttenuationModel::InverseDistance,
+        min_distance: 1.0,
+        max_distance: 500.0,
+        rolloff: 1.0,
+        doppler_level: 1.0,
+        curve_index: CURVE_INDEX_NONE,
+    };
+}
 
 /// Send の宛先 (Phase 3-3)。コマンド経路で運ばれる識別子。
 /// audio thread 側で `Bus` は dense_index、`CompressorSidechain` は EffectId →
@@ -56,6 +93,8 @@ pub enum Command {
     ///
     /// メインスレッドが事前発行した EntityId を使うことで、
     /// スポーン後に空間パラメータを EntityId で参照できる。
+    /// `priority` / `spatial_init` を同梱することで、spawn 直後の
+    /// `SetSourcePriority` / `SetSourceSpatialParams` 等を別コマンドとして送る必要がない。
     SpawnSource {
         id: EntityId,
         audio_buffer_index: u32,
@@ -69,6 +108,10 @@ pub enum Command {
         looping: bool,
         /// Phase 3-4: 予約再生開始時刻 (絶対 DSP frame)。`0` で即時再生。
         start_dsp_frame: u64,
+        /// Voice Virtualization 用優先度 (0..=255、高いほど優先)。既定 128。
+        priority: u8,
+        /// spawn 時に書き込む spatial 設定。2D ソースは `SpawnSpatialInit::NONE`。
+        spatial_init: SpawnSpatialInit,
     },
     /// すべてのボイスを停止する。
     StopAll,

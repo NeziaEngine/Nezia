@@ -20,7 +20,7 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate, SourceVelocityUpdate};
+use nezia::{AttenuationModel, EntityId, SoundEngine, SourcePositionUpdate, SourceVelocityUpdate, SpawnSpatialInit};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔══════════════════════════════════════╗");
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: x=-12m → x=+12m  (正面 z=+5m, 20ステップ × 400ms)");
 
     let src = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 音源: z=+40m → z=-5m  (18ステップ × 500ms)");
 
     let src = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 40.0, 1.0);
@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (label, model, min, max, rolloff) in models {
         let src = engine
-            .play_with_handle(buf, 1.0, 1.0, master, false)
+            .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
             .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(src, model, min, max, rolloff);
         let _ = engine.set_source_spatial_enabled(src, true);
@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 13ステップ × 400ms でリスナーが 90° 回転");
 
     let src = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 1.0, 30.0, 1.0);
@@ -208,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (label, level) in [("1/2 Doppler OFF", 0.0_f32), ("2/2 Doppler ON ", 1.0_f32)] {
         println!("  ▶ {label}");
         let src = engine
-            .play_with_handle(buf, 1.0, 1.0, master, false)
+            .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
             .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(
             src,
@@ -279,7 +279,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ] {
         println!("  ▶ {label}");
         let src = engine
-            .play_with_handle(buf, 1.0, 1.0, master, false)
+            .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
             .expect("play_with_handle");
         let _ = engine.set_source_spatial_params(
             src,
@@ -316,7 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     let src = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let _ =
         engine.set_source_spatial_params(src, AttenuationModel::InverseDistance, 2.0, 80.0, 1.0);

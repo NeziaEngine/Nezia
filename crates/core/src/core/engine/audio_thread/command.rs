@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use ringbuf::traits::Producer;
 
 use crate::bus::{BusComponent, BusWorld, SendDestKind};
-use crate::command::{Command, SendDestination};
+use crate::command::{Command, SendDestination, SpawnSpatialInit};
 use crate::effect::{CompressorWorld, EffectKind, EffectWorld, EffectWorlds};
 use crate::entity::EntityId;
 use crate::event::Event;
@@ -74,7 +74,9 @@ pub(super) fn process_command(
                     token,
                     looping,
                     start_dsp_frame,
+                    128,
                 ),
+                SpawnSpatialInit::NONE,
             );
         }
         Command::PlayToBus {
@@ -100,7 +102,9 @@ pub(super) fn process_command(
                     token,
                     looping,
                     start_dsp_frame,
+                    128,
                 ),
+                SpawnSpatialInit::NONE,
             );
         }
         Command::SpawnSource {
@@ -112,6 +116,8 @@ pub(super) fn process_command(
             token,
             looping,
             start_dsp_frame,
+            priority,
+            spatial_init,
         } => {
             try_spawn_source(
                 source_world,
@@ -127,7 +133,9 @@ pub(super) fn process_command(
                     token,
                     looping,
                     start_dsp_frame,
+                    priority,
                 ),
+                spatial_init,
             );
         }
 
@@ -312,7 +320,7 @@ pub(super) fn process_command(
 }
 
 /// Play / PlayToBus / SpawnSource の SoA フィールド組み立てを共通化する。
-/// `priority` のデフォルト 128、`sample_offset` 0 はここで集約する。
+/// `sample_offset` 0 はここで集約する。`priority` はコマンド側で持ち回る (既定 128)。
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn build_source_component(
@@ -323,6 +331,7 @@ fn build_source_component(
     token: u32,
     looping: bool,
     start_dsp_frame: u64,
+    priority: u8,
 ) -> SourceComponent {
     SourceComponent {
         vol,
@@ -332,7 +341,7 @@ fn build_source_component(
         output_bus,
         token,
         looping,
-        priority: 128,
+        priority,
         start_dsp_frame,
     }
 }
@@ -340,6 +349,10 @@ fn build_source_component(
 /// Play / PlayToBus / SpawnSource の共通本体。
 /// `id = Some(_)` で `spawn_with_id`、`None` で `spawn` (auto allocate)。
 /// 失敗時は `dropped_play_calls` をインクリメントし、token 付きなら `PlayFailed` を発火する。
+///
+/// 成功時は spatial_world のスロットを push してから `spatial_init` を反映する。
+/// `enabled = false` の場合も struct 全体を順に書き込む (push_defaults 直後の hot 領域への
+/// 連続書き込みなのでコスト差は無視できる)。
 fn try_spawn_source(
     source_world: &mut SourceWorld,
     spatial_world: &mut SpatialWorld,
@@ -347,6 +360,7 @@ fn try_spawn_source(
     metrics: &EngineMetrics,
     id: Option<EntityId>,
     component: SourceComponent,
+    spatial_init: SpawnSpatialInit,
 ) {
     let token = component.token;
     let spawned = match id {
@@ -355,6 +369,19 @@ fn try_spawn_source(
     };
     if spawned {
         spatial_world.push_defaults();
+        // push_defaults 直後の末尾エントリに対して spatial_init を適用する。
+        // 末尾 dense は SourceWorld と同期しているので `len() - 1` で参照できる。
+        let dense = spatial_world.len() - 1;
+        spatial_world.set_params(
+            dense,
+            spatial_init.model,
+            spatial_init.min_distance,
+            spatial_init.max_distance,
+            spatial_init.rolloff,
+        );
+        spatial_world.set_doppler_level(dense, spatial_init.doppler_level);
+        spatial_world.set_curve_index(dense, spatial_init.curve_index);
+        spatial_world.set_enabled(dense, spatial_init.enabled);
     } else {
         metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
         if token != 0 {

@@ -4,8 +4,6 @@
 //! - `add_send_to_compressor`: バス → Compressor sidechain 入力の Send (Phase 3-3 PR2)
 //! - `bind_compressor_sidechain`: Compressor の sidechain 駆動を on/off
 
-use ringbuf::traits::Producer;
-
 use crate::bus::{SendId, SendPosition};
 use crate::command::{Command, SendDestination};
 use crate::core::bus_routing::SendEdge;
@@ -59,17 +57,13 @@ impl SoundEngine {
         }
         let order = self.bus_routing.compute_process_order();
 
-        if self
-            .command_producer
-            .try_push(Command::AddSend {
-                id: send_id,
-                src_dense,
-                dst: SendDestination::Bus { dense: dst_dense },
-                position,
-                gain,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::AddSend {
+            id: send_id,
+            src_dense,
+            dst: SendDestination::Bus { dense: dst_dense },
+            position,
+            gain,
+        }) {
             self.bus_routing.remove_send(send_id);
             self.send_slots.free(send_id);
             return None;
@@ -134,17 +128,13 @@ impl SoundEngine {
         }
         let order = self.bus_routing.compute_process_order();
 
-        if self
-            .command_producer
-            .try_push(Command::AddSend {
-                id: send_id,
-                src_dense,
-                dst: SendDestination::CompressorSidechain { effect: compressor },
-                position,
-                gain,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::AddSend {
+            id: send_id,
+            src_dense,
+            dst: SendDestination::CompressorSidechain { effect: compressor },
+            position,
+            gain,
+        }) {
             self.bus_routing.remove_send(send_id);
             self.send_slots.free(send_id);
             return None;
@@ -166,12 +156,10 @@ impl SoundEngine {
         if !self.compressor_owners.contains_key(&compressor) {
             return false;
         }
-        self.command_producer
-            .try_push(Command::SetCompressorSidechainEnabled {
-                id: compressor,
-                enabled,
-            })
-            .is_ok()
+        self.try_send_command(Command::SetCompressorSidechainEnabled {
+            id: compressor,
+            enabled,
+        })
     }
 
     /// ソース起点 Send (User-Defined Aux Send) を作成する。
@@ -197,17 +185,13 @@ impl SoundEngine {
         let dst_dense = self.bus_routing.resolve_dense(dst)?;
         let send_id = self.send_slots.alloc()?;
 
-        if self
-            .command_producer
-            .try_push(Command::AddSourceSend {
-                id: send_id,
-                src_entity: src,
-                dst: SendDestination::Bus { dense: dst_dense },
-                position,
-                gain,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::AddSourceSend {
+            id: send_id,
+            src_entity: src,
+            dst: SendDestination::Bus { dense: dst_dense },
+            position,
+            gain,
+        }) {
             self.send_slots.free(send_id);
             return None;
         }
@@ -234,17 +218,13 @@ impl SoundEngine {
         self.compressor_owners.get(&compressor)?;
         let send_id = self.send_slots.alloc()?;
 
-        if self
-            .command_producer
-            .try_push(Command::AddSourceSend {
-                id: send_id,
-                src_entity: src,
-                dst: SendDestination::CompressorSidechain { effect: compressor },
-                position,
-                gain,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::AddSourceSend {
+            id: send_id,
+            src_entity: src,
+            dst: SendDestination::CompressorSidechain { effect: compressor },
+            position,
+            gain,
+        }) {
             self.send_slots.free(send_id);
             return None;
         }
@@ -271,11 +251,7 @@ impl SoundEngine {
             self.bus_routing.remove_send(id);
             let order = self.bus_routing.compute_process_order();
 
-            if self
-                .command_producer
-                .try_push(Command::RemoveSend { id })
-                .is_err()
-            {
+            if !self.try_send_command(Command::RemoveSend { id }) {
                 return false;
             }
             self.push_process_order(&order);
@@ -284,11 +260,7 @@ impl SoundEngine {
         }
         // ソース起点 → DAG / topo sort に絡まないので command + slot 解放のみ。
         if self.is_source_send(id) {
-            if self
-                .command_producer
-                .try_push(Command::RemoveSend { id })
-                .is_err()
-            {
+            if !self.try_send_command(Command::RemoveSend { id }) {
                 return false;
             }
             if let Some(slot) = self.source_sends.get_mut(id.index as usize) {
@@ -306,9 +278,7 @@ impl SoundEngine {
         if self.bus_routing.send(id).is_none() && !self.is_source_send(id) {
             return false;
         }
-        self.command_producer
-            .try_push(Command::SetSendGain { id, gain })
-            .is_ok()
+        self.try_send_command(Command::SetSendGain { id, gain })
     }
 
     /// Send のタップ位置 (Pre-Fader / Post-Fader) を変更する。
@@ -317,8 +287,6 @@ impl SoundEngine {
         if self.bus_routing.send(id).is_none() && !self.is_source_send(id) {
             return false;
         }
-        self.command_producer
-            .try_push(Command::SetSendPosition { id, position })
-            .is_ok()
+        self.try_send_command(Command::SetSendPosition { id, position })
     }
 }

@@ -289,6 +289,26 @@ impl SoundEngine {
             metrics,
         })
     }
+
+    /// SPSC コマンドリングへ 1 コマンド push する内部ヘルパ。
+    ///
+    /// 失敗 (リング満杯) 時に `EngineMetrics::command_queue_full` を atomic にインクリメントする
+    /// ことで、サイレントなコマンド消失を観測可能にする。`command_producer.try_push(...).is_ok()`
+    /// の素朴呼び出しはこのメソッド経由に統一し、計測漏れを防ぐ。
+    ///
+    /// 戻り値はそのまま push 成否 (true = 送信できた)。
+    #[inline]
+    pub(super) fn try_send_command(&mut self, cmd: Command) -> bool {
+        use ringbuf::traits::Producer;
+        if self.command_producer.try_push(cmd).is_ok() {
+            true
+        } else {
+            self.metrics
+                .command_queue_full
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false
+        }
+    }
 }
 
 /// ソース位置更新用の triple buffer を初期化する。

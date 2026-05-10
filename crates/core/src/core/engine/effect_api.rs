@@ -1,5 +1,3 @@
-use ringbuf::traits::Producer;
-
 use crate::command::Command;
 use crate::effect::{EffectId, EffectKind, EffectParamId, EffectPosition, EffectTarget};
 
@@ -50,7 +48,7 @@ impl SoundEngine {
             algo,
             position,
         };
-        if self.command_producer.try_push(cmd).is_err() {
+        if !self.try_send_command(cmd) {
             // コマンドキュー満杯: slot を返す
             self.effect_slots.free(id);
             return None;
@@ -67,11 +65,7 @@ impl SoundEngine {
     /// エフェクトを削除する。
     #[must_use]
     pub fn remove_effect(&mut self, id: EffectId) -> bool {
-        if self
-            .command_producer
-            .try_push(Command::DespawnEffect { id })
-            .is_err()
-        {
+        if !self.try_send_command(Command::DespawnEffect { id }) {
             return false;
         }
         // Phase 3-3 PR2: Compressor だった場合 owner マップから除去。
@@ -84,9 +78,7 @@ impl SoundEngine {
     /// エフェクトを enable / disable する (状態は保持、apply_chain でスキップされる)。
     #[must_use]
     pub fn set_effect_enabled(&mut self, id: EffectId, enabled: bool) -> bool {
-        self.command_producer
-            .try_push(Command::SetEffectEnabled { id, enabled })
-            .is_ok()
+        self.try_send_command(Command::SetEffectEnabled { id, enabled })
     }
 
     /// 型安全なパラメータ設定。
@@ -98,12 +90,10 @@ impl SoundEngine {
         param: P,
         value: f32,
     ) -> bool {
-        self.command_producer
-            .try_push(Command::SetEffectParam {
-                id,
-                param: param.as_u8(),
-                value,
-            })
-            .is_ok()
+        self.try_send_command(Command::SetEffectParam {
+            id,
+            param: param.as_u8(),
+            value,
+        })
     }
 }
