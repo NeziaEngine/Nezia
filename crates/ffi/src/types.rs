@@ -3,7 +3,7 @@
 //! `nezia` クレート側の型は ABI 安定性を持たないため、ここで `#[repr(C)]` の
 //! 鏡像を定義し、各エントリポイントで相互変換する。
 
-use nezia_core::{AttenuationModel, BufferId, EntityId};
+use nezia_core::{AttenuationModel, BufferId, EngineConfig, EntityId};
 
 /// API 結果コード。
 ///
@@ -212,6 +212,48 @@ pub struct NeziaAudioMetadata {
     /// 総フレーム数（チャンネル数で割る前のサンプル数）。
     /// コンテナがフレーム数を持たない場合は 0。
     pub total_frames: u64,
+}
+
+/// エンジン初期化時のキャパシティ設定 (`core::EngineConfig` の ABI ミラー)。
+///
+/// `nezia_engine_new_with_config` に渡す。各値は `>= 1` で
+/// `max_physical_voices <= max_sources` を満たす必要がある。違反時は
+/// `nezia_engine_new_with_config` が NULL を返す。
+///
+/// `nezia_engine_config_default` で「現行ビルドのデフォルト値」を書き戻せる。
+/// プロジェクトで部分的に上書きするときの推奨パターン:
+///
+/// ```c
+/// NeziaEngineConfig cfg;
+/// nezia_engine_config_default(&cfg);
+/// cfg.max_sources = 1024;
+/// NeziaEngine* eng = nezia_engine_new_with_config(&cfg);
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NeziaEngineConfig {
+    /// 論理ソース上限。同時に存在しうる Source の総数 (仮想化されたものを含む)。
+    pub max_sources: u32,
+    /// 物理ボイス数上限。実 DSP / ミキシングを行うボイス数。`max_sources` 以下。
+    pub max_physical_voices: u32,
+}
+
+impl NeziaEngineConfig {
+    #[inline]
+    pub(crate) fn to_core(self) -> EngineConfig {
+        EngineConfig {
+            max_sources: self.max_sources as usize,
+            max_physical_voices: self.max_physical_voices as usize,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn from_core(c: EngineConfig) -> Self {
+        Self {
+            max_sources: c.max_sources as u32,
+            max_physical_voices: c.max_physical_voices as u32,
+        }
+    }
 }
 
 /// 個別の `play_*_with_callback` で渡す再生終了コールバック。

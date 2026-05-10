@@ -1,9 +1,9 @@
 //! エンジン生成・破棄・グローバル制御。
 
-use nezia_core::SoundEngine;
+use nezia_core::{EngineConfig, SoundEngine};
 
 use crate::panic::{guard_entity, guard_result, guard_value};
-use crate::types::{NeziaEntityId, NeziaResult};
+use crate::types::{NeziaEngineConfig, NeziaEntityId, NeziaResult};
 
 /// 不透明エンジンハンドル。
 ///
@@ -21,6 +21,52 @@ pub extern "C" fn nezia_engine_new() -> *mut NeziaEngine {
     guard_value(std::ptr::null_mut(), || match SoundEngine::new() {
         Ok(engine) => Box::into_raw(Box::new(NeziaEngine { inner: engine })),
         Err(_) => std::ptr::null_mut(),
+    })
+}
+
+/// `EngineConfig` を指定してエンジンを生成する。失敗時は NULL を返す。
+///
+/// `config` が NULL、または `validate()` を通らなかった場合 (`max_sources == 0` /
+/// `max_physical_voices == 0` / `max_physical_voices > max_sources`) は NULL を
+/// 返す。`nezia_engine_new` と同様に成功時は `nezia_engine_free` で解放すること。
+///
+/// # 安全性
+/// `config` が非 NULL のとき `*config` が有効な `NeziaEngineConfig` であること。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_engine_new_with_config(
+    config: *const NeziaEngineConfig,
+) -> *mut NeziaEngine {
+    guard_value(std::ptr::null_mut(), || {
+        if config.is_null() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: 呼出側契約により `config` が非 NULL なら `*config` は有効。
+        let cfg = unsafe { (*config).to_core() };
+        match SoundEngine::with_config(cfg) {
+            Ok(engine) => Box::into_raw(Box::new(NeziaEngine { inner: engine })),
+            Err(_) => std::ptr::null_mut(),
+        }
+    })
+}
+
+/// 現行ビルドのデフォルト `EngineConfig` を `out_config` に書き出す。
+///
+/// 部分的に上書きするときのテンプレートを取得するために使う。
+/// `out_config` が NULL なら何もせず `NullPointer` を返す。
+///
+/// # 安全性
+/// `out_config` が非 NULL のとき書き込み可能な `NeziaEngineConfig` を指していること。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_engine_config_default(
+    out_config: *mut NeziaEngineConfig,
+) -> NeziaResult {
+    guard_result(|| {
+        if out_config.is_null() {
+            return NeziaResult::NullPointer;
+        }
+        // SAFETY: 呼出側契約により `out_config` は書き込み可能。
+        unsafe { *out_config = NeziaEngineConfig::from_core(EngineConfig::default()) };
+        NeziaResult::Ok
     })
 }
 
