@@ -5,7 +5,7 @@
 //! (seek / pause / resume / stop / set_loop / set_priority) はコマンド経由で
 //! audio thread に届ける。
 
-use crate::command::Command;
+use crate::command::{Command, STOP_SOURCE_BATCH_MAX};
 use crate::entity::EntityId;
 
 use super::super::SoundEngine;
@@ -60,6 +60,36 @@ impl SoundEngine {
     #[must_use]
     pub fn stop_source(&mut self, id: EntityId) -> bool {
         self.try_send_command(Command::StopSource { id })
+    }
+
+    /// 複数ソースを 1 コマンドあたり最大 `STOP_SOURCE_BATCH_MAX` 件にまとめて停止する。
+    ///
+    /// `stop_source` を N 回呼ぶと SPSC コマンドリングが詰まる (`COMMAND_RING_CAPACITY = 128`)
+    /// ため、ステージ終端などで pool 内の全 source を一括 stop する用途で使う。
+    /// 例: 256 voice → 8 コマンドに圧縮。
+    ///
+    /// 戻り値はリングへの enqueue に成功した ID 件数。`ids.len()` 未満の場合は
+    /// 残りはリング満杯で送れていない (`EngineMetrics::command_queue_full` がインクリメント)。
+    /// 呼び出し側は次フレームに残りを再送するか、必要なら全停止 (`stop_all`) を検討する。
+    #[must_use]
+    pub fn stop_source_many(&mut self, ids: &[EntityId]) -> usize {
+        let mut sent = 0;
+        for chunk in ids.chunks(STOP_SOURCE_BATCH_MAX) {
+            let mut buf = [EntityId {
+                index: 0,
+                generation: 0,
+            }; STOP_SOURCE_BATCH_MAX];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            let cmd = Command::StopSourceMany {
+                ids: buf,
+                count: chunk.len() as u8,
+            };
+            if !self.try_send_command(cmd) {
+                break;
+            }
+            sent += chunk.len();
+        }
+        sent
     }
 
     /// ソースのループフラグを動的に変更する。

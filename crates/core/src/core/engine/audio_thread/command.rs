@@ -154,6 +154,13 @@ pub(super) fn process_command(
         Command::StopSource { id } => {
             source_world.set_state(id, SourceState::Stopped);
         }
+        Command::StopSourceMany { ids, count } => {
+            // `count` で有効件数を制限。STOP_SOURCE_BATCH_MAX 内に収まる前提。
+            let n = (count as usize).min(ids.len());
+            for id in &ids[..n] {
+                source_world.set_state(*id, SourceState::Stopped);
+            }
+        }
         Command::SetSourceLoop { id, looping } => {
             source_world.set_looping(id, looping);
         }
