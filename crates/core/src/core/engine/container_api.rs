@@ -6,10 +6,8 @@
 
 use std::ffi::c_void;
 
-use ringbuf::traits::Producer;
-
 use crate::buffer_pool::BufferId;
-use crate::command::Command;
+use crate::command::{Command, SpawnSpatialInit};
 use crate::container::{ContainerId, RandomPick};
 use crate::entity::EntityId;
 
@@ -58,17 +56,15 @@ impl SoundEngine {
         let Some(output_bus_dense) = self.bus_routing.resolve_dense(bus) else {
             return false;
         };
-        self.command_producer
-            .try_push(Command::PlayToBus {
-                audio_buffer_index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token: 0,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_ok()
+        self.try_send_command(Command::PlayToBus {
+            audio_buffer_index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token: 0,
+            looping,
+            start_dsp_frame: 0,
+        })
     }
 
     /// Container から子を 1 つ選んでハンドル付きで再生する。
@@ -93,20 +89,18 @@ impl SoundEngine {
         let id = self.source_slots.alloc()?;
         self.live_params.prime(id, vol, pitch);
 
-        if self
-            .command_producer
-            .try_push(Command::SpawnSource {
-                id,
-                audio_buffer_index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token: 0,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_err()
-        {
+        if !self.try_send_command(Command::SpawnSource {
+            id,
+            audio_buffer_index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token: 0,
+            looping,
+            start_dsp_frame: 0,
+            priority: 128,
+            spatial_init: SpawnSpatialInit::NONE,
+        }) {
             self.source_slots.free(id);
             return None;
         }
@@ -148,19 +142,18 @@ impl SoundEngine {
             self.source_slots.free(id);
             return None;
         };
-        let ok = self
-            .command_producer
-            .try_push(Command::SpawnSource {
-                id,
-                audio_buffer_index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_ok();
+        let ok = self.try_send_command(Command::SpawnSource {
+            id,
+            audio_buffer_index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token,
+            looping,
+            start_dsp_frame: 0,
+            priority: 128,
+            spatial_init: SpawnSpatialInit::NONE,
+        });
         if !ok {
             self.callbacks.cancel(token);
             self.source_slots.free(id);

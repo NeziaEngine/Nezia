@@ -209,6 +209,19 @@ impl SpatialWorld {
         }
     }
 
+    /// 現在保持している spatial エントリ数 (= `SourceWorld::len()` と一致)。
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.positions_x.len()
+    }
+
+    /// `len() == 0` を返す (clippy::len_without_is_empty 対策)。
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.positions_x.is_empty()
+    }
+
     /// `SourceWorld` がソースをスポーンしたタイミングで呼び出す。
     /// デフォルト値でエントリを末尾に追加する。`spatial_enabled = false` がデフォルトなので
     /// 既存の 2D ソースには影響しない。

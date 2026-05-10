@@ -6,10 +6,8 @@
 
 use std::ffi::c_void;
 
-use ringbuf::traits::Producer;
-
 use crate::buffer_pool::BufferId;
-use crate::command::Command;
+use crate::command::{Command, SpawnSpatialInit};
 use crate::entity::EntityId;
 
 use super::super::SoundEngine;
@@ -36,17 +34,14 @@ impl SoundEngine {
         let Some(token) = self.callbacks.register_native(f, user_data) else {
             return false;
         };
-        let ok = self
-            .command_producer
-            .try_push(Command::Play {
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                token,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_ok();
+        let ok = self.try_send_command(Command::Play {
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            token,
+            looping,
+            start_dsp_frame: 0,
+        });
         if !ok {
             self.callbacks.cancel(token);
         }
@@ -78,18 +73,15 @@ impl SoundEngine {
         let Some(token) = self.callbacks.register_native(f, user_data) else {
             return false;
         };
-        let ok = self
-            .command_producer
-            .try_push(Command::PlayToBus {
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_ok();
+        let ok = self.try_send_command(Command::PlayToBus {
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token,
+            looping,
+            start_dsp_frame: 0,
+        });
         if !ok {
             self.callbacks.cancel(token);
         }
@@ -122,19 +114,18 @@ impl SoundEngine {
             self.source_slots.free(id);
             return None;
         };
-        let ok = self
-            .command_producer
-            .try_push(Command::SpawnSource {
-                id,
-                audio_buffer_index: index,
-                vol,
-                pitch,
-                output_bus_dense,
-                token,
-                looping,
-                start_dsp_frame: 0,
-            })
-            .is_ok();
+        let ok = self.try_send_command(Command::SpawnSource {
+            id,
+            audio_buffer_index: index,
+            vol,
+            pitch,
+            output_bus_dense,
+            token,
+            looping,
+            start_dsp_frame: 0,
+            priority: 128,
+            spatial_init: SpawnSpatialInit::NONE,
+        });
         if !ok {
             self.callbacks.cancel(token);
             self.source_slots.free(id);
