@@ -5,7 +5,9 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{EffectKind, EffectPosition, EffectTarget, LpfParam, ReverbParam, SoundEngine};
+use nezia::{
+    EffectKind, EffectPosition, EffectTarget, LpfParam, ReverbParam, SoundEngine, SpawnSpatialInit,
+};
 
 /// テスト用の小さな WAV (再生用)。
 fn gen_wav(secs: f32, name: &str) -> std::path::PathBuf {
@@ -98,7 +100,7 @@ fn apply_with_zero_fade_immediately_changes_master_gain() {
     // 何か再生して audio thread を回す。
     let wav = gen_wav(1.0, "nezia_snapshot_test_zero_fade.wav");
     let buf = engine.load(&wav).unwrap();
-    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false);
+    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE);
 
     let id = engine
         .snapshot_builder()
@@ -125,7 +127,7 @@ fn apply_with_fade_runs_to_completion() {
     let master = engine.master_bus();
     let wav = gen_wav(1.0, "nezia_snapshot_test_fade.wav");
     let buf = engine.load(&wav).unwrap();
-    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false);
+    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE);
 
     let id = engine
         .snapshot_builder()
@@ -154,7 +156,7 @@ fn apply_can_interrupt_in_progress_fade() {
     let master = engine.master_bus();
     let wav = gen_wav(2.0, "nezia_snapshot_test_interrupt.wav");
     let buf = engine.load(&wav).unwrap();
-    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false);
+    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE);
 
     let s1 = engine
         .snapshot_builder()
@@ -190,7 +192,7 @@ fn snapshot_with_effect_param_applies() {
     let master = engine.master_bus();
     let wav = gen_wav(1.0, "nezia_snapshot_test_effect.wav");
     let buf = engine.load(&wav).unwrap();
-    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false);
+    let _ = engine.play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE);
 
     // master に LPF を 1 つ挿す。
     let lpf = engine

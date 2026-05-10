@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use nezia::{
     EffectKind, EffectPosition, EffectTarget, HpfParam, LpfParam, ReverbParam, SoundEngine,
+    SpawnSpatialInit,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ ON にすると 5kHz 成分が削れて低音だけになるはず");
 
     let src = engine
-        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let _ = src;
 
@@ -64,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ ON にすると 440Hz 成分が削れて高音だけになるはず");
 
     let _src = engine
-        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
 
     println!("  ▶ HPF OFF (2.5 秒)");
@@ -91,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ 高い周波数から低い周波数へ徐々に絞る → 高音成分が段階的に消えていく");
 
     let _src = engine
-        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let lpf = engine
         .add_effect(
@@ -124,7 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ ON 時はこもった音、OFF 時は元のシャキッとした音が交互に出る");
 
     let _src = engine
-        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let lpf = engine
         .add_effect(
@@ -158,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ▶ wet が増えるほど残響が強まり、空間的に広がる");
 
     let _src = engine
-        .play_with_handle(buf, 0.5, 1.0, master, false)
+        .play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle");
     let rev = engine
         .add_effect(
@@ -197,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("hall (0.95)  ", 0.95),
     ] {
         let _src = engine
-            .play_with_handle(buf, 0.4, 1.0, master, false)
+            .play_with_handle(buf, 0.4, 1.0, master, false, 128, SpawnSpatialInit::NONE)
             .expect("play_with_handle");
         let rev = engine
             .add_effect(

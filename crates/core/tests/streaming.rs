@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 
-use nezia::StreamingOpts;
+use nezia::{SpawnSpatialInit, StreamingOpts};
 
 /// テスト用ステレオ 16-bit PCM WAV を生成する (サイン波)。
 fn gen_wav(freq: f32, sample_rate: u32, secs: f32, name: &str) -> std::path::PathBuf {
@@ -73,7 +73,7 @@ fn streaming_worker_decodes_into_ring() {
 
     // 再生してすぐ stop し、自然 EOF を経由しないで unload しても安全に終了することを確認。
     let master = engine.master_bus();
-    let id = engine.play_with_handle(buf, 1.0, 1.0, master, false);
+    let id = engine.play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE);
     assert!(id.is_some(), "play_with_handle should return Some");
     thread::sleep(Duration::from_millis(100));
     let _ = engine.stop_all();
@@ -97,7 +97,7 @@ fn streaming_buffer_id_is_compatible_with_play_with_handle() {
         .unwrap();
     // streaming も 静的 と同じ play_with_handle を受け付ける。
     let master = engine.master_bus();
-    let id = engine.play_with_handle(buf, 0.5, 1.0, master, false);
+    let id = engine.play_with_handle(buf, 0.5, 1.0, master, false, 128, SpawnSpatialInit::NONE);
     assert!(id.is_some());
     thread::sleep(Duration::from_millis(50));
     let _ = engine.stop_all();
@@ -120,7 +120,7 @@ fn streaming_loop_keeps_supplying_after_eof() {
     engine.set_streaming_loop(buf, true);
 
     let master = engine.master_bus();
-    let id = engine.play_with_handle(buf, 0.5, 1.0, master, true);
+    let id = engine.play_with_handle(buf, 0.5, 1.0, master, true, 128, SpawnSpatialInit::NONE);
     assert!(id.is_some());
 
     // 0.5 秒待つ (元 WAV より長い) → loop で続いていれば source は alive 維持。

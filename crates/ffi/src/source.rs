@@ -167,10 +167,21 @@ pub unsafe extern "C" fn nezia_source_play_to_bus_with_callback(
 /// `nezia_source_stop()` で despawn され、その時点で EntityId は無効化される。
 /// 再生し直す場合は再度この関数を呼んで新しい EntityId を取得する。
 ///
+/// `priority` / `spatial_init` は spawn 時に `Command::SpawnSource` に同梱して 1 コマンドで
+/// 送る。3D ソース 1 ボイスあたり 4〜5 コマンドを消費していた旧経路 (spawn 後に
+/// `set_priority` / `set_spatial_params` / `set_doppler_level` / `set_spatial_enabled` を
+/// 個別 push) を置き換える。`spatial_init.enabled = 0` の 2D ソースで spatial 系
+/// プロパティはダミー値で構わない。
+///
 /// `callback` が `Some` のとき、自然終了時に `nezia_engine_poll_events()` 経由で
 /// 1 度だけ呼ばれる（`looping != 0` の場合は呼ばれない）。`user_data` のライフタイムは
 /// コールバック発火まで呼出側が保証する。
+///
+/// 失敗時 (バッファ不正・MAX_SOURCES 到達・**コマンドリング満杯**) は `INVALID` を返す。
+/// リング満杯のケースは `nezia_engine_get_dropouts` の `out_command_queue_full` で
+/// 観測できる。
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn nezia_source_play_with_handle(
     engine: *mut NeziaEngine,
     buffer: NeziaBufferId,
@@ -178,6 +189,8 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
     pitch: f32,
     bus: NeziaEntityId,
     looping: u8,
+    priority: u8,
+    spatial_init: NeziaSpawnSpatialInit,
     callback: NeziaFinishCallback,
     user_data: *mut c_void,
 ) -> NeziaEntityId {
@@ -185,6 +198,7 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
         let Some(engine) = (unsafe { engine.as_mut() }) else {
             return NeziaEntityId::INVALID;
         };
+        let core_init = spatial_init.to_core();
         let result = match callback {
             Some(f) => unsafe {
                 // SAFETY: 呼出側契約により f / user_data は発火時まで有効。
@@ -194,6 +208,8 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
                     pitch,
                     bus.to_core(),
                     looping != 0,
+                    priority,
+                    core_init,
                     f,
                     user_data,
                 )
@@ -204,56 +220,11 @@ pub unsafe extern "C" fn nezia_source_play_with_handle(
                 pitch,
                 bus.to_core(),
                 looping != 0,
+                priority,
+                core_init,
             ),
         };
         result
-            .map(NeziaEntityId::from_core)
-            .unwrap_or(NeziaEntityId::INVALID)
-    })
-}
-
-/// `nezia_source_play_with_handle` の spawn-時 priority/spatial 一括初期化版。
-///
-/// 旧 API は spawn 後に `nezia_source_set_priority` /
-/// `nezia_source_set_spatial_params` / `nezia_source_set_spatial_enabled` /
-/// `nezia_source_set_doppler_level` / `nezia_source_set_attenuation_curve` を
-/// 個別に発行する設計だったため、3D ソース 1 ボイスあたり 4〜5 個の SPSC コマンドを
-/// 消費していた。1 フレームで多数の Play を行うとリングが drain される前に詰まり、
-/// 後続の Spawn が黙って失敗するというバーストの罠があった。
-///
-/// この関数は priority と spatial 設定を `Command::SpawnSource` に同梱し、
-/// 1 ボイス = 1 コマンドに圧縮する。`spatial_init.enabled = 0` の 2D ソースは
-/// 旧 `nezia_source_play_with_handle(callback=None)` と同等。
-///
-/// 失敗時 (バッファ不正・MAX_SOURCES 到達・**コマンドリング満杯**) は `INVALID` を返す。
-/// リング満杯のケースは `nezia_engine_get_dropouts` の `out_command_queue_full` で
-/// 観測できる。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nezia_source_play_with_handle_init(
-    engine: *mut NeziaEngine,
-    buffer: NeziaBufferId,
-    volume: f32,
-    pitch: f32,
-    bus: NeziaEntityId,
-    looping: u8,
-    priority: u8,
-    spatial_init: NeziaSpawnSpatialInit,
-) -> NeziaEntityId {
-    guard_entity(|| {
-        let Some(engine) = (unsafe { engine.as_mut() }) else {
-            return NeziaEntityId::INVALID;
-        };
-        engine
-            .inner
-            .play_with_handle_init(
-                buffer.to_core(),
-                volume,
-                pitch,
-                bus.to_core(),
-                looping != 0,
-                priority,
-                spatial_init.to_core(),
-            )
             .map(NeziaEntityId::from_core)
             .unwrap_or(NeziaEntityId::INVALID)
     })

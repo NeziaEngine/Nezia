@@ -90,6 +90,9 @@ impl SoundEngine {
 
     /// 制御ハンドル付き + C 関数コールバック付きで再生する（FFI 用、**alloc なし**）。
     ///
+    /// `priority` / `spatial_init` は spawn 時の一括初期化に使う
+    /// (詳細は `SoundEngine::play_with_handle` の doc 参照)。
+    ///
     /// # Safety
     /// `f` / `user_data` は `poll_events()` で発火するまで有効である必要がある。
     #[must_use]
@@ -101,6 +104,8 @@ impl SoundEngine {
         pitch: f32,
         bus: EntityId,
         looping: bool,
+        priority: u8,
+        spatial_init: SpawnSpatialInit,
         f: NativeFinishFn,
         user_data: *mut c_void,
     ) -> Option<EntityId> {
@@ -109,6 +114,9 @@ impl SoundEngine {
 
         let id = self.source_slots.alloc()?;
         self.live_params.prime(id, vol, pitch);
+        if spatial_init.enabled {
+            self.live_params.store_spatial_enabled(id, true);
+        }
 
         let Some(token) = self.callbacks.register_native(f, user_data) else {
             self.source_slots.free(id);
@@ -123,8 +131,8 @@ impl SoundEngine {
             token,
             looping,
             start_dsp_frame: 0,
-            priority: 128,
-            spatial_init: SpawnSpatialInit::NONE,
+            priority,
+            spatial_init,
         });
         if !ok {
             self.callbacks.cancel(token);

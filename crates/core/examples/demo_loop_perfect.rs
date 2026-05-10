@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nezia::SoundEngine;
+use nezia::{SoundEngine, SpawnSpatialInit};
 
 const PLAY_SECONDS: u64 = 15;
 
@@ -59,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── ループ再生 ──────────────────────────────────────
     let master = engine.master_bus();
     let id = engine
-        .play_with_handle(buf, 0.5, 1.0, master, true)
+        .play_with_handle(buf, 0.5, 1.0, master, true, 128, SpawnSpatialInit::NONE)
         .expect("play");
 
     println!(

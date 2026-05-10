@@ -1,4 +1,4 @@
-//! `play_with_handle_init` (= spawn 時 spatial 一括初期化) の結合テスト。
+//! `play_with_handle` (= spawn 時 spatial 一括初期化) の結合テスト。
 //!
 //! 旧経路は spawn 後に `set_source_priority` / `set_source_spatial_params` /
 //! `set_source_doppler_level` を別コマンドで送る設計のため、1 ボイスで 4 コマンドを
@@ -14,20 +14,20 @@ fn make_buffer(engine: &mut SoundEngine) -> nezia::BufferId {
 }
 
 #[test]
-fn play_with_handle_init_returns_id_for_2d_source() {
+fn play_with_handle_returns_id_for_2d_source() {
     let mut engine = match SoundEngine::new() {
         Ok(e) => e,
         Err(_) => return,
     };
     let buf = make_buffer(&mut engine);
     let bus = engine.master_bus();
-    // 2D ソース: NONE で旧 play_with_handle と同等。
-    let id = engine.play_with_handle_init(buf, 1.0, 1.0, bus, false, 128, SpawnSpatialInit::NONE);
+    // 2D ソース: spatial_init = NONE。
+    let id = engine.play_with_handle(buf, 1.0, 1.0, bus, false, 128, SpawnSpatialInit::NONE);
     assert!(id.is_some());
 }
 
 #[test]
-fn play_with_handle_init_returns_id_for_3d_source() {
+fn play_with_handle_returns_id_for_3d_source() {
     let mut engine = match SoundEngine::new() {
         Ok(e) => e,
         Err(_) => return,
@@ -44,7 +44,7 @@ fn play_with_handle_init_returns_id_for_3d_source() {
         doppler_level: 1.0,
         curve_index: u32::MAX,
     };
-    let id = engine.play_with_handle_init(buf, 1.0, 1.0, bus, true, 200, init);
+    let id = engine.play_with_handle(buf, 1.0, 1.0, bus, true, 200, init);
     assert!(id.is_some());
 }
 

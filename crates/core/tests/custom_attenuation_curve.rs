@@ -6,7 +6,7 @@
 use std::thread;
 use std::time::Duration;
 
-use nezia::{AttenuationModel, SoundEngine};
+use nezia::{AttenuationModel, SoundEngine, SpawnSpatialInit};
 
 /// テスト用ステレオ 16-bit PCM WAV を生成する (サイン波)。
 fn gen_wav(freq: f32, sample_rate: u32, secs: f32, name: &str) -> std::path::PathBuf {
@@ -83,7 +83,7 @@ fn destroyed_curve_id_rejected_by_set() {
     let buf = engine.load(&wav).unwrap();
     let master = engine.master_bus();
     let id = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .unwrap();
 
     // destroy 済みカーブを set しようとすると false (resolve 失敗)。
@@ -108,7 +108,7 @@ fn end_to_end_custom_curve_assignment() {
     let buf = engine.load(&wav).unwrap();
     let master = engine.master_bus();
     let id = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .unwrap();
 
     // Custom モデルに切替 + curve を割り当て + 3D 有効化。
@@ -137,7 +137,7 @@ fn custom_curve_with_none_clears_assignment() {
     let buf = engine.load(&wav).unwrap();
     let master = engine.master_bus();
     let id = engine
-        .play_with_handle(buf, 1.0, 1.0, master, false)
+        .play_with_handle(buf, 1.0, 1.0, master, false, 128, SpawnSpatialInit::NONE)
         .unwrap();
 
     assert!(engine.set_source_attenuation_curve(id, Some(curve)));

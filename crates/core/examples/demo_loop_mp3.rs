@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nezia::{SoundEngine, peek_metadata};
+use nezia::{SoundEngine, SpawnSpatialInit, peek_metadata};
 
 const MP3_RELATIVE: &str = "crates/core/sandbox/ambience-ocean-rough-wave-loop.mp3";
 const PLAY_SECONDS: u64 = 30;
@@ -103,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let master = engine.master_bus();
     let id = engine
-        .play_with_handle(buf, 1.0, 1.0, master, true)
+        .play_with_handle(buf, 1.0, 1.0, master, true, 128, SpawnSpatialInit::NONE)
         .expect("play_with_handle should succeed");
     ok(format!("play_with_handle(looping=true) => entity={id:?}"));
 

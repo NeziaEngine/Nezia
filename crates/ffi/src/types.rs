@@ -141,7 +141,7 @@ impl NeziaAttenuationModel {
     }
 }
 
-/// `nezia_source_play_with_handle_init` に渡す spawn 時の spatial 初期化パラメータ。
+/// `nezia_source_play_with_handle` に渡す spawn 時の spatial 初期化パラメータ。
 ///
 /// 旧経路は spawn 後に `set_priority` / `set_spatial_params` / `set_doppler_level` /
 /// `set_attenuation_curve` を個別 FFI 呼び出しで送るため、1 ボイスあたり最大 4〜5 個の
