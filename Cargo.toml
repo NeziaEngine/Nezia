@@ -5,3 +5,10 @@ members = [
     "crates/daemon",
     "crates/ffi"
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Atsuya Kaido <kaido_atsuya@atsuatsu.dev>"]
+repository = "https://github.com/NeziaEngine/Nezia"
