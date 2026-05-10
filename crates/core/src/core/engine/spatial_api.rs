@@ -1,5 +1,3 @@
-use ringbuf::traits::Producer;
-
 use crate::command::Command;
 use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::source::MAX_SOURCES;
@@ -39,15 +37,13 @@ impl SoundEngine {
         max_distance: f32,
         rolloff: f32,
     ) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourceSpatialParams {
-                id,
-                model,
-                min_distance,
-                max_distance,
-                rolloff,
-            })
-            .is_ok()
+        self.try_send_command(Command::SetSourceSpatialParams {
+            id,
+            model,
+            min_distance,
+            max_distance,
+            rolloff,
+        })
     }
 
     /// ソースの空間演算を有効化・無効化する。
@@ -78,13 +74,11 @@ impl SoundEngine {
         distance_focus_level: f32,
         direction_focus_level: f32,
     ) -> bool {
-        self.command_producer
-            .try_push(Command::SetListenerFocus {
-                focus_point,
-                distance_focus_level,
-                direction_focus_level,
-            })
-            .is_ok()
+        self.try_send_command(Command::SetListenerFocus {
+            focus_point,
+            distance_focus_level,
+            direction_focus_level,
+        })
     }
 
     /// 複数ソースの位置を一括更新する（毎フレーム用）。
@@ -120,9 +114,7 @@ impl SoundEngine {
     /// 中間値は速度成分を線形スケールする。値域外は内部でクランプされる。
     #[must_use]
     pub fn set_source_doppler_level(&mut self, id: EntityId, level: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetSourceDopplerLevel { id, level })
-            .is_ok()
+        self.try_send_command(Command::SetSourceDopplerLevel { id, level })
     }
 
     /// SP-10: 媒質中の音速 (m/s) を設定する。0 以下は無視される。既定値 343.0（Unity 互換）。
@@ -131,9 +123,7 @@ impl SoundEngine {
     /// （音速が大きいほど同じ相対速度でも周波数偏移が小さくなる）。
     #[must_use]
     pub fn set_sound_speed(&mut self, speed: f32) -> bool {
-        self.command_producer
-            .try_push(Command::SetSoundSpeed { speed })
-            .is_ok()
+        self.try_send_command(Command::SetSoundSpeed { speed })
     }
 
     // ── Phase 3-1: Custom Attenuation Curve ──────────────────────────
@@ -175,8 +165,6 @@ impl SoundEngine {
             },
             None => crate::spatial::CURVE_INDEX_NONE,
         };
-        self.command_producer
-            .try_push(Command::SetSourceAttenuationCurve { id, curve_index })
-            .is_ok()
+        self.try_send_command(Command::SetSourceAttenuationCurve { id, curve_index })
     }
 }

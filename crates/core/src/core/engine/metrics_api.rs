@@ -63,6 +63,10 @@ impl SoundEngine {
     ///   意味が異なる点に注意。
     /// - `streaming_underrun`: ストリーミングバッファ underrun の累積発生回数。
     /// - `dropped_play_calls`: `MAX_SOURCES` 上限到達による Play コマンド失敗の累積回数。
+    /// - `command_queue_full`: SPSC コマンドリングが満杯で `try_push` が失敗した累積回数。
+    ///   `dropped_play_calls` と原因が異なる: こちらは「1 フレームで API バーストし
+    ///   audio thread が drain する前に詰まった」状態を示す。閾値超えはリング容量不足か
+    ///   1 操作あたりのコマンド数過多のサインで、容量増 / API 集約の判断材料に使う。
     #[must_use]
     pub fn dropouts(&self) -> DropoutStats {
         DropoutStats {
@@ -72,6 +76,7 @@ impl SoundEngine {
                 .streaming_underrun_count
                 .load(Ordering::Relaxed),
             dropped_play_calls: self.metrics.dropped_play_calls.load(Ordering::Relaxed),
+            command_queue_full: self.metrics.command_queue_full.load(Ordering::Relaxed),
         }
     }
 }
