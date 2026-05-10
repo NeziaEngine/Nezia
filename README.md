@@ -69,4 +69,4 @@ cargo run -p nezia --example demo_spatial  # 3D サウンド
 
 ## ライセンス
 
-TBD
+[MIT License](LICENSE)
