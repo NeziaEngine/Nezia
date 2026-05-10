@@ -108,6 +108,11 @@ impl ReverbWorld {
         self.states.len()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.states) + vec_cap_bytes(&self.delay_pool)
+    }
+
     /// 新規 Reverb を確保し、種別 World 内 dense index を返す。`MAX_REVERBS` 到達時は `None`。
     pub fn spawn(&mut self, effect_id: EffectId) -> Option<u32> {
         if self.states.len() >= MAX_REVERBS {

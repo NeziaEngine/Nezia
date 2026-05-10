@@ -63,6 +63,16 @@ impl AudioBuffer {
         matches!(self.inner, AudioBufferInner::Streaming(_))
     }
 
+    /// バッファが保持する PCM (静的) / mirror リング (streaming) の実バイト数。
+    /// `memory_stats` walker 用。`AudioBuffer` 自身のメタサイズは含まない。
+    #[must_use]
+    pub(crate) fn payload_bytes(&self) -> usize {
+        match &self.inner {
+            AudioBufferInner::Static(s) => s.capacity() * std::mem::size_of::<f32>(),
+            AudioBufferInner::Streaming(state) => state.ring.byte_size(),
+        }
+    }
+
     /// 静的バッファのサンプル列への参照。streaming の場合は None。
     ///
     /// ミキシングシステムが random access (looping wrap) を行うために使う。

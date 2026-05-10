@@ -71,6 +71,11 @@ impl CompressorWorld {
         self.states.is_empty()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.states) + vec_cap_bytes(&self.sidechain_buffer)
+    }
+
     /// 新規 Compressor を確保し、種別 World 内 dense index を返す。
     /// 容量超過時は `None`。
     pub fn spawn(&mut self, effect_id: EffectId) -> Option<u32> {

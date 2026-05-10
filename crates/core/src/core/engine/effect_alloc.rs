@@ -22,6 +22,12 @@ impl EffectIdAllocator {
         }
     }
 
+    /// 内部 `Vec` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.free_list) + vec_cap_bytes(&self.generation)
+    }
+
     pub(crate) fn alloc(&mut self) -> Option<EntityId> {
         let index = if let Some(reused) = self.free_list.pop() {
             reused

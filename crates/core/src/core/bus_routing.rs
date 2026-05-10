@@ -69,6 +69,15 @@ impl BusRoutingMirror {
         self.dense_to_entity.len()
     }
 
+    /// 内部 `Vec` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.routing)
+            + vec_cap_bytes(&self.entity_to_dense)
+            + vec_cap_bytes(&self.dense_to_entity)
+            + vec_cap_bytes(&self.sends)
+    }
+
     /// `index` が収まるようにルーティング配列を拡張する。
     pub fn ensure_capacity(&mut self, index: usize) {
         if index >= self.routing.len() {

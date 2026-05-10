@@ -71,6 +71,14 @@ impl MirrorRing {
         self.channels
     }
 
+    /// リング `Box<[f32]>` の実バイト数 (`memory_stats` walker 用)。
+    /// 物理長 = `2 * capacity_frames * channels` の f32 (= 8 * capacity_frames * channels バイト)。
+    #[inline]
+    #[must_use]
+    pub(crate) fn byte_size(&self) -> usize {
+        2 * self.capacity_frames * self.channels * std::mem::size_of::<f32>()
+    }
+
     /// リング容量 (フレーム単位)。
     #[inline]
     #[must_use]

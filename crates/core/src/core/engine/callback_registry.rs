@@ -65,6 +65,16 @@ impl CallbackRegistry {
         }
     }
 
+    /// 内部 `Vec` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    /// `Box<dyn FnOnce>` 個別の確保サイズは追跡不能 (アロケータ側でしか分からない) ので、
+    /// ポインタ分のみ計上する。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.slots)
+            + vec_cap_bytes(&self.generation)
+            + vec_cap_bytes(&self.free_list)
+    }
+
     /// FFI 用: 関数ポインタ + user_data を直接登録する（**alloc なし**）。
     /// 失敗時（スロット枯渇）は `None`。
     pub(super) fn register_native(

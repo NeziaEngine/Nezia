@@ -46,6 +46,14 @@ impl SourceStateCache {
         self.sample_offsets.clear();
     }
 
+    /// 内部 `Vec` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.indices)
+            + vec_cap_bytes(&self.generations)
+            + vec_cap_bytes(&self.sample_offsets)
+    }
+
     pub(crate) fn refill_from(&mut self, snapshots: &[SourceSnapshot]) {
         self.clear();
         for s in snapshots {

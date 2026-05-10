@@ -97,6 +97,18 @@ impl EffectWorld {
         self.entities.is_empty()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        self.entities.memory_bytes()
+            + vec_cap_bytes(&self.kind)
+            + vec_cap_bytes(&self.algo)
+            + vec_cap_bytes(&self.owner)
+            + vec_cap_bytes(&self.position)
+            + vec_cap_bytes(&self.slot_index)
+            + vec_cap_bytes(&self.enabled)
+            + vec_cap_bytes(&self.state_index)
+    }
+
     pub fn contains(&self, id: EffectId) -> bool {
         self.entities.contains(id)
     }

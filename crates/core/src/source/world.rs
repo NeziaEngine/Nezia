@@ -247,6 +247,26 @@ impl SourceWorld {
         self.entities.is_empty()
     }
 
+    /// SoA 全フィールドが確保しているヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        self.entities.memory_bytes()
+            + vec_cap_bytes(&self.vol)
+            + vec_cap_bytes(&self.pitch)
+            + vec_cap_bytes(&self.sample_offset)
+            + vec_cap_bytes(&self.audio_buffer_index)
+            + vec_cap_bytes(&self.state)
+            + vec_cap_bytes(&self.output_bus)
+            + vec_cap_bytes(&self.token)
+            + vec_cap_bytes(&self.looping)
+            + vec_cap_bytes(&self.priority)
+            + vec_cap_bytes(&self.is_virtual)
+            + vec_cap_bytes(&self.pre_chain)
+            + vec_cap_bytes(&self.pre_count)
+            + vec_cap_bytes(&self.start_dsp_frame)
+            + self.sends.memory_bytes()
+    }
+
     // ── 個別アクセス ──
 
     pub fn vol(&self, id: EntityId) -> Option<f32> {

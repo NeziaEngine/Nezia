@@ -209,6 +209,27 @@ impl SpatialWorld {
         }
     }
 
+    /// SoA 全フィールドが確保しているヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.positions_x)
+            + vec_cap_bytes(&self.positions_y)
+            + vec_cap_bytes(&self.positions_z)
+            + vec_cap_bytes(&self.attenuation_models)
+            + vec_cap_bytes(&self.min_distances)
+            + vec_cap_bytes(&self.max_distances)
+            + vec_cap_bytes(&self.rolloff_factors)
+            + vec_cap_bytes(&self.curve_indices)
+            + vec_cap_bytes(&self.spatial_enabled)
+            + vec_cap_bytes(&self.velocities_x)
+            + vec_cap_bytes(&self.velocities_y)
+            + vec_cap_bytes(&self.velocities_z)
+            + vec_cap_bytes(&self.doppler_levels)
+            + vec_cap_bytes(&self.left_gains)
+            + vec_cap_bytes(&self.right_gains)
+            + vec_cap_bytes(&self.doppler_pitches)
+    }
+
     /// 現在保持している spatial エントリ数 (= `SourceWorld::len()` と一致)。
     #[must_use]
     pub fn len(&self) -> usize {

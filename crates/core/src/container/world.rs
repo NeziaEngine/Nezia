@@ -100,6 +100,19 @@ impl ContainerWorld {
         }
     }
 
+    /// 内部 `Vec` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    /// `Slot` 内の `RandomContainer.children` までは追わない (登録時の参照分のみ計上)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        let mut total = vec_cap_bytes(&self.slots) + vec_cap_bytes(&self.free_list);
+        for slot in &self.slots {
+            if let Some(c) = &slot.container {
+                total += vec_cap_bytes(&c.children);
+            }
+        }
+        total
+    }
+
     /// Random Container を生成する。子は 1 個以上必須。0 個なら `None`。
     /// 容量超過時も `None`。
     pub fn create_random(&mut self, children: &[BufferId]) -> Option<ContainerId> {

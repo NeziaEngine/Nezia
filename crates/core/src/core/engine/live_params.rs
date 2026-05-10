@@ -72,6 +72,14 @@ impl SourceLiveParams {
 
     /// spawn 時にスロットを初期値で priming する。
     ///
+    /// 3 本の `Box<[AtomicU64]>` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::boxed_slice_bytes;
+        boxed_slice_bytes(&self.volume)
+            + boxed_slice_bytes(&self.pitch)
+            + boxed_slice_bytes(&self.spatial_enabled)
+    }
+
     /// メインスレッド側の `play_with_handle*` で呼ぶ。`generation` が更新済みの
     /// `EntityId` をそのまま受け取り、スロットの古い値を上書きする。
     pub(crate) fn prime(&self, id: EntityId, vol: f32, pitch: f32) {

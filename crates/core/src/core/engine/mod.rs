@@ -56,15 +56,15 @@ use source_state_cache::{SourceStateCache, build_source_snapshots_buffer};
 pub use buffer_reader::BufferReader;
 
 /// コマンドリングバッファの容量。
-const COMMAND_RING_CAPACITY: usize = 128;
+pub(super) const COMMAND_RING_CAPACITY: usize = 128;
 
 /// イベントリングバッファの容量。
-const EVENT_RING_CAPACITY: usize = 64;
+pub(super) const EVENT_RING_CAPACITY: usize = 64;
 
 /// マスター出力キャプチャリングの容量 (秒)。device_sample_rate * device_channels * この値を
 /// インターリーブサンプル数として確保する。1.0 秒分あれば、Unity Recorder のメインスレッド
 /// drain ジッタ (フレーム落ちを含めて 〜500ms) を吸収できる余裕がある。
-const CAPTURE_RING_SECONDS: f32 = 1.0;
+pub(super) const CAPTURE_RING_SECONDS: f32 = 1.0;
 
 /// サウンドエンジン。メインスレッド側で保持し、コマンドを発行する。
 ///
@@ -146,6 +146,15 @@ pub struct SoundEngine {
     pub(super) dsp_time_frames: Arc<AtomicU64>,
     /// audio thread と共有するベンチマーク用ランタイム計測値。
     pub(super) metrics: Arc<EngineMetrics>,
+
+    /// audio thread に move した World 群が確保している論理ヒープバイト数の静的合算。
+    /// 初期化時 (`AudioThread::new` に渡す直前) に計算してキャッシュする。
+    /// audio thread 側 World は capacity を増やさない設計なので静的でよい。
+    /// `memory_stats()` の breakdown 集計で使う。
+    pub(super) audio_thread_static_bytes: u64,
+    /// マスター出力キャプチャ SPSC リングの確保バイト (= capacity_samples * 4)。
+    /// `device_sample_rate` × `device_channels` × `CAPTURE_RING_SECONDS` から init 時に算出。
+    pub(super) capture_ring_bytes: u64,
 }
 
 impl SoundEngine {
@@ -236,6 +245,16 @@ impl SoundEngine {
             device_channels as u16,
         ));
 
+        // Audio thread 側 World が確保している静的ヒープを memory_stats() 用に集計しておく。
+        // `AudioThread::new` で move される前にこのタイミングでしか観測できない。
+        // capacity 増加は audio thread 側で起こさない設計。
+        let audio_thread_static_bytes = (bus_world.memory_bytes()
+            + source_world.memory_bytes()
+            + spatial_world.memory_bytes()
+            + effect_world.memory_bytes()
+            + effect_worlds.memory_bytes()) as u64;
+        let capture_ring_bytes = (capture_capacity_samples * std::mem::size_of::<f32>()) as u64;
+
         let mut audio_thread = AudioThread::new(
             command_consumer,
             event_producer,
@@ -301,6 +320,8 @@ impl SoundEngine {
             capture_reader,
             dsp_time_frames,
             metrics,
+            audio_thread_static_bytes,
+            capture_ring_bytes,
         })
     }
 
