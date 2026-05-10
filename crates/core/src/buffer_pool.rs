@@ -60,6 +60,21 @@ impl AudioBufferPool {
         }
     }
 
+    /// プール全体のヒープ実バイト数 (`memory_stats` walker 用)。
+    /// slot 管理 Vec + 各 `AudioBuffer` の PCM/リング実バイトを合算する。
+    /// `Arc<AudioBuffer>` のメタ部分は 1 件あたり数十バイトなので無視。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        let mut total = vec_cap_bytes(&self.slots)
+            + vec_cap_bytes(&self.buffers)
+            + vec_cap_bytes(&self.streaming_handles)
+            + vec_cap_bytes(&self.free_list);
+        for b in self.buffers.iter().flatten() {
+            total += b.payload_bytes();
+        }
+        total
+    }
+
     /// オーディオファイルをストリーミング再生用にロードする (Phase 2-4)。
     ///
     /// バックグラウンドのデコードワーカを spawn し、`AudioBuffer::Streaming` を

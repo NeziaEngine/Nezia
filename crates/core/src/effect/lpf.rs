@@ -41,6 +41,17 @@ impl LpfWorld {
         self.cutoff_hz.len()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.effect_id_at_dense)
+            + vec_cap_bytes(&self.cutoff_hz)
+            + vec_cap_bytes(&self.q)
+            + vec_cap_bytes(&self.dirty)
+            + vec_cap_bytes(&self.coeffs)
+            + vec_cap_bytes(&self.state_l)
+            + vec_cap_bytes(&self.state_r)
+    }
+
     /// 新規 LPF を追加し、種別 World 内の dense index を返す。
     /// `MAX_LPF` 到達時は `None`。
     pub fn spawn(&mut self, effect_id: EffectId, cutoff_hz: f32, q: f32) -> Option<u32> {

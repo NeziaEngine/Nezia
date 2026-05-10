@@ -610,9 +610,8 @@ pub unsafe extern "C" fn nezia_source_stop_many(
         // - `ids_ptr` は呼出側契約により `ids_len` 要素分の有効領域。
         // - `NeziaEntityId` と `core::EntityId` は上の const アサーションで
         //   レイアウト一致を保証しているため、要素ごとの再解釈はトリビアルに安全。
-        let ids: &[nezia_core::EntityId] = unsafe {
-            slice::from_raw_parts(ids_ptr.cast::<nezia_core::EntityId>(), ids_len)
-        };
+        let ids: &[nezia_core::EntityId] =
+            unsafe { slice::from_raw_parts(ids_ptr.cast::<nezia_core::EntityId>(), ids_len) };
         let processed = engine.inner.stop_source_many(ids);
         if !out_processed.is_null() {
             // SAFETY: 呼出側契約により書き込み可能。

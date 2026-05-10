@@ -46,6 +46,18 @@ impl PeakingEqWorld {
         self.center_hz.len()
     }
 
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.effect_id_at_dense)
+            + vec_cap_bytes(&self.center_hz)
+            + vec_cap_bytes(&self.q)
+            + vec_cap_bytes(&self.gain_db)
+            + vec_cap_bytes(&self.dirty)
+            + vec_cap_bytes(&self.coeffs)
+            + vec_cap_bytes(&self.state_l)
+            + vec_cap_bytes(&self.state_r)
+    }
+
     /// 新規 PeakingEq を追加。`MAX_PEQ` 到達時は `None`。
     /// デフォルトは center=1kHz / Q=1.0 / gain_db=0 で素通し。
     pub fn spawn(

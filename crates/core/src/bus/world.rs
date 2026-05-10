@@ -94,6 +94,22 @@ impl BusWorld {
         self.master_entity
     }
 
+    /// SoA + ミキシングバッファが確保しているヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        self.entities.memory_bytes()
+            + vec_cap_bytes(&self.gain)
+            + vec_cap_bytes(&self.muted)
+            + vec_cap_bytes(&self.output_bus_dense)
+            + vec_cap_bytes(&self.pre_chain)
+            + vec_cap_bytes(&self.pre_count)
+            + vec_cap_bytes(&self.post_chain)
+            + vec_cap_bytes(&self.post_count)
+            + self.sends.memory_bytes()
+            + vec_cap_bytes(&self.mix_buffer)
+            + vec_cap_bytes(&self.process_order)
+    }
+
     /// EntityId を検証し、有効なら密配列インデックスを返す。
     pub fn resolve(&self, id: EntityId) -> Option<usize> {
         self.entities.resolve(id)
@@ -395,8 +411,14 @@ impl BusWorld {
         gain: f32,
         position: SendPosition,
     ) -> bool {
-        self.sends
-            .add_send(bus_dense, id, dest_dense, dest_kind as u8, gain, position as u8)
+        self.sends.add_send(
+            bus_dense,
+            id,
+            dest_dense,
+            dest_kind as u8,
+            gain,
+            position as u8,
+        )
     }
 
     /// SendId で Send を削除する。stale (generation 不一致) または未存在で `false`。

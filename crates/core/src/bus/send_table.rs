@@ -74,6 +74,18 @@ impl<const CAP: usize> SendTable<CAP> {
         self.count.push(0);
     }
 
+    /// SoA + lookup の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        vec_cap_bytes(&self.dest_dense)
+            + vec_cap_bytes(&self.gain)
+            + vec_cap_bytes(&self.position)
+            + vec_cap_bytes(&self.dest_kind)
+            + vec_cap_bytes(&self.id)
+            + vec_cap_bytes(&self.count)
+            + vec_cap_bytes(&self.lookup)
+    }
+
     /// オーナーの spawn 失敗時に push 済み row を巻き戻す。
     pub(crate) fn pop_row(&mut self) {
         self.dest_dense.pop();
@@ -279,11 +291,7 @@ impl<const CAP: usize> SendTable<CAP> {
     /// バス despawn 時の cross-owner cleanup。
     /// `target_dense` を宛先とする slot を全 row から一括除去する。
     /// `exclude_owner` は除外 (本人 row は別途 `swap_remove_row` で処理されるため)。
-    pub(crate) fn remove_destinations_matching(
-        &mut self,
-        target_dense: u32,
-        exclude_owner: usize,
-    ) {
+    pub(crate) fn remove_destinations_matching(&mut self, target_dense: u32, exclude_owner: usize) {
         for src_dense in 0..self.count.len() {
             if src_dense == exclude_owner {
                 continue;

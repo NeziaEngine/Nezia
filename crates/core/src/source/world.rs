@@ -3,7 +3,7 @@ use crate::core::sparse_set::SparseSet;
 use crate::effect::{EffectId, MAX_EFFECTS_PER_SOURCE};
 use crate::entity::EntityId;
 
-use super::{MAX_SENDS_PER_SOURCE, MAX_SOURCES};
+use super::MAX_SENDS_PER_SOURCE;
 
 /// Source 生成時の初期パラメータ。
 pub struct SourceComponent {
@@ -115,29 +115,35 @@ pub struct SourceWorld {
 
 impl Default for SourceWorld {
     fn default() -> Self {
-        Self::new()
+        Self::with_capacity(super::DEFAULT_MAX_SOURCES)
     }
 }
 
 #[allow(dead_code)]
 impl SourceWorld {
+    /// デフォルトキャパシティ (`DEFAULT_MAX_SOURCES`) で生成する。
     pub fn new() -> Self {
+        Self::with_capacity(super::DEFAULT_MAX_SOURCES)
+    }
+
+    /// 指定キャパシティで生成する。`EngineConfig::max_sources` を渡す経路。
+    pub fn with_capacity(max_sources: usize) -> Self {
         Self {
-            entities: SparseSet::new(MAX_SOURCES),
-            vol: Vec::with_capacity(MAX_SOURCES),
-            pitch: Vec::with_capacity(MAX_SOURCES),
-            sample_offset: Vec::with_capacity(MAX_SOURCES),
-            audio_buffer_index: Vec::with_capacity(MAX_SOURCES),
-            state: Vec::with_capacity(MAX_SOURCES),
-            output_bus: Vec::with_capacity(MAX_SOURCES),
-            token: Vec::with_capacity(MAX_SOURCES),
-            looping: Vec::with_capacity(MAX_SOURCES),
-            priority: Vec::with_capacity(MAX_SOURCES),
-            is_virtual: Vec::with_capacity(MAX_SOURCES),
-            pre_chain: Vec::with_capacity(MAX_SOURCES),
-            pre_count: Vec::with_capacity(MAX_SOURCES),
-            start_dsp_frame: Vec::with_capacity(MAX_SOURCES),
-            sends: SendTable::new(MAX_SOURCES, MAX_SENDS),
+            entities: SparseSet::new(max_sources),
+            vol: Vec::with_capacity(max_sources),
+            pitch: Vec::with_capacity(max_sources),
+            sample_offset: Vec::with_capacity(max_sources),
+            audio_buffer_index: Vec::with_capacity(max_sources),
+            state: Vec::with_capacity(max_sources),
+            output_bus: Vec::with_capacity(max_sources),
+            token: Vec::with_capacity(max_sources),
+            looping: Vec::with_capacity(max_sources),
+            priority: Vec::with_capacity(max_sources),
+            is_virtual: Vec::with_capacity(max_sources),
+            pre_chain: Vec::with_capacity(max_sources),
+            pre_count: Vec::with_capacity(max_sources),
+            start_dsp_frame: Vec::with_capacity(max_sources),
+            sends: SendTable::new(max_sources, MAX_SENDS),
         }
     }
 
@@ -239,6 +245,26 @@ impl SourceWorld {
 
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
+    }
+
+    /// SoA 全フィールドが確保しているヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::vec_cap_bytes;
+        self.entities.memory_bytes()
+            + vec_cap_bytes(&self.vol)
+            + vec_cap_bytes(&self.pitch)
+            + vec_cap_bytes(&self.sample_offset)
+            + vec_cap_bytes(&self.audio_buffer_index)
+            + vec_cap_bytes(&self.state)
+            + vec_cap_bytes(&self.output_bus)
+            + vec_cap_bytes(&self.token)
+            + vec_cap_bytes(&self.looping)
+            + vec_cap_bytes(&self.priority)
+            + vec_cap_bytes(&self.is_virtual)
+            + vec_cap_bytes(&self.pre_chain)
+            + vec_cap_bytes(&self.pre_count)
+            + vec_cap_bytes(&self.start_dsp_frame)
+            + self.sends.memory_bytes()
     }
 
     // ── 個別アクセス ──

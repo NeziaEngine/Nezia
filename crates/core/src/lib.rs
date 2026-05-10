@@ -3,12 +3,14 @@ mod buffer_pool;
 mod bus;
 mod capture;
 mod command;
+mod config;
 mod container;
 mod core;
 mod effect;
 mod entity;
 mod event;
 mod limiter;
+mod memory;
 mod metrics;
 mod snapshot;
 mod source;
@@ -21,6 +23,9 @@ mod streaming;
 
 /// サウンドエンジン本体。
 pub use core::engine::SoundEngine;
+
+/// エンジン初期化時のキャパシティ設定 (`SoundEngine::with_config` に渡す)。
+pub use config::EngineConfig;
 
 /// メモリ上のバイト列からオーディオメタデータを取得する。
 pub use audio::{AudioMetadata, peek_metadata};
@@ -51,6 +56,11 @@ pub use entity::EntityId;
 
 /// ベンチマーク / プロファイリング用の DSP CPU 計測値とドロップアウトカウンタ。
 pub use metrics::{DropoutStats, DspStats};
+
+/// メモリ使用量計測の公開 API。
+/// `TrackingAllocator` を `#[global_allocator]` として登録した cdylib (`nezia-ffi`) で
+/// グローバル統計が有効になる。breakdown は常時取得可能。
+pub use memory::{NeziaMemoryStats, TrackingAllocator};
 
 /// `SoundEngine::batch_set_source_positions()` の入力要素。
 pub use entity::SourcePositionUpdate;

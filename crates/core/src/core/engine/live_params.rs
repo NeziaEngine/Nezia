@@ -17,7 +17,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::entity::EntityId;
-use crate::source::MAX_SOURCES;
 
 /// パック表現。
 #[inline]
@@ -39,18 +38,31 @@ fn unpack(packed: u64) -> (u32, u32) {
 ///
 /// `Arc<Self>` でメインスレッド・サウンドスレッド間で共有する。
 pub(crate) struct SourceLiveParams {
-    volume: [AtomicU64; MAX_SOURCES],
-    pitch: [AtomicU64; MAX_SOURCES],
-    spatial_enabled: [AtomicU64; MAX_SOURCES],
+    volume: Box<[AtomicU64]>,
+    pitch: Box<[AtomicU64]>,
+    spatial_enabled: Box<[AtomicU64]>,
 }
 
 impl SourceLiveParams {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
-        // const fn で配列を初期化できないので素朴に書き下す。
+        Self::with_capacity(crate::source::DEFAULT_MAX_SOURCES)
+    }
+
+    pub(crate) fn with_capacity(max_sources: usize) -> Self {
         // generation = 0, value = 初期値（vol=1.0, pitch=1.0, spatial=0）。
-        let volume = std::array::from_fn(|_| AtomicU64::new(pack_f32(0, 1.0)));
-        let pitch = std::array::from_fn(|_| AtomicU64::new(pack_f32(0, 1.0)));
-        let spatial_enabled = std::array::from_fn(|_| AtomicU64::new(pack_u32(0, 0)));
+        let volume = (0..max_sources)
+            .map(|_| AtomicU64::new(pack_f32(0, 1.0)))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let pitch = (0..max_sources)
+            .map(|_| AtomicU64::new(pack_f32(0, 1.0)))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let spatial_enabled = (0..max_sources)
+            .map(|_| AtomicU64::new(pack_u32(0, 0)))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
             volume,
             pitch,
@@ -60,11 +72,19 @@ impl SourceLiveParams {
 
     /// spawn 時にスロットを初期値で priming する。
     ///
+    /// 3 本の `Box<[AtomicU64]>` の確保ヒープ実バイト数 (`memory_stats` walker 用)。
+    pub(crate) fn memory_bytes(&self) -> usize {
+        use crate::memory::boxed_slice_bytes;
+        boxed_slice_bytes(&self.volume)
+            + boxed_slice_bytes(&self.pitch)
+            + boxed_slice_bytes(&self.spatial_enabled)
+    }
+
     /// メインスレッド側の `play_with_handle*` で呼ぶ。`generation` が更新済みの
     /// `EntityId` をそのまま受け取り、スロットの古い値を上書きする。
     pub(crate) fn prime(&self, id: EntityId, vol: f32, pitch: f32) {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.volume.len() {
             return;
         }
         self.volume[i].store(pack_f32(id.generation, vol), Ordering::Relaxed);
@@ -75,7 +95,7 @@ impl SourceLiveParams {
     /// メインスレッド: volume を書き込む。
     pub(crate) fn store_volume(&self, id: EntityId, vol: f32) {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.volume.len() {
             return;
         }
         self.volume[i].store(pack_f32(id.generation, vol), Ordering::Relaxed);
@@ -84,7 +104,7 @@ impl SourceLiveParams {
     /// メインスレッド: pitch を書き込む。
     pub(crate) fn store_pitch(&self, id: EntityId, pitch: f32) {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.pitch.len() {
             return;
         }
         self.pitch[i].store(pack_f32(id.generation, pitch), Ordering::Relaxed);
@@ -93,7 +113,7 @@ impl SourceLiveParams {
     /// メインスレッド: spatial_enabled を書き込む。
     pub(crate) fn store_spatial_enabled(&self, id: EntityId, enabled: bool) {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.spatial_enabled.len() {
             return;
         }
         self.spatial_enabled[i].store(pack_u32(id.generation, enabled as u32), Ordering::Relaxed);
@@ -102,7 +122,7 @@ impl SourceLiveParams {
     /// サウンドスレッド: 指定 `EntityId` の volume を取得（generation 一致時のみ `Some`）。
     pub(crate) fn load_volume(&self, id: EntityId) -> Option<f32> {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.volume.len() {
             return None;
         }
         let (slot_gen, bits) = unpack(self.volume[i].load(Ordering::Relaxed));
@@ -115,7 +135,7 @@ impl SourceLiveParams {
 
     pub(crate) fn load_pitch(&self, id: EntityId) -> Option<f32> {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.pitch.len() {
             return None;
         }
         let (slot_gen, bits) = unpack(self.pitch[i].load(Ordering::Relaxed));
@@ -128,7 +148,7 @@ impl SourceLiveParams {
 
     pub(crate) fn load_spatial_enabled(&self, id: EntityId) -> Option<bool> {
         let i = id.index as usize;
-        if i >= MAX_SOURCES {
+        if i >= self.spatial_enabled.len() {
             return None;
         }
         let (slot_gen, bits) = unpack(self.spatial_enabled[i].load(Ordering::Relaxed));

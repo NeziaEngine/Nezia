@@ -73,6 +73,8 @@ pub(in crate::core::engine) struct AudioThread {
     master_bus_id: EntityId,
     device_sample_rate: f32,
     device_channels: usize,
+    /// Voice Virtualization の物理ボイス上限 (`EngineConfig::max_physical_voices`)。
+    max_physical_voices: usize,
     /// マスター出力キャプチャ用 SPSC リングの producer。
     /// `capture_shared.enabled` が false のときは触らない (hot path コスト 0)。
     capture_producer: HeapProd<f32>,
@@ -106,6 +108,8 @@ impl AudioThread {
         master_bus_id: EntityId,
         device_sample_rate: f32,
         device_channels: usize,
+        max_physical_voices: usize,
+        max_sources: usize,
         capture_producer: HeapProd<f32>,
         capture_shared: Arc<CaptureShared>,
         dsp_time_frames: Arc<AtomicU64>,
@@ -124,7 +128,7 @@ impl AudioThread {
             effect_world,
             effect_worlds,
             mono_scratch: vec![0.0; crate::bus::MAX_MIX_BUFFER_SIZE],
-            start_offset_scratch: vec![0; crate::source::MAX_SOURCES],
+            start_offset_scratch: vec![0; max_sources],
             shared_buffers,
             shared_curves,
             shared_snapshots,
@@ -133,6 +137,7 @@ impl AudioThread {
             master_bus_id,
             device_sample_rate,
             device_channels,
+            max_physical_voices,
             capture_producer,
             capture_shared,
             dsp_time_frames,
@@ -276,6 +281,7 @@ impl AudioThread {
                 frames_in_callback,
                 &buffers,
                 &curves,
+                self.max_physical_voices,
             );
         }
 

@@ -7,6 +7,13 @@ edition = "2024"
 name = "nezia"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# default で global allocator を `TrackingAllocator` に差し替え、`memory_stats()` の
+# heap_* 系統計を有効化する。本番ビルドで完全にゼロコストにしたい場合は
+# `--no-default-features` で外せる。
+default = ["mem-tracking"]
+mem-tracking = []
+
 [dependencies]
 # 自身の lib 名 (`nezia`) と core クレート名 (`nezia`) が衝突するため別名で取り込む。
 nezia_core = { package = "nezia", path = "../core" }

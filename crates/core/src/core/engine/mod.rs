@@ -33,6 +33,7 @@ use crate::buffer_pool::AudioBufferPool;
 use crate::bus::BusWorld;
 use crate::capture::{CaptureReader, CaptureShared};
 use crate::command::Command;
+use crate::config::EngineConfig;
 use crate::container::ContainerWorld;
 use crate::core::bus_routing::BusRoutingMirror;
 use crate::effect::{EffectWorld, EffectWorlds};
@@ -40,7 +41,7 @@ use crate::entity::{EntityId, SourcePositionUpdate, SourceVelocityUpdate};
 use crate::event::Event;
 use crate::metrics::EngineMetrics;
 use crate::snapshot::{Snapshot, SnapshotRegistry};
-use crate::source::{MAX_SOURCES, SourceWorld};
+use crate::source::SourceWorld;
 use crate::spatial::{AttenuationCurve, CurveRegistry, ListenerState, SpatialWorld};
 
 use audio_thread::AudioThread;
@@ -55,15 +56,15 @@ use source_state_cache::{SourceStateCache, build_source_snapshots_buffer};
 pub use buffer_reader::BufferReader;
 
 /// コマンドリングバッファの容量。
-const COMMAND_RING_CAPACITY: usize = 128;
+pub(super) const COMMAND_RING_CAPACITY: usize = 128;
 
 /// イベントリングバッファの容量。
-const EVENT_RING_CAPACITY: usize = 64;
+pub(super) const EVENT_RING_CAPACITY: usize = 64;
 
 /// マスター出力キャプチャリングの容量 (秒)。device_sample_rate * device_channels * この値を
 /// インターリーブサンプル数として確保する。1.0 秒分あれば、Unity Recorder のメインスレッド
 /// drain ジッタ (フレーム落ちを含めて 〜500ms) を吸収できる余裕がある。
-const CAPTURE_RING_SECONDS: f32 = 1.0;
+pub(super) const CAPTURE_RING_SECONDS: f32 = 1.0;
 
 /// サウンドエンジン。メインスレッド側で保持し、コマンドを発行する。
 ///
@@ -145,27 +146,44 @@ pub struct SoundEngine {
     pub(super) dsp_time_frames: Arc<AtomicU64>,
     /// audio thread と共有するベンチマーク用ランタイム計測値。
     pub(super) metrics: Arc<EngineMetrics>,
+
+    /// audio thread に move した World 群が確保している論理ヒープバイト数の静的合算。
+    /// 初期化時 (`AudioThread::new` に渡す直前) に計算してキャッシュする。
+    /// audio thread 側 World は capacity を増やさない設計なので静的でよい。
+    /// `memory_stats()` の breakdown 集計で使う。
+    pub(super) audio_thread_static_bytes: u64,
+    /// マスター出力キャプチャ SPSC リングの確保バイト (= capacity_samples * 4)。
+    /// `device_sample_rate` × `device_channels` × `CAPTURE_RING_SECONDS` から init 時に算出。
+    pub(super) capture_ring_bytes: u64,
 }
 
 impl SoundEngine {
     /// サウンドエンジンを初期化し、オーディオ再生を開始する。
+    /// デフォルトのキャパシティ (`EngineConfig::default()`) で動く。
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_config(EngineConfig::default())
+    }
+
+    /// `EngineConfig` を指定してサウンドエンジンを初期化する。
+    /// 設定が `validate()` で弾かれた場合はそのエラーメッセージで失敗する。
+    pub fn with_config(config: EngineConfig) -> Result<Self, Box<dyn std::error::Error>> {
+        config.validate()?;
         let host = cpal::default_host();
         let device = host
             .default_output_device()
             .ok_or("no output device available")?;
-        let config = device.default_output_config()?;
+        let stream_config = device.default_output_config()?;
 
         let device_name = device
             .description()
             .map(|d| d.name().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
         println!("Output device: {device_name}");
-        println!("Sample rate: {}", config.sample_rate());
-        println!("Channels: {}", config.channels());
+        println!("Sample rate: {}", stream_config.sample_rate());
+        println!("Channels: {}", stream_config.channels());
 
-        let device_sample_rate = config.sample_rate() as f32;
-        let device_channels = config.channels() as usize;
+        let device_sample_rate = stream_config.sample_rate() as f32;
+        let device_channels = stream_config.channels() as usize;
 
         let ring = HeapRb::<Command>::new(COMMAND_RING_CAPACITY);
         let (command_producer, command_consumer) = ring.split();
@@ -175,9 +193,12 @@ impl SoundEngine {
 
         let (listener_input, listener_output) =
             triple_buffer::triple_buffer(&ListenerState::default());
-        let (position_updates_input, position_updates_output) = build_position_updates_buffer();
-        let (velocity_updates_input, velocity_updates_output) = build_velocity_updates_buffer();
-        let (source_snapshots_input, source_snapshots_output) = build_source_snapshots_buffer();
+        let (position_updates_input, position_updates_output) =
+            build_position_updates_buffer(config.max_sources);
+        let (velocity_updates_input, velocity_updates_output) =
+            build_velocity_updates_buffer(config.max_sources);
+        let (source_snapshots_input, source_snapshots_output) =
+            build_source_snapshots_buffer(config.max_sources);
 
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
             Arc::new(ArcSwap::from_pointee(Vec::new()));
@@ -196,12 +217,12 @@ impl SoundEngine {
         let bus_world = BusWorld::new();
         let master_bus_id = bus_world.master_entity();
 
-        let source_world = SourceWorld::new();
+        let source_world = SourceWorld::with_capacity(config.max_sources);
         let spatial_world = SpatialWorld::new();
         let effect_world = EffectWorld::new();
         let effect_worlds = EffectWorlds::new();
 
-        let live_params = Arc::new(SourceLiveParams::new());
+        let live_params = Arc::new(SourceLiveParams::with_capacity(config.max_sources));
         let live_params_audio = Arc::clone(&live_params);
 
         // マスター出力キャプチャ用 SPSC リングを構築。サンプル単位で 1 秒ぶん確保。
@@ -224,6 +245,16 @@ impl SoundEngine {
             device_channels as u16,
         ));
 
+        // Audio thread 側 World が確保している静的ヒープを memory_stats() 用に集計しておく。
+        // `AudioThread::new` で move される前にこのタイミングでしか観測できない。
+        // capacity 増加は audio thread 側で起こさない設計。
+        let audio_thread_static_bytes = (bus_world.memory_bytes()
+            + source_world.memory_bytes()
+            + spatial_world.memory_bytes()
+            + effect_world.memory_bytes()
+            + effect_worlds.memory_bytes()) as u64;
+        let capture_ring_bytes = (capture_capacity_samples * std::mem::size_of::<f32>()) as u64;
+
         let mut audio_thread = AudioThread::new(
             command_consumer,
             event_producer,
@@ -243,6 +274,8 @@ impl SoundEngine {
             master_bus_id,
             device_sample_rate,
             device_channels,
+            config.max_physical_voices,
+            config.max_sources,
             capture_producer,
             capture_shared_audio,
             dsp_time_frames_audio,
@@ -250,7 +283,7 @@ impl SoundEngine {
         );
 
         let stream = device.build_output_stream(
-            &config.into(),
+            &stream_config.into(),
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 audio_thread.process(data);
             },
@@ -272,7 +305,7 @@ impl SoundEngine {
             snapshot_registry: SnapshotRegistry::new(shared_snapshots),
             device_sample_rate,
             bus_routing: BusRoutingMirror::new(master_bus_id),
-            source_slots: SourceSlotAllocator::new(),
+            source_slots: SourceSlotAllocator::with_capacity(config.max_sources),
             effect_slots: EffectIdAllocator::new(),
             send_slots: SendIdAllocator::new(),
             source_sends: vec![None; crate::bus::MAX_SENDS],
@@ -281,12 +314,14 @@ impl SoundEngine {
             live_params,
             callbacks: CallbackRegistry::new(),
             source_snapshots_output,
-            source_state_cache: SourceStateCache::with_capacity(MAX_SOURCES),
+            source_state_cache: SourceStateCache::with_capacity(config.max_sources),
             device_channels: device_channels as u16,
             capture_shared,
             capture_reader,
             dsp_time_frames,
             metrics,
+            audio_thread_static_bytes,
+            capture_ring_bytes,
         })
     }
 
@@ -323,7 +358,7 @@ type PositionUpdatesOut = triple_buffer::Output<Vec<SourcePositionUpdate>>;
 type VelocityUpdatesIn = triple_buffer::Input<Vec<SourceVelocityUpdate>>;
 type VelocityUpdatesOut = triple_buffer::Output<Vec<SourceVelocityUpdate>>;
 
-fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
+fn build_position_updates_buffer(max_sources: usize) -> (PositionUpdatesIn, PositionUpdatesOut) {
     let positions_initial: Vec<SourcePositionUpdate> = vec![
         SourcePositionUpdate {
             source: EntityId {
@@ -332,7 +367,7 @@ fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
             },
             position: [0.0; 3],
         };
-        MAX_SOURCES
+        max_sources
     ];
     let (mut input, mut output) = triple_buffer::triple_buffer(&positions_initial);
     input.input_buffer_mut().clear();
@@ -342,7 +377,7 @@ fn build_position_updates_buffer() -> (PositionUpdatesIn, PositionUpdatesOut) {
 }
 
 /// SP-10: ソース速度更新用の triple buffer を初期化する。`build_position_updates_buffer` と同パターン。
-fn build_velocity_updates_buffer() -> (VelocityUpdatesIn, VelocityUpdatesOut) {
+fn build_velocity_updates_buffer(max_sources: usize) -> (VelocityUpdatesIn, VelocityUpdatesOut) {
     let velocities_initial: Vec<SourceVelocityUpdate> = vec![
         SourceVelocityUpdate {
             source: EntityId {
@@ -351,7 +386,7 @@ fn build_velocity_updates_buffer() -> (VelocityUpdatesIn, VelocityUpdatesOut) {
             },
             velocity: [0.0; 3],
         };
-        MAX_SOURCES
+        max_sources
     ];
     let (mut input, mut output) = triple_buffer::triple_buffer(&velocities_initial);
     input.input_buffer_mut().clear();
