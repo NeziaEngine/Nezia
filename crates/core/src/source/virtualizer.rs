@@ -5,7 +5,7 @@ use super::world::{SourceState, SourceWorld};
 /// Voice Virtualization システム。
 ///
 /// 毎フレーム冒頭で各 Playing ソースの「実効可聴度 (effective audibility)」を計算し、
-/// 上位 `MAX_PHYSICAL_VOICES` 件を物理ボイス、それ以外を仮想ボイスとする。
+/// 上位 `max_physical_voices` 件を物理ボイス、それ以外を仮想ボイスとする。
 ///
 /// 実効可聴度の指標:
 /// ```text
@@ -15,19 +15,39 @@ use super::world::{SourceState, SourceWorld};
 /// - `gain_avg`: 空間ゲイン平均 `(left_gain + right_gain) / 2`。`spatial_enabled = false` のソースは `vol` 自体が代入されているため自然に整合する
 /// - `priority_weight`: `priority / 255`、Wwise / CRI ADX2 互換 (高い priority = 高優先 = 大きい重み)
 ///
+/// スクラッチ (`scores` / `state_snap`) は構築時に `max_sources` 分のキャパで
+/// 1 度だけヒープ確保し、以降は `clear` + `push` で再確保ゼロを維持する。
 /// `SpatialSystem::compute_gains()` の **後**、`SourceMixingSystem::update()` の **前** に呼び出す。
-pub struct VoiceVirtualizer;
+pub struct VoiceVirtualizer {
+    /// (audibility, dense_index) のスコアバッファ。
+    scores: Vec<(f32, u32)>,
+    /// 可変借用前に取った state SoA のスナップショット。
+    state_snap: Vec<SourceState>,
+}
 
 impl VoiceVirtualizer {
-    /// 全 Playing ソースの可聴度をスコアリングし、上位 `MAX_PHYSICAL_VOICES` を物理化する。
+    /// 指定キャパシティでスクラッチを確保する (`EngineConfig::max_sources` を渡す)。
+    pub fn with_capacity(max_sources: usize) -> Self {
+        Self {
+            scores: Vec::with_capacity(max_sources),
+            state_snap: Vec::with_capacity(max_sources),
+        }
+    }
+
+    /// 全 Playing ソースの可聴度をスコアリングし、上位 `max_physical_voices` を物理化する。
     ///
     /// 内部で `is_virtual` SoA を全更新する。Pausing/Stopped ソースは常に `is_virtual = false`
     /// とする (ミキシング段で state チェックでスキップされるため、virtual フラグは無関係)。
     ///
     /// # 計算量
-    /// O(N + N log N)。N = `source_world.len() <= MAX_SOURCES = 256` で実用上は微少。
-    /// quickselect で O(N) にできるが Phase 2 では sort で十分。
-    pub fn rebalance(world: &mut SourceWorld, spatial: &SpatialWorld, max_physical_voices: usize) {
+    /// O(N + N log N)。N = `source_world.len() <= max_sources` で、実用上は微少。
+    /// quickselect で O(N) にできるが現状 sort で十分。
+    pub fn rebalance(
+        &mut self,
+        world: &mut SourceWorld,
+        spatial: &SpatialWorld,
+        max_physical_voices: usize,
+    ) {
         let n = world.len();
         if n == 0 {
             return;
@@ -44,11 +64,8 @@ impl VoiceVirtualizer {
             return;
         }
 
-        // スコアリング: (audibility, dense_index) のタプル配列を作る。
-        // alloc を毎フレーム避けるため固定長配列でスタック確保 (MAX_SOURCES = 256)。
-        // N=256 で 256 * 8 = 2 KB なのでスタックに置ける。
-        let mut scores: [(f32, u32); super::MAX_SOURCES] = [(0.0, 0); super::MAX_SOURCES];
-        let mut score_count = 0usize;
+        // スコアリング: scores は再確保ゼロで再利用。
+        self.scores.clear();
 
         // 借用順序: 不変借用でスコアを作り終えてから可変借用に切り替える。
         {
@@ -65,33 +82,30 @@ impl VoiceVirtualizer {
                 let gain_avg = 0.5 * (left_gains[i] + right_gains[i]);
                 let priority_weight = priorities[i] as f32 / 255.0;
                 let audibility = vols[i] * gain_avg.abs() * priority_weight;
-                scores[score_count] = (audibility, i as u32);
-                score_count += 1;
+                self.scores.push((audibility, i as u32));
             }
         }
 
         // 降順ソート。NaN は 0.0 として扱う (NaN を含むスコアは末尾に来るが致命傷ではない)。
-        scores[..score_count]
+        self.scores
             .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         // state 配列のスナップショットを取得 (可変借用前に読み取る)。
-        // 固定長 MAX_SOURCES で alloc なし。
-        let mut state_snap: [SourceState; super::MAX_SOURCES] =
-            [SourceState::Stopped; super::MAX_SOURCES];
-        state_snap[..n].copy_from_slice(&world.states()[..n]);
+        self.state_snap.clear();
+        self.state_snap.extend_from_slice(&world.states()[..n]);
 
         // 可変借用に切り替えて is_virtual を更新。
         let virtuals = world.is_virtuals_mut();
         // 一旦すべて virtual 候補に。
         virtuals[..n].fill(true);
         // 上位 max_physical_voices を物理化。
-        let physical_count = score_count.min(max_physical_voices);
-        for &(_, dense) in scores[..physical_count].iter() {
+        let physical_count = self.scores.len().min(max_physical_voices);
+        for &(_, dense) in self.scores[..physical_count].iter() {
             virtuals[dense as usize] = false;
         }
         // Pausing/Stopped は virtual フラグの意味がないが、整合性のため false に戻す。
         for (i, vflag) in virtuals.iter_mut().enumerate().take(n) {
-            if state_snap[i] != SourceState::Playing {
+            if self.state_snap[i] != SourceState::Playing {
                 *vflag = false;
             }
         }
@@ -129,7 +143,7 @@ mod tests {
     #[test]
     fn under_budget_keeps_all_physical() {
         let (mut world, spatial) = make_world(MAX_PHYSICAL_VOICES);
-        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
+        { let mut v = VoiceVirtualizer::with_capacity(crate::source::DEFAULT_MAX_SOURCES); v.rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES); };
         for &v in world.is_virtuals() {
             assert!(!v);
         }
@@ -138,7 +152,7 @@ mod tests {
     #[test]
     fn over_budget_virtualizes_excess() {
         let (mut world, spatial) = make_world(MAX_PHYSICAL_VOICES + 8);
-        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
+        { let mut v = VoiceVirtualizer::with_capacity(crate::source::DEFAULT_MAX_SOURCES); v.rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES); };
         let phys = world.is_virtuals().iter().filter(|v| !**v).count();
         let virt = world.is_virtuals().iter().filter(|v| **v).count();
         assert_eq!(phys, MAX_PHYSICAL_VOICES);
@@ -169,7 +183,7 @@ mod tests {
                 high_prio_id = Some(id);
             }
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
+        { let mut v = VoiceVirtualizer::with_capacity(crate::source::DEFAULT_MAX_SOURCES); v.rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES); };
         let high_dense = world.resolve(high_prio_id.unwrap()).unwrap();
         assert!(
             !world.is_virtuals()[high_dense],
@@ -199,7 +213,7 @@ mod tests {
                 loud_id = Some(id);
             }
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
+        { let mut v = VoiceVirtualizer::with_capacity(crate::source::DEFAULT_MAX_SOURCES); v.rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES); };
         let dense = world.resolve(loud_id.unwrap()).unwrap();
         assert!(
             !world.is_virtuals()[dense],
@@ -217,7 +231,7 @@ mod tests {
             let id = world.entity_at_dense(dense).unwrap();
             world.set_state(id, SourceState::Pausing);
         }
-        VoiceVirtualizer::rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES);
+        { let mut v = VoiceVirtualizer::with_capacity(crate::source::DEFAULT_MAX_SOURCES); v.rebalance(&mut world, &spatial, MAX_PHYSICAL_VOICES); };
         for dense in 0..MAX_PHYSICAL_VOICES {
             assert!(
                 !world.is_virtuals()[dense],

@@ -1,4 +1,3 @@
-use crate::source::MAX_SOURCES;
 
 /// 距離減衰モデル。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,29 +180,33 @@ pub const DEFAULT_SOUND_SPEED: f32 = 343.0;
 
 impl Default for SpatialWorld {
     fn default() -> Self {
-        Self::new()
+        Self::with_capacity(crate::source::DEFAULT_MAX_SOURCES)
     }
 }
 
 impl SpatialWorld {
     pub fn new() -> Self {
+        Self::with_capacity(crate::source::DEFAULT_MAX_SOURCES)
+    }
+
+    pub fn with_capacity(max_sources: usize) -> Self {
         Self {
-            positions_x: Vec::with_capacity(MAX_SOURCES),
-            positions_y: Vec::with_capacity(MAX_SOURCES),
-            positions_z: Vec::with_capacity(MAX_SOURCES),
-            attenuation_models: Vec::with_capacity(MAX_SOURCES),
-            min_distances: Vec::with_capacity(MAX_SOURCES),
-            max_distances: Vec::with_capacity(MAX_SOURCES),
-            rolloff_factors: Vec::with_capacity(MAX_SOURCES),
-            curve_indices: Vec::with_capacity(MAX_SOURCES),
-            spatial_enabled: Vec::with_capacity(MAX_SOURCES),
-            velocities_x: Vec::with_capacity(MAX_SOURCES),
-            velocities_y: Vec::with_capacity(MAX_SOURCES),
-            velocities_z: Vec::with_capacity(MAX_SOURCES),
-            doppler_levels: Vec::with_capacity(MAX_SOURCES),
-            left_gains: Vec::with_capacity(MAX_SOURCES),
-            right_gains: Vec::with_capacity(MAX_SOURCES),
-            doppler_pitches: Vec::with_capacity(MAX_SOURCES),
+            positions_x: Vec::with_capacity(max_sources),
+            positions_y: Vec::with_capacity(max_sources),
+            positions_z: Vec::with_capacity(max_sources),
+            attenuation_models: Vec::with_capacity(max_sources),
+            min_distances: Vec::with_capacity(max_sources),
+            max_distances: Vec::with_capacity(max_sources),
+            rolloff_factors: Vec::with_capacity(max_sources),
+            curve_indices: Vec::with_capacity(max_sources),
+            spatial_enabled: Vec::with_capacity(max_sources),
+            velocities_x: Vec::with_capacity(max_sources),
+            velocities_y: Vec::with_capacity(max_sources),
+            velocities_z: Vec::with_capacity(max_sources),
+            doppler_levels: Vec::with_capacity(max_sources),
+            left_gains: Vec::with_capacity(max_sources),
+            right_gains: Vec::with_capacity(max_sources),
+            doppler_pitches: Vec::with_capacity(max_sources),
             listener: ListenerState::default(),
             sound_speed: DEFAULT_SOUND_SPEED,
         }

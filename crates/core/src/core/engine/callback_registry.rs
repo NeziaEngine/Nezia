@@ -7,7 +7,7 @@
 //!
 //! ## データ構造
 //!
-//! HashMap ではなく **固定サイズのスロット配列**（`[CallbackKind; CALLBACK_SLOTS]`）を
+//! HashMap ではなく **固定サイズのスロット配列**（`[CallbackKind; self.callback_slots]`）を
 //! 使う。spawn ごとに `Box::new(closure) + HashMap::insert` していた旧実装と比較し、
 //! Native（FFI 経由）コールバックでは spawn ごとの alloc がゼロになる。
 //! Rust API 経由の closure は `dyn FnOnce` の動的サイズ要件で `Box` が原理上必要。
@@ -23,11 +23,6 @@
 //!   が保証される。`token == 0` は「コールバックなし」の予約値として使える。
 
 use std::ffi::c_void;
-
-use crate::source::MAX_SOURCES;
-
-/// スロット数。同時発音数 = 同時 callback 数の上限なので `MAX_SOURCES` で十分。
-const CALLBACK_SLOTS: usize = MAX_SOURCES;
 
 /// 1 スロットの中身。
 pub(in crate::core) enum CallbackKind {
@@ -49,19 +44,27 @@ pub(in crate::core) struct CallbackRegistry {
     generation: Vec<u16>,
     free_list: Vec<u16>,
     next_index: u16,
+    /// スロット数 = 同時 callback 数の上限 = `EngineConfig::max_sources`。
+    callback_slots: usize,
 }
 
 impl CallbackRegistry {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
-        let mut slots = Vec::with_capacity(CALLBACK_SLOTS);
-        for _ in 0..CALLBACK_SLOTS {
+        Self::with_capacity(crate::source::DEFAULT_MAX_SOURCES)
+    }
+
+    pub(super) fn with_capacity(callback_slots: usize) -> Self {
+        let mut slots = Vec::with_capacity(callback_slots);
+        for _ in 0..callback_slots {
             slots.push(CallbackKind::Empty);
         }
         Self {
             slots,
-            generation: vec![1; CALLBACK_SLOTS], // 0 を欠番にして token != 0 を保証
-            free_list: Vec::with_capacity(CALLBACK_SLOTS),
+            generation: vec![1; callback_slots], // 0 を欠番にして token != 0 を保証
+            free_list: Vec::with_capacity(callback_slots),
             next_index: 0,
+            callback_slots,
         }
     }
 
@@ -124,7 +127,7 @@ impl CallbackRegistry {
 
     /// 全コールバックを破棄する（`StopAll` 時のクリア用）。
     pub(super) fn clear(&mut self) {
-        for i in 0..CALLBACK_SLOTS {
+        for i in 0..self.callback_slots {
             if !matches!(self.slots[i], CallbackKind::Empty) {
                 self.slots[i] = CallbackKind::Empty;
                 bump_generation(&mut self.generation[i]);
@@ -138,7 +141,7 @@ impl CallbackRegistry {
         if let Some(idx) = self.free_list.pop() {
             return Some(idx);
         }
-        if (self.next_index as usize) < CALLBACK_SLOTS {
+        if (self.next_index as usize) < self.callback_slots {
             let i = self.next_index;
             self.next_index += 1;
             return Some(i);
@@ -246,7 +249,7 @@ mod tests {
     #[test]
     fn slot_exhaustion_returns_none() {
         let mut reg = CallbackRegistry::new();
-        for _ in 0..CALLBACK_SLOTS {
+        for _ in 0..crate::source::DEFAULT_MAX_SOURCES {
             assert!(reg.register_native(noop, std::ptr::null_mut()).is_some());
         }
         assert!(reg.register_native(noop, std::ptr::null_mut()).is_none());
@@ -255,7 +258,7 @@ mod tests {
     #[test]
     fn token_never_zero() {
         let mut reg = CallbackRegistry::new();
-        for _ in 0..CALLBACK_SLOTS {
+        for _ in 0..crate::source::DEFAULT_MAX_SOURCES {
             let t = reg.register_native(noop, std::ptr::null_mut()).unwrap();
             assert_ne!(t, 0);
         }

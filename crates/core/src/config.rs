@@ -35,15 +35,6 @@ impl EngineConfig {
         if self.max_physical_voices > self.max_sources {
             return Err("max_physical_voices must be <= max_sources");
         }
-        // Phase 1 の実装制約: VoiceVirtualizer や audio thread のスクラッチは
-        // `DEFAULT_MAX_SOURCES` を上限とする固定長スタック配列で構成されているため、
-        // それを超える `max_sources` は受け付けない (後続 PR でヒープ化予定)。
-        if self.max_sources > crate::source::DEFAULT_MAX_SOURCES {
-            // Phase 1 の実装制約: VoiceVirtualizer や audio thread の一部スクラッチが
-            // `DEFAULT_MAX_SOURCES` を上限とする固定長スタック配列で構成されているため。
-            // 後続 PR でヒープ化したら撤廃する。
-            return Err("max_sources cannot exceed DEFAULT_MAX_SOURCES (compile-time cap)");
-        }
         Ok(())
     }
 }

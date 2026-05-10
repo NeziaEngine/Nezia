@@ -69,6 +69,7 @@ impl SourceMixingSystem {
         buffers: &[Option<Arc<AudioBuffer>>],
         curves: &[Option<Arc<AttenuationCurve>>],
         max_physical_voices: usize,
+        virtualizer: &mut VoiceVirtualizer,
     ) {
         let source_count = world.vol.len();
         if source_count == 0 {
@@ -92,7 +93,7 @@ impl SourceMixingSystem {
         // Phase 1.5: Voice Virtualization。空間ゲインを使って実効可聴度をスコアリングし、
         // 上位 MAX_PHYSICAL_VOICES のみ物理化、残りを仮想化する。
         // Scheduled は state != Playing で virtualizer から自然に除外される。
-        VoiceVirtualizer::rebalance(world, spatial, max_physical_voices);
+        virtualizer.rebalance(world, spatial, max_physical_voices);
 
         // Source 起点 Send 用の Compressor sidechain_buffer raw ptr を 1 度だけ取得。
         // mix_static / mix_streaming へ &mut EffectWorlds を渡すために raw ptr を別経路で
