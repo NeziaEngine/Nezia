@@ -558,6 +558,74 @@ pub unsafe extern "C" fn nezia_source_stop(
     })
 }
 
+/// 複数ソースを一括停止する（ステージ終端などの bulk stop 用）。
+///
+/// `nezia_source_stop` を N 回呼ぶと SPSC コマンドリングが詰まりやすい
+/// (容量 128) ため、`ids` を 1 コマンドあたり最大 `STOP_SOURCE_BATCH_MAX` (= 32) に
+/// 詰めて送る。例: 256 voice → 8 コマンドに圧縮。
+///
+/// `out_processed` には実際に enqueue された ID 件数が書き込まれる
+/// (NULL 可)。`out_processed < ids_len` のときはリング満杯で残りが送れて
+/// いないため、呼び出し側は次フレームに残りを再送するか
+/// `nezia_engine_stop_all` の利用を検討する。
+///
+/// 戻り値:
+/// - `Ok`        : `ids_len` 件すべて enqueue 成功
+/// - `QueueFull` : 一部または全件が enqueue できなかった
+/// - `NullPointer`: `engine` が null、または `ids_len > 0` で `ids_ptr` が null
+///
+/// # 安全性
+/// `ids_ptr` は `ids_len` 要素分の有効領域を指すこと。
+/// `out_processed` は NULL または有効な書き込み可能領域を指すこと。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nezia_source_stop_many(
+    engine: *mut NeziaEngine,
+    ids_ptr: *const NeziaEntityId,
+    ids_len: usize,
+    out_processed: *mut usize,
+) -> NeziaResult {
+    guard_result(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            if !out_processed.is_null() {
+                // SAFETY: 呼出側契約により書き込み可能。
+                unsafe { *out_processed = 0 };
+            }
+            return NeziaResult::NullPointer;
+        };
+        if ids_len == 0 {
+            if !out_processed.is_null() {
+                // SAFETY: 呼出側契約により書き込み可能。
+                unsafe { *out_processed = 0 };
+            }
+            return NeziaResult::Ok;
+        }
+        if ids_ptr.is_null() {
+            if !out_processed.is_null() {
+                // SAFETY: 呼出側契約により書き込み可能。
+                unsafe { *out_processed = 0 };
+            }
+            return NeziaResult::NullPointer;
+        }
+        // SAFETY:
+        // - `ids_ptr` は呼出側契約により `ids_len` 要素分の有効領域。
+        // - `NeziaEntityId` と `core::EntityId` は上の const アサーションで
+        //   レイアウト一致を保証しているため、要素ごとの再解釈はトリビアルに安全。
+        let ids: &[nezia_core::EntityId] = unsafe {
+            slice::from_raw_parts(ids_ptr.cast::<nezia_core::EntityId>(), ids_len)
+        };
+        let processed = engine.inner.stop_source_many(ids);
+        if !out_processed.is_null() {
+            // SAFETY: 呼出側契約により書き込み可能。
+            unsafe { *out_processed = processed };
+        }
+        if processed == ids_len {
+            NeziaResult::Ok
+        } else {
+            NeziaResult::QueueFull
+        }
+    })
+}
+
 /// 複数ソースの位置を一括更新する（毎フレーム想定）。
 ///
 /// # 安全性

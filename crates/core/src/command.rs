@@ -3,6 +3,11 @@ use crate::effect::{EffectId, EffectKind, EffectPosition, EffectTarget};
 use crate::entity::EntityId;
 use crate::spatial::{AttenuationModel, CURVE_INDEX_NONE};
 
+/// `Command::StopSourceMany` 1 件あたりに詰める最大 ID 数。
+///
+/// `[EntityId; 32]` = 256 バイトで `UpdateProcessOrder` (`[u32; 64]`) と同等サイズに収まる。
+pub const STOP_SOURCE_BATCH_MAX: usize = 32;
+
 /// `Command::SpawnSource` に同梱して送る spatial 初期化パラメータ。
 ///
 /// 旧経路では spawn 後に `SetSourcePriority` / `SetSourceSpatialParams` /
@@ -180,6 +185,16 @@ pub enum Command {
     ResumeSource { id: EntityId },
     /// ソースを停止する（次の update で despawn される）。
     StopSource { id: EntityId },
+    /// 複数ソースを 1 コマンドで停止する。
+    ///
+    /// ステージ終端などで pool 内 N 個の source を一括 stop するときに、
+    /// `StopSource` を N 回送ると SPSC リング (`COMMAND_RING_CAPACITY = 128`) が即詰まる。
+    /// `[EntityId; STOP_SOURCE_BATCH_MAX]` に詰めることで、N=256 でも 8 コマンドに収まる。
+    /// 配列末尾の未使用領域は無視される (`count` が有効件数)。
+    StopSourceMany {
+        ids: [EntityId; STOP_SOURCE_BATCH_MAX],
+        count: u8,
+    },
     /// ソースのループフラグを設定する（再生中の動的変更）。
     SetSourceLoop { id: EntityId, looping: bool },
     /// Voice Virtualization 用優先度を設定する。Wwise / ADX2 互換 0..255、**高いほど高優先**。
