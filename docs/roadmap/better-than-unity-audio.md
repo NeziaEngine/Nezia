@@ -134,14 +134,15 @@ NEZIA がカバーすべき領域を 7 つに分け、Unity との差を整理�
 Phase 1 (完了)
   ECS / バス / Source / Spatial 基本 / Listener Focus
 
-Phase 2  ── "Unity の最低限" を埋める ──
+Phase 2 (完了) ── "Unity の最低限" を埋める ──
   Doppler  +  Voice Virtualization  +  最低限の DSP (LPF/HPF/Reverb)  +  Ogg/Vorbis ストリーミング
 
-Phase 3  ── "Unity 並み" ──
-  Custom Attenuation Curve  +  Mixer Snapshot / Send  +  PlayScheduled  +  ParamEQ/Compressor
+Phase 3 (完了) ── "Unity 並み" ──
+  Custom Attenuation Curve  +  Mixer Snapshot / Send  +  PlayScheduled  +  ParamEQ/Compressor/Limiter
 
-Phase 4  ── "Unity 超え" ──
-  Sound Cone  +  Random/Switch/Sequence Container  +  プロファイラ・ビジュアライザ
+Phase 4  ── "Unity 超え" (Integration 層と Cross-layer ペア) ──
+  daemon プレビュー仕様  +  プロファイラ/ビジュアライザ基盤  +  PlayScheduled Unity 露出
+  +  Sound Dictionary (論理ID 経路)  +  Switch/Sequence Container  +  Sound Cone
 
 Phase 5  ── 大型差別化 (ターゲット層で分岐) ──
   Occlusion  または  HRTF  +  Reverb Zone
@@ -192,18 +193,36 @@ Phase 6  ── 中長期 ──
 
 **目的**: NEZIA に移行する積極的な動機を作る。Unity 単体ではできないことが標準で書ける。
 
-| ステップ | 領域 | 内容 | 概算コスト |
-|---------|------|------|-----------|
-| 4-1 | A | **Sound Cone (SP-11)** | 1 週間 |
-| 4-2 | E | **Random / Switch / Sequence Container** ([設計](../design/core/container.md)、現状 Random のみ実装) | 3〜4 週間 |
-| 4-3 | G | **ランタイムプロファイラ + デバッグビジュアライザ** | 2〜3 週間 |
+#### Phase 4 の構造変更 — Cross-layer pair と Integration 連動
 
-**判断ポイント**:
-- Sound Cone は OpenAL/FMOD 互換の API で出すだけで「Unity に無いものが NEZIA にある」と即座に主張できる。コスト/インパクト比が最良。
-- Random/Switch/Sequence Container は Unity プロジェクトで毎回自作されている領域。標準提供すれば「自作コードを捨てて NEZIA に乗る」動機になる。Wwise/CRI 流の Cue 概念の縮小版から始める。
-- プロファイラ/ビジュアライザはエンジン採用の意思決定で**最後のひと押し**になる。データ指向設計の利点 (大量同時発音時の性能) を**可視化することで初めて伝わる**。
+Phase 3 完了時点で、core 単独で完結する Parity gap は概ね解消された。これ以降の体験向上は **core 単独では成立せず、Integration 層 (`jp.nezia.unity`) とのペア実装で初めてユーザーに届く**項目が支配的になる。
 
-**この時点で「Unity より良い」を最短で主張可能になる。** Phase 1 完了からの累計でおおよそ 4〜6 ヶ月の見積もり。
+このため Phase 4 からは:
+
+1. 各ステップに **対応する Integration phase (IP-n)** を明記し、core / Unity 双方で歩調を合わせる
+2. **プレビューデーモン (`daemon` クレート)** の仕様策定を Phase 4 のクリティカルパスに含める
+   — Unity 側 IP-6 (Asset Preview) は daemon 依存で保留中であり、authoring 体験の最大の即効薬がここで止まっている
+3. Integration 側ロードマップは [`Nezia.Unity/docs~/roadmap/integration-experience.md`](../../../Nezia_Integration/Packages/jp.nezia.unity/docs~/roadmap/integration-experience.md) を正とし、core 側はその前提となる FFI / 仕様策定にフォーカスする
+
+#### Phase 4 ステップ一覧
+
+| ステップ | 領域 | 内容 | Integration 連動 | 概算コスト |
+|---------|------|------|-----------------|-----------|
+| 4-α | — | **`daemon` クレート CONCEPT 起こし + プレビュー IPC 仕様策定** | Unity IP-6 のブロッカー解消 | 2〜3 週間 |
+| 4-3 | G | **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** | Unity IP-10 (Mixer Inspector の dB メーター・アクティブソース一覧) | 2〜3 週間 |
+| 4-7 | E | **PlayScheduled の Unity 露出整備** (core 側は #35 で完了済) | Unity IP-7 | 1 週間 |
+| 4-8 | E | **論理ID / Sound Dictionary 経路の整備** (Hash ID ↔ EntityId の二層を実プロダクトで活かす最終ピース) | Unity IP-8 | 2 週間 |
+| 4-2 | E | **Switch / Sequence Container** ([設計](../design/core/container.md)、Random は実装済) | Unity 側 Container Inspector 拡張 | 2〜3 週間 |
+| 4-1 | A | **Sound Cone (SP-11)** | Unity 露出 (薄い) | 1 週間 |
+
+順序の判断:
+- **4-α (daemon) を先頭**に置く理由: Unity 側ロードマップが「authoring 中の試聴は他のどんな自動化より先に効く」と明言する IP-6 がここで止まっている。仕様策定だけでも先行させると並行作業余地が広がる。
+- **4-3 (プロファイラ) を 4-1/4-2 より前**に置く理由: ロードマップ自身が L204 で「データ指向の利点は可視化で初めて伝わる」と述べており、また [`post-unity-performance.md`](post-unity-performance.md) の Stage P-1 着手条件 (「測ってから書く」) の絶対前提でもある。Sound Cone の性能影響もこの上で測りたい。
+- **4-7 (PlayScheduled 露出)** はコスト 1 週間・core 完了済で、Unity 側 IP-7 を即解除できる cheap win。
+- **4-8 (Sound Dictionary)** は CLAUDE.md が掲げる二層 ID 設計の真価が現れる箇所。IP-4 (Unity Clip-centric 再設計) が完了して前提が揃った今が着手タイミング。
+- **4-2 (Switch/Sequence)** と **4-1 (Sound Cone)** は純粋差別化として可視化基盤の上に積む。Sound Cone は API 露出のみで主張可能なので最後でよい。
+
+**この時点で「Unity より良い」を最短で主張可能になる。** Phase 1 完了からの累計でおおよそ 5〜7 ヶ月の見積もり (旧見積から +1〜2 ヶ月、Cross-layer 連動と daemon 仕様策定分)。
 
 ### Phase 5 — 大型差別化 (分岐)
 
@@ -338,7 +357,9 @@ Phase 4 完了後の極限パフォーマンス追求 (タスクベース並列�
 
 ## 関連ドキュメント
 
+- [Integration Experience ロードマップ](../../../Nezia_Integration/Packages/jp.nezia.unity/docs~/roadmap/integration-experience.md) — Unity 統合層 (`jp.nezia.unity`) のフェーズ分け。Phase 4 以降は本ドキュメントと Cross-layer ペアで進行する
 - [統合戦略](../design/integration/CONCEPT.md) — Unity / Unreal とのドロップイン互換 + 本格オーサリングの 2 経路方針
+- [daemon コンセプト](../design/daemon/CONCEPT.md) — プレビューデーモン (Phase 4-α でコンセプト起こし予定)
 - [3D サウンド設計](../design/core/spatial.md) — Spatial 領域 (A) の詳細設計とフェーズ分け
 - [バスルーティング](../design/core/bus.md) — Mixer 領域 (D) の詳細
 - [Source ワールド](../design/core/source.md) — 再生制御領域 (E) の詳細
