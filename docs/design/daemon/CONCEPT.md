@@ -230,7 +230,7 @@ Profiler) に揃う。
 
 ## 0.2.0 までに実装する範囲
 
-詳細は [`better-than-unity-audio.md`](../../roadmap/better-than-unity-audio.md) の
+詳細は [`roadmap.md`](../../roadmap/roadmap.md) の
 Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset Preview を解除する
 最小スコープ (Tier 2)**:
 
@@ -252,7 +252,7 @@ Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset P
 
 ## 関連ドキュメント
 
-- [Better than Unity Audio ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 4-α
+- [Better than Unity Audio ロードマップ](../../roadmap/roadmap.md) — Phase 4-α
 - [Integration Experience ロードマップ](../../../../Nezia_Integration/Packages/jp.nezia.unity/docs~/roadmap/integration-experience.md) — IP-6 (Asset Preview)
 - [統合戦略](../integration/CONCEPT.md) — ドロップイン互換 (A 経路) / プロジェクトファイル方式 (B 経路) の 2 経路方針
 - [スレッドモデル](../core/threading.md) — サウンドスレッドのリアルタイム制約 (将来の共有メモリ側経路でも遵守)

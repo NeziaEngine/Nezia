@@ -1,6 +1,6 @@
 # Roadmap — Post-Unity Performance (極限パフォーマンス追求フェーズ)
 
-`better-than-unity-audio.md` の Phase 4 完了 = 「Unity 標準より良い」を達成した**後**に着手するロードマップ。
+`roadmap.md` の Phase 4 完了 = 「Unity 標準より良い」を達成した**後**に着手するロードマップ。
 ここからは **機能 parity ではなくランタイム性能そのもの** を競合軸に据え、Wwise / FMOD / CRI ADX クラスの本格ミドルウェアと同じ土俵に立つことを目標とする。
 
 > **前提**: このフェーズは Phase 4 完了が条件。parity に穴がある状態でアーキテクチャを大改造すると、機能追加と再設計が並走して破綻する。Unity 超えを名乗れるまでは、現行のシリアル + SoA + SIMD 路線で押し切る。
@@ -122,7 +122,7 @@
 
 ## ガードレール (このフェーズ専用)
 
-`better-than-unity-audio.md` のガードレールに加え、性能フェーズでは以下を追加で守る。
+`roadmap.md` のガードレールに加え、性能フェーズでは以下を追加で守る。
 
 1. **「測ってから書く」を絶対化する**。
    - 各 Stage 着手前に**現行のプロファイル (perf / Instruments / cargo-flamegraph) を取り**、ボトルネック仮説を文書化してから実装に入る。
@@ -165,7 +165,7 @@ Phase 4 完了後にスタートとして:
 
 ## 関連ドキュメント
 
-- [Better than Unity Audio](better-than-unity-audio.md) — このフェーズの**前提となる Phase 1-4**
+- [Better than Unity Audio](roadmap.md) — このフェーズの**前提となる Phase 1-4**
 - [スレッドモデル](../design/core/threading.md) — 現行のシリアルモデルと同期機構の選定理由
 - [ECS アーキテクチャ](../design/core/ecs.md) — DoD / SoA の前提
 - [DSP パイプライン](../design/core/dsp.md) — 並列化対象の DSP チェーン構造

@@ -2,7 +2,7 @@
 
 NEZIA ENGINE における Send (副ルート) と Sidechain Ducking の設計。
 Unity AudioMixer の Send / Receive / Duck Volume 互換 + 業界標準 (Wwise / FMOD) の Aux Bus 運用。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md) の **Phase 3-3「Send / Receive + Sidechain Ducking」** に対応する設計を扱う。
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md) の **Phase 3-3「Send / Receive + Sidechain Ducking」** に対応する設計を扱う。
 
 このドキュメントの目的は **「バスを木構造から DAG に拡張するための境界の確定」と「Sidechain 駆動コンプレッサーをどう DoD に載せるか」の判断** にある。Phase 3-2 で確定した Snapshot / Phase 2-3 で確定した DSP パイプラインの上に乗る形で、副ルート経路と外部入力駆動エフェクトを規定する。
 
@@ -681,7 +681,7 @@ Wwise / FMOD では Source レベルにも Aux Send 設定がある (3D 距離�
 
 ## 関連ドキュメント
 
-- [ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 3-3 の位置づけ
+- [ロードマップ](../../roadmap/roadmap.md) — Phase 3-3 の位置づけ
 - [バスルーティング](bus.md) — 木構造の前提を DAG に拡張する形で乗せる
 - [DSP パイプライン](dsp.md) — Compressor は本ドキュメントの効果種別追加経路に従う。`gain → effects → (ここに Send 挿入) → 親加算` の隙間を実装で埋める
 - [Mixer Snapshot](snapshot.md) — `send_gain` / Compressor パラメータが補間対象に加わる

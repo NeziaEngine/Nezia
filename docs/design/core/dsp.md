@@ -1,7 +1,7 @@
 # DSP パイプライン
 
 NEZIA ENGINE におけるエフェクト処理（フィルタ・リバーブ等の DSP）の土台設計。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md) の **Phase 2-3「DSP パイプラインの土台 + 最低 3 種 (LPF / HPF / Reverb)」** に対応する設計を扱う。
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md) の **Phase 2-3「DSP パイプラインの土台 + 最低 3 種 (LPF / HPF / Reverb)」** に対応する設計を扱う。
 
 このドキュメントの目的は **個別エフェクトのアルゴリズム解説ではなく、「バスごとに任意エフェクトを差し込めるアーキテクチャをどう SoA に載せるか」の判断と境界の確定** にある。Send / Snapshot / Source 単位エフェクト / プラグイン SDK といった後続フェーズの機能はすべてここで決めた境界の上に乗るため、Phase 2-3 着手前に確定させる。
 
@@ -448,7 +448,7 @@ API 形は **Unity AudioMixer の AddEffect/RemoveEffect/SetEffectParameter** �
 
 ## 関連ドキュメント
 
-- [ロードマップ — Better than Unity Audio](../../roadmap/better-than-unity-audio.md) Phase 2-3 / 3-2 / 3-3 / 3-5
+- [ロードマップ — Better than Unity Audio](../../roadmap/roadmap.md) Phase 2-3 / 3-2 / 3-3 / 3-5
 - [バスルーティング](bus.md) — エフェクト挿入位置の前提となるバス処理フロー
 - [スレッドモデル](threading.md) — パラメータ経路選択のガードレール
 - [ECS アーキテクチャ](ecs.md) — World/System 命名規則と SoA レイアウト方針

@@ -1,7 +1,7 @@
 # Mixer Snapshot
 
 NEZIA ENGINE の Mixer Snapshot 機能設計。Unity AudioMixer の Snapshot 互換 + 補間。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md) の
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md) の
 **Phase 3-2「Mixer Snapshot + 補間」** に対応する設計を扱う。
 
 ---
@@ -267,4 +267,4 @@ EntityId / EffectId キャッシュ + 毎 callback re-resolve を導入する。
 - [バスルーティング](bus.md) — `BusWorld` の構造、`write_gain_by_dense` / `write_muted_by_dense` の使用箇所
 - [DSP パイプライン](dsp.md) — Effect の dirty フラグ / 係数再計算
 - [スレッドモデル](threading.md) — Command 経路の使い分け
-- [ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 3-2 の位置づけ
+- [ロードマップ](../../roadmap/roadmap.md) — Phase 3-2 の位置づけ
