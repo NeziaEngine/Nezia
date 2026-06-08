@@ -78,7 +78,7 @@ Wwise / FMOD / Unity はいずれも**アルゴリズムのパラメータを露
 - 本ロードマップでは **M3 (Unity より良いと言える) の差別化項目**として扱う
   (可視化基盤の上で、意図マクロの効きを試聴・可視化しながら curate する)。
 - 詳細設計 (意図マクロのデータ構造 / カーブ表現 / 同梱マクロの初期セット / FFI 露出) は
-  **別途 `docs/design/core/` に設計ドキュメントを起こす**。本節は方針の確定まで。
+  [意図マクロ (Intent Macro) 設計](../design/core/intent-macro.md) に確定済み。
 
 ### 柱3. daemon による統合作業環境 — エディタ内でライブに観る・試す
 
@@ -245,7 +245,7 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
 | Runtime (露出) | **論理ID / Sound Dictionary 経路** (Hash ID ↔ EntityId の二層を実プロダクトで活かす) | **未** | Unity IP-8 |
 | Runtime (差別化) | **Switch / Sequence Container** ([設計](../design/core/container.md)、Random は実装済) | **未** | Unity Container Inspector |
 | Runtime (差別化) | **Sound Cone (SP-11)** 指向性音源 | **未** | Unity 露出 (薄い) |
-| Runtime (差別化) | **意図マクロ (Intent Macro)** — アルゴリズム非依存エフェクト ([柱2](#柱2-アルゴリズム非依存のエフェクト選択--知識ゼロで選べる-設計方針確定未実装)) | **未・要設計** | Unity 露出 (意図ノブ) |
+| Runtime (差別化) | **意図マクロ (Intent Macro)** — アルゴリズム非依存エフェクト ([設計](../design/core/intent-macro.md)) | **未 (設計確定)** | Unity 露出 (意図ノブ) |
 
 順序の判断:
 
