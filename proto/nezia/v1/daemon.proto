@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+// NEZIA ENGINE preview daemon — gRPC service 定義。
+//
+// daemon は実機ランタイムと同一の `nezia-core` を別プロセスで駆動し、Editor /
+// オーサリングツールからの RPC でアセットをロード・再生・停止する。設計は
+// docs/design/daemon/CONCEPT.md を正とする。
+//
+// このファイルは 0.2.0 の **Tier 1 (骨格)** スコープ:
+//   LoadBuffer / Play / Stop / StopAll / Ping
+// Bus/Mixer ロード・Clip-centric 反映・Random プレビュー・SubscribeEvents は
+// 後続 PR (Tier 2) で追加する。
+package nezia.v1;
+
+import "nezia/v1/common.proto";
+
+// per-Editor-session で 1 プロセス起動する preview daemon。
+// 同時接続クライアントは Editor 1 個のみを想定する (CONCEPT.md 非目標)。
+service PreviewDaemon {
+  // オーディオファイルをロードしハンドルを返す。失敗時は gRPC エラーを返す。
+  rpc LoadBuffer(LoadBufferRequest) returns (LoadBufferResponse);
+
+  // ボイスをマスターバスに再生し、制御用ハンドルを返す。
+  rpc Play(PlayRequest) returns (PlayResponse);
+
+  // 指定ハンドルのボイスを停止する。
+  rpc Stop(StopRequest) returns (StopResponse);
+
+  // すべてのボイスを停止する。
+  rpc StopAll(StopAllRequest) returns (StopAllResponse);
+
+  // 疎通確認 (port discovery 後のハンドシェイク用)。
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message LoadBufferRequest {
+  // ロードするファイルの絶対パス (Editor の Asset DB 由来)。
+  // バイト列転送は 0.2.0 では非対応 (CONCEPT.md §6)。
+  string path = 1;
+}
+message LoadBufferResponse {
+  BufferId buffer = 1;
+}
+
+message PlayRequest {
+  BufferId buffer = 1;
+  float volume = 2;  // 線形ゲイン (1.0 = 0 dB)
+  float pitch = 3;   // 再生レート倍率 (1.0 = 原音)
+  bool looping = 4;
+}
+message PlayResponse {
+  SourceHandle source = 1;
+}
+
+message StopRequest {
+  SourceHandle source = 1;
+}
+message StopResponse {
+  // コマンドが受理されたか。false はコマンドキュー満杯 or 既に無効なハンドル。
+  bool accepted = 1;
+}
+
+message StopAllRequest {}
+message StopAllResponse {
+  bool accepted = 1;
+}
+
+message PingRequest {}
+message PingResponse {
+  // daemon binary のバージョン (workspace version)。
+  string version = 1;
+}

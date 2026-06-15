@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+// NEZIA ENGINE preview daemon — 共有型。
+//
+// daemon / Editor / 将来の authoring tool が同じ source of truth を参照する。
+// バージョンをパッケージ名 (`nezia.v1`) に埋め込み、将来の breaking change 時に
+// `nezia.v2` を並走させる余地を残す (daemon CONCEPT.md §7)。
+package nezia.v1;
+
+// ロード済みオーディオバッファのハンドル。
+//
+// core の `BufferId { index: u32, generation: u32 }` と 1:1 対応する論理ハンドル。
+// generation はスロット再利用時の世代検証に使う。
+message BufferId {
+  uint32 index = 1;
+  uint32 generation = 2;
+}
+
+// 1 回の発音インスタンス (Source) を制御するハンドル。
+//
+// core の物理ID (`EntityId { index: u32, generation: u32 }`) に対応する。
+// バッファ末尾到達 (looping = false) または Stop で無効化される。
+message SourceHandle {
+  uint32 index = 1;
+  uint32 generation = 2;
+}

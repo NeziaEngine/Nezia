@@ -234,9 +234,9 @@ Profiler) に揃う。
 Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset Preview を解除する
 最小スコープ (Tier 2)**:
 
-- [ ] `proto/nezia/v1/daemon.proto` 確定
-- [ ] daemon binary 骨格 (gRPC server + port discovery file + parent PID 監視)
-- [ ] `LoadBuffer` / `Play` / `Stop` (Tier 1 相当)
+- [x] `proto/nezia/v1/daemon.proto` 確定 (+ `common.proto`)
+- [x] daemon binary 骨格 (gRPC server + port discovery file + parent PID 監視)
+- [x] `LoadBuffer` / `Play` / `Stop` (Tier 1 相当、`StopAll` / `Ping` を追加)
 - [ ] Bus tree / Mixer asset ロード
 - [ ] Clip-centric パラメータ反映 (volume / pitch / loop / spatial / effect chain / send)
 - [ ] Random Container プレビュー

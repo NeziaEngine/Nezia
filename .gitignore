@@ -1,4 +1,6 @@
 target/
+# サンドボックス環境で ~/.cargo が書込不可のときに使うプロジェクトローカル CARGO_HOME
+.cargo-home/
 *.swp
 *.swo
 .DS_Store
