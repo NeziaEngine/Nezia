@@ -34,12 +34,18 @@ daemon は **Editor / オーサリングツール / プロファイラ** とい�
 
 `daemon` が引き受けるもの:
 
-- 外部ツールからの RPC 受付 (gRPC server)
+- `nezia-cli` からの RPC 受付 (gRPC server)
 - `nezia-core` の `SoundEngine` を所有し、その寿命を管理する
-- 外部ツールが指定したアセットをロード・再生・停止し、結果イベントを返す
+- 指定されたアセットをロード・再生・停止し、結果イベントを返す
 - ミキサーアセット (NeziaMixerAsset 由来の構成) を反映する
 
-`daemon` が引き受けないもの:
+`nezia-cli` が引き受けるもの:
+
+- daemon の gRPC を叩く**唯一の front door** (外部フロントはこれを `Process` 起動する)
+- 引数を gRPC リクエストに変換し、レスポンス / ストリームを **stdout (JSON)** に整形して返す
+- port discovery file を読んで起動済み daemon に接続する (daemon の spawn は行わない)
+
+`daemon` / `nezia-cli` が引き受けないもの:
 
 - **ゲーム本体への組み込み**: ランタイムは `nezia-ffi` を直接リンクする経路を使う。
   daemon を経由しない (レイテンシ・配布粒度の観点から)。
@@ -53,23 +59,33 @@ daemon は **Editor / オーサリングツール / プロファイラ** とい�
 ## アーキテクチャ概要
 
 ```
-┌──────────────────────┐         ┌──────────────────────────────┐
-│ Unity Editor         │         │ daemon (per-Editor session)  │
-│                      │         │                              │
-│  Grpc.Net.Client ────┼─── gRPC ┼────► tonic server            │
-│    over loopback TCP │  (HTTP/2│         │                    │
-│                      │  127.0.0.1:port)  │                    │
-│  reads port from     │         │         ▼                    │
-│  $TMPDIR/.port file  │         │   SoundEngine (nezia-core)   │
-│                      │         │     ├─ メインスレッド         │
-│                      │         │     └─ サウンドスレッド (cpal)│
-└──────────────────────┘         └──────────────────────────────┘
-        │ parent PID                       │ self-exit if parent dies
-        └──────────────────────────────────┘
+ 外部フロント                  front door            backend (per-session)
+┌─────────────────────┐  Process ┌──────────────┐ gRPC  ┌──────────────────────────────┐
+│ Unity Editor        │─起動+stdout│ nezia-cli    │loopback│ daemon                       │
+│ LLM / エージェント   │─コマンド ──►│ (gRPC client)│─ TCP ─►│   tonic server               │
+│ authoring tool (B)  │           │ port 解決:    │       │     ▼                        │
+└─────────────────────┘           │ $TMPDIR/.port │       │   SoundEngine (nezia-core)   │
+        │                         └──────────────┘       │     ├─ メインスレッド         │
+        │ Editor が daemon を spawn (--parent-pid)        │     └─ サウンドスレッド (cpal)│
+        └────────────────────────────────────────────────┴──────────────────────────────┘
+                                          parent PID 消失で daemon self-exit
 ```
 
-外部ツールが「制御」を gRPC で送り、daemon が `nezia-core` の `SoundEngine` を**長寿命で
-所有・操作する**。サウンドスレッドは daemon プロセス内で動き、Editor からは見えない。
+外部フロント (Editor / エージェント / authoring tool) は**共通の薄い CLI (`nezia-cli`) を
+front door** として制御を送る。`nezia-cli` が daemon に gRPC を投げ、daemon が `nezia-core`
+の `SoundEngine` を**長寿命で所有・操作する**。サウンドスレッドは daemon プロセス内で動き、
+フロントからは見えない。
+
+**gRPC は daemon ↔ cli の内部プロトコルに閉じる**。外部フロントは `nezia-cli` を `Process`
+起動して stdout を読むだけで、gRPC / HTTP2 / protobuf の依存を持たない (Unity Editor 統合は
+追加 DLL ゼロ)。これにより 1 つの backend を複数フロントが実装言語・ランタイム制約なく共有できる。
+
+> **daemon を spawn するのは「セッションの所有者」** に限る。Unity なら Editor が起動時に 1 回
+> spawn し `--parent-pid=EditorのPID` を渡す。authoring tool も同様に自分を親に spawn する。
+> GUI を持たないエージェント / ヘッドフルでないセッションは `nezia-cli daemon start|stop` で
+> 明示管理する。**per-command の `nezia-cli` 呼び出しは daemon を spawn せず、起動済み daemon に
+> 接続して 1 コマンド送るだけ**にする (一瞬で終わる cli を親にすると parent PID self-exit が
+> 誤発火するため)。
 
 ---
 
@@ -77,35 +93,44 @@ daemon は **Editor / オーサリングツール / プロファイラ** とい�
 
 各論点と理由を以下に明示する。判断の背景については 0.2.x 設計議論を参照。
 
-### 1. プロセスモデル — per-Editor-session spawn
+### 1. プロセスモデル — per-session spawn + cli front door
 
-Editor が起動時に daemon を `Process.Start` で spawn し、Editor 終了で kill する。
+セッションの所有者 (Unity なら Editor) が起動時に daemon を `Process.Start` で 1 回 spawn し、
+終了で kill する。各操作は **`nezia-cli` を `Process` 起動**して daemon に送る。
 
-- **代替案 (グローバル共有 daemon)** は複数 Unity プロジェクト同時開発で衝突する。
-  Preview 用途では「Editor 1 個に daemon 1 個」が最もライフサイクルが単純。
-- daemon binary は Unity package に Editor-only として同梱 (後述「配布」節)。
+- **代替案 (グローバル共有 daemon)** は複数プロジェクト同時開発で衝突する。
+  Preview 用途では「セッション 1 個に daemon 1 個」が最もライフサイクルが単純。
+- **daemon と cli の役割分担**: daemon は長寿命で `SoundEngine` を所有。`nezia-cli` は
+  起動済み daemon に gRPC で 1 コマンド送って stdout に結果を出し即終了する薄いクライアント。
+  per-command の cli は daemon を spawn しない (アーキテクチャ概要の注記参照)。
+- daemon / cli の binary はどちらも Editor-only として Unity package に同梱 (後述「配布」節)。
 
-### 2. IPC — gRPC over loopback TCP
+### 2. IPC — gRPC over loopback TCP (daemon ↔ cli の内部)
+
+gRPC は **`nezia-cli` ↔ daemon の内部プロトコル**。外部フロント (Editor / authoring tool /
+エージェント) は gRPC を直接話さず、`nezia-cli` を `Process` 起動して stdout を読む。
 
 - **トランスポート**: `127.0.0.1` (loopback) に bind した TCP ソケット。OS が割り当てた
   ephemeral port を **port discovery file** (`$TMPDIR/nezia-daemon-{parent_pid}.port`)
-  に書き、Editor は同ファイルを読んで接続する。
-- **プロトコル**: gRPC over HTTP/2 + Protocol Buffers。
-  - Rust 側: `tonic` + `prost`、`tonic-build` で `.proto` から Rust コード生成 (OUT_DIR、非 commit)
-  - C# 側: `Grpc.Net.Client` + `Google.Protobuf` を Unity package に Editor-only DLL 同梱
+  に書き、`nezia-cli` は同ファイルを読んで接続する。
+- **プロトコル**: gRPC over HTTP/2 + Protocol Buffers。**両端とも Rust** なので相性問題が出ない。
+  - daemon 側: `tonic` + `prost`、`tonic-build` で `.proto` から server コード生成 (OUT_DIR、非 commit)
+  - cli 側: 同じ `.proto` から `tonic-build` で client コード生成 (OUT_DIR、非 commit)
 
 **選定理由**:
 
-- スキーマ駆動 (`.proto`) で daemon / Editor / 将来の authoring tool 間の API が型レベルで
-  一元管理される。breaking change が PR 段階で見える。
+- スキーマ駆動 (`.proto`) で daemon / cli 間の API が型レベルで一元管理される。
+  breaking change が PR 段階で見える。
 - gRPC のストリーミング RPC が **Event の push** に自然に乗る (独自フレーミング不要)。
+  cli はこれを受けて `nezia-cli subscribe` の stdout ストリームとして外部フロントへ中継する。
+- **gRPC を外部フロントに露出しない**ことで、`Grpc.Net.Client` の Unity Mono 互換性や
+  HTTP/2 サポートといった懸念が**そもそも発生しない** (gRPC を話すのは Rust の cli だけ)。
+  C# 側は標準 `Process` + stdout だけで済み、追加 DLL ゼロ。
 - **loopback TCP** を選んだ理由:
   - 速度: UDS / Named Pipe との実測差は preview 用途の頻度では誤差。
   - セキュリティ: `127.0.0.1` 限定 bind により OS レベルで外部接続を拒否。macOS / Windows の
     OS Firewall は loopback 通信を監視しないため、Firewall ダイアログは発生しない。
-  - 互換性: `Grpc.Net.Client` の UDS / Named Pipe 経由は `ConnectCallback` (.NET 5+ API) を
-    必要とし、Unity Mono ランタイムでの互換性が不安定。loopback TCP は数十年枯れた API で
-    Unity Editor の全プラットフォームで確実に動く。
+  - 互換性: 全プラットフォームで数十年枯れた API。Rust ↔ Rust なので追加の互換懸念もない。
 - **port discovery file** は LSP / DAP (Debug Adapter Protocol) と同様の標準パターン。
 
 ### 3. RPC モデル — Unary + Server-streaming
@@ -113,7 +138,7 @@ Editor が起動時に daemon を `Process.Start` で spawn し、Editor 終了�
 | 種別 | 用途 | 例 |
 |---|---|---|
 | Unary RPC | 単発リクエスト / レスポンス | `LoadBuffer`, `Play`, `Stop`, `LoadMixer` |
-| Server-streaming RPC | daemon → Editor の継続的 push | `SubscribeEvents` (`SourceFinished` / `Error` 等) |
+| Server-streaming RPC | daemon → cli の継続的 push (cli が stdout へ中継) | `SubscribeEvents` (`SourceFinished` / `Error` 等) |
 | (将来) Bidi-streaming | 双方向制御が必要になった場合に検討 | — |
 
 Client-streaming は当面用途なし。
@@ -138,7 +163,8 @@ IPC レイヤのハートビートは不要 (parent PID 監視で十分カバー
 
 ### 6. アセット受け渡し — ファイルパス第一級
 
-Editor が Asset DB 経由で持つ絶対パスをそのまま `LoadBuffer { path: string }` で渡す。
+Editor が Asset DB 経由で持つ絶対パスを `nezia-cli` に渡し、cli が
+`LoadBuffer { path: string }` で daemon に送る。
 
 バイト列転送 (`LoadBufferFromBytes { data: bytes }`) は **0.2.0 では実装しない**。
 Addressables / WebRequest / インメモリ生成のプレビューは 0.3.x 以降で追加検討する。
@@ -153,13 +179,15 @@ proto/
       common.proto      ← 共有型 (BufferId, BusName 等)
 ```
 
-- ワークスペースルートに `proto/` を置く。Rust / C# 双方が同じ source of truth を参照。
+- ワークスペースルートに `proto/` を置く。**`.proto` を参照するのは Rust の daemon / cli のみ**
+  (C# は gRPC を話さないので protoc 不要)。
 - バージョンを **パッケージ名に埋め込む** (`nezia.v1`) ことで、将来の breaking change 時に
   `v2` を並走させる余地を残す。
-- Rust 側: `tonic-build` が `build.rs` で OUT_DIR にコード生成 (git に commit しない)。
-- C# 側: 生成コードを **Unity package の `Editor/Generated/` に commit** する。
-  Unity ビルドに protoc を要求しないことが目的。生成は core repo の CI で行い、
-  Unity package の release pipeline が取り込む形を想定 (詳細は別 PR)。
+- daemon / cli 双方とも `tonic-build` が `build.rs` で OUT_DIR にコード生成 (git に commit
+  しない)。daemon は server、cli は client を生成する。
+- **C# 側のコード生成・protobuf DLL は不要**になった。外部フロントは `nezia-cli` を
+  `Process` 起動して stdout を読むだけで、API の契約は **cli のサブコマンド + stdout の
+  JSON 形** に移る (proto は cli の内部実装詳細)。
 
 ### 8. 配布
 
@@ -169,20 +197,17 @@ Unity package 側の配置:
 jp.nezia.unity/
   Editor/
     Bin/
-      macOS/      nezia-daemon
-      Windows/    nezia-daemon.exe
-      Linux/      nezia-daemon
-    Plugins/
-      Grpc.Net.Client.dll          ← Editor-only
-      Google.Protobuf.dll          ← Editor-only
-    Generated/
-      Nezia/V1/                    ← protoc 生成済み C# コード
+      macOS/      nezia-daemon   nezia-cli
+      Windows/    nezia-daemon.exe   nezia-cli.exe
+      Linux/      nezia-daemon   nezia-cli
 ```
 
-- daemon binary は **Editor-only**。Player ビルドには絶対に含めない (Unity の
+- daemon / cli binary は **Editor-only**。Player ビルドには絶対に含めない (Unity の
   `PluginImporter` 設定で `IncludeInBuildTarget` をすべて Off に)。
+- **gRPC / protobuf の C# DLL (`Grpc.Net.Client` / `Google.Protobuf`) は同梱しない。**
+  Editor は標準 `System.Diagnostics.Process` で cli を起動するだけ (追加依存ゼロ)。
 - ランタイム (`Runtime/Plugins/{platform}/`) には従来通り `nezia-ffi` のみ。
-- core repo の CI が各プラットフォームの daemon binary を artifact として出力し、
+- core repo の CI が各プラットフォームの daemon / cli binary を artifact として出力し、
   Unity package の release pipeline が取り込む (詳細は別 PR で設計)。
 
 ---
@@ -204,8 +229,10 @@ Phase 4-3 (ランタイムプロファイラ + デバッグビジュアライザ
 [Data plane]     共有メモリ (mmap)          サウンドスレッドが lock-free SPSC に書く
 ```
 
-- daemon が `StartProfiler` の Response で **共有メモリの名前** を返す。
-- Editor が `MemoryMappedFile.OpenExisting(name)` で memory-map し直接読む。
+- daemon が `StartProfiler` の Response で **共有メモリの名前** を返し、`nezia-cli` が
+  それを stdout に出す。
+- フロント (Editor 等) が `MemoryMappedFile.OpenExisting(name)` で memory-map し直接読む
+  (高頻度データなので cli の stdout は経由せず、共有メモリを直読みする)。
 - 既存 [`capture.rs`](../core/capture.rs) (master post-fader タップ) の lock-free SPSC リング
   パターンを共有メモリ上に展開するイメージ。
 - `0.2.0 では実装しない` — gRPC 制御経路の余地を残しておくのみ。
@@ -218,8 +245,9 @@ Profiler) に揃う。
 
 ## 非目標
 
-- **マルチクライアント受付**: 1 daemon プロセスに対し同時接続するクライアントは Editor 1 個のみ。
-  authoring tool との同時接続は別 daemon プロセスを起動する。
+- **マルチセッション受付**: 1 daemon は 1 セッション (Editor 1 個 / authoring tool 1 個) の
+  `nezia-cli` 呼び出しだけを相手にする。per-command の cli は短命で実質直列。別セッションは
+  別 daemon プロセスを起動する (同時並行の本格マルチクライアントは想定しない)。
 - **リモート接続**: 同一マシンの loopback 限定。LAN / リモートデバッグ用途は想定しない。
 - **永続化**: daemon はプロセス寿命の状態しか持たない。プロジェクトファイルの保存・
   ロードは Editor / authoring tool 側の責務。
@@ -234,9 +262,10 @@ Profiler) に揃う。
 Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset Preview を解除する
 最小スコープ (Tier 2)**:
 
-- [ ] `proto/nezia/v1/daemon.proto` 確定
-- [ ] daemon binary 骨格 (gRPC server + port discovery file + parent PID 監視)
-- [ ] `LoadBuffer` / `Play` / `Stop` (Tier 1 相当)
+- [x] `proto/nezia/v1/daemon.proto` 確定 (+ `common.proto`)
+- [x] daemon binary 骨格 (gRPC server + port discovery file + parent PID 監視)
+- [x] `LoadBuffer` / `Play` / `Stop` (Tier 1 相当、`StopAll` / `Ping` を追加)
+- [ ] **`nezia-cli` — daemon gRPC を叩く front door** (`load` / `play` / `stop`、stdout JSON)
 - [ ] Bus tree / Mixer asset ロード
 - [ ] Clip-centric パラメータ反映 (volume / pitch / loop / spatial / effect chain / send)
 - [ ] Random Container プレビュー

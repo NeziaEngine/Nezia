@@ -1,9 +1,39 @@
 [package]
-name = "daemon"
+name = "nezia-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "nezia-daemon"
+path = "src/main.rs"
+
 [dependencies]
+# core クレートはパッケージ名 `nezia`。lib 名衝突を避け `nezia_core` で取り込む
+# (nezia-ffi と同じ慣習)。
+nezia_core = { package = "nezia", path = "../core" }
+
+# gRPC / Protocol Buffers (CONCEPT.md §2)。
+tonic = "0.12"
+prost = "0.13"
+
+# async ランタイム。tonic server 駆動 + port discovery 用 TcpListener。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+
+# gRPC ハンドラ (Send+Sync 必須) ↔ !Send な SoundEngine スレッド間の橋。
+# crossbeam の Sender/Receiver はともに Send+Sync で recv_timeout を持つ。
+crossbeam-channel = "0.5"
+
+# parent PID 監視 (CONCEPT.md §5)。unix は kill(pid, 0) を使う。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows は OpenProcess + WaitForSingleObject。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[build-dependencies]
+tonic-build = "0.12"
