@@ -61,6 +61,7 @@ ID は**論理ID（Hash ID）**と**物理ID（Entity ID）**の二層構造を�
 - [バスルーティング](docs/design/core/bus.md) — バスの木構造ルーティング、ミキシングフロー、処理順序
 - [3D サウンド](docs/design/core/spatial.md) — 距離減衰・パンニング・リスナー管理・ドップラー効果の設計
 - [DSP パイプライン](docs/design/core/dsp.md) — バス単位エフェクトチェーンの土台、種別別 World 構造、パラメータ更新経路
+- [意図マクロ (Intent Macro)](docs/design/core/intent-macro.md) — アルゴリズム非依存エフェクト選択 (柱2)。amount 1 軸が curve 経由で複数 param を協調、メインスレッドで既存エフェクト層に展開
 - [ストリーミング再生](docs/design/core/streaming.md) — 長尺 BGM のストリーミング再生、ミラーバッファ方式 SPSC リング、DoD 維持戦略
 - [Mixer Snapshot](docs/design/core/snapshot.md) — ミキサーパラメータの宣言的 Snapshot とクロスフェード補間 (Phase 3-2)
 - [Send / Sidechain Ducking](docs/design/core/send.md) — バス間副ルート (DAG 化) と Sidechain 駆動 Compressor (Phase 3-3)

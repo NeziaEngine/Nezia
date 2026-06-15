@@ -1,7 +1,7 @@
 # Container (Random / Switch / Sequence)
 
 NEZIA ENGINE の Container 機能設計。Wwise / CRI ADX の Cue 系機能の縮小版。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md)
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md)
 **Phase 4-2** の段階的実装のうち、**第一弾「Random Container 単体」** の設計を扱う。
 
 Switch / Sequence Container は将来 PR で同じデータ構造の上に拡張する。
@@ -184,7 +184,7 @@ fn pick(&mut self) -> ContainerChild:
 
 ## 設計上のガードレール
 
-[ロードマップのガードレール](../../roadmap/better-than-unity-audio.md#設計上のガードレール) を遵守:
+[ロードマップのガードレール](../../roadmap/roadmap.md#設計上のガードレール) を遵守:
 
 1. **既存 ECS / SoA / コマンドパターンを壊さない** — Container はメインスレッド側のみで完結し、audio thread には影響しない。
 2. **サウンドスレッドのリアルタイム制約** — そもそも audio thread に Container コードが入らないので無関係。
@@ -249,6 +249,6 @@ public class NeziaAudioSource : MonoBehaviour {
 
 ## 関連ドキュメント
 
-- [ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 4-2 の位置付け
+- [ロードマップ](../../roadmap/roadmap.md) — Phase 4-2 の位置付け
 - [Source ワールド](source.md) — Container が解決した結果として spawn される Source の寿命モデル
 - [統合戦略](../integration/CONCEPT.md) — A/B 二経路ワークフローの全体像

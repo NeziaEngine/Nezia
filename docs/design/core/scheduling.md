@@ -2,7 +2,7 @@
 
 NEZIA ENGINE の予約再生機能設計。Unity `AudioSource.PlayScheduled` 互換 +
 **サブコールバック (sample 単位) 精度** での開始タイミング制御。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md) の
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md) の
 **Phase 3-4「PlayScheduled (サンプル精度の予約再生)」** に対応する設計を扱う。
 
 ---
@@ -329,7 +329,7 @@ fn delay_seconds_to_dsp_frame(&self, delay_seconds: f64) -> u64 {
    - 過去時刻指定 → 即時再生
    - 予約中に stop → 無音のまま終了
    - Voice Virtualization 上限超過下で予約は枠を食わない
-8. **ロードマップ更新**: `docs/roadmap/better-than-unity-audio.md` の Phase 3-4 行を「実装済」に
+8. **ロードマップ更新**: `docs/roadmap/roadmap.md` の Phase 3-4 行を「実装済」に
 9. **CLAUDE.md** にこのドキュメントへのリンクを追加
 
 ### 非機能要件
@@ -393,7 +393,7 @@ fn play_scheduled_in_seconds_lands_within_one_callback_of_target() {
 
 ## 関連ドキュメント
 
-- [ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 3-4 が本機能の所属
+- [ロードマップ](../../roadmap/roadmap.md) — Phase 3-4 が本機能の所属
 - [Source ワールド](source.md) — SourceComponent / SourceState / SourceWorld の本拠地
 - [スレッドモデル](threading.md) — `dsp_time_frames` の publish ルール
 - [Container (Phase 4-2)](container.md) — Random/Sequence Container が将来本機能を内部利用する

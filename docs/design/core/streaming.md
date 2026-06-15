@@ -1,7 +1,7 @@
 # ストリーミング再生
 
 NEZIA ENGINE における長尺オーディオ（BGM など）のストリーミング再生設計。
-本ドキュメントは [ロードマップ](../../roadmap/better-than-unity-audio.md) の **Phase 2-4「Ogg/Vorbis デコード + ストリーミング再生」** に対応する設計を扱う。
+本ドキュメントは [ロードマップ](../../roadmap/roadmap.md) の **Phase 2-4「Ogg/Vorbis デコード + ストリーミング再生」** に対応する設計を扱う。
 
 このドキュメントの目的は **デコーダ実装の解説ではなく、「DoD（データ指向設計）の強みを保ったまま streaming をどう SoA に載せるか」の判断と境界の確定** にある。Vorbis フルデコード自体は既に `audio.rs` で symphonia 経由で動いており、Phase 2-4 で追加するのは **長尺ファイルを部分デコードしながら再生する経路** とそのライフサイクル管理。
 
@@ -472,4 +472,4 @@ if looping && offset >= loop_end {
 - [スレッドモデル](threading.md) — サウンドスレッド制約と 3 経路通信
 - [DSP パイプライン](dsp.md) — Pre-Spatial chain との合成（streaming でも変更不要）
 - [統合戦略](../integration/CONCEPT.md) — Unity `AudioClip` の `loadType=Streaming` ドロップイン互換
-- [ロードマップ](../../roadmap/better-than-unity-audio.md) — Phase 2-4 の位置づけ
+- [ロードマップ](../../roadmap/roadmap.md) — Phase 2-4 の位置づけ
