@@ -58,8 +58,19 @@ pub use buffer_reader::BufferReader;
 /// コマンドリングバッファの容量。
 pub(super) const COMMAND_RING_CAPACITY: usize = 128;
 
-/// イベントリングバッファの容量。
-pub(super) const EVENT_RING_CAPACITY: usize = 64;
+/// イベントリングバッファの容量を `max_sources` から算出する。
+///
+/// worst-case バーストは `stop_all` が 1 audio callback 内で全生存ソースの
+/// `SourceDespawned` を一括発行するケース (= max_sources 件)。加えて同一 drain
+/// 間隔内の自然終了は `SourceFinished` + `SourceDespawned` の 2 件/ソースに
+/// なり得るため 2 倍を取り、Streaming/Capture 系の散発イベント用に固定マージンを
+/// 足す。スロット再利用はメインスレッドの `poll_events()` を経由しないと起きない
+/// ため、これを超える未処理イベントは構造上発生しない (= 溢れない設計)。
+///
+/// イベントは 1 件 16 バイト程度なので、max_sources = 1024 でも約 33KB と安価。
+pub(super) fn event_ring_capacity(max_sources: usize) -> usize {
+    (max_sources * 2 + 32).max(64)
+}
 
 /// マスター出力キャプチャリングの容量 (秒)。device_sample_rate * device_channels * この値を
 /// インターリーブサンプル数として確保する。1.0 秒分あれば、Unity Recorder のメインスレッド
@@ -195,7 +206,7 @@ impl SoundEngine {
         let ring = HeapRb::<Command>::new(COMMAND_RING_CAPACITY);
         let (command_producer, command_consumer) = ring.split();
 
-        let event_ring = HeapRb::<Event>::new(EVENT_RING_CAPACITY);
+        let event_ring = HeapRb::<Event>::new(event_ring_capacity(config.max_sources));
         let (event_producer, event_consumer) = event_ring.split();
 
         let (listener_input, listener_output) =
@@ -402,4 +413,23 @@ fn build_velocity_updates_buffer(max_sources: usize) -> (VelocityUpdatesIn, Velo
     input.publish();
     output.update();
     (input, output)
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::event_ring_capacity;
+
+    /// stop_all の一括 despawn (= max_sources 件) + 自然終了ペア (2 件/ソース) を
+    /// 収容できることが容量式の契約。
+    #[test]
+    fn event_ring_holds_worst_case_burst() {
+        for max_sources in [1, 32, 256, 4096] {
+            assert!(event_ring_capacity(max_sources) >= max_sources * 2);
+        }
+    }
+
+    #[test]
+    fn event_ring_has_floor_for_tiny_configs() {
+        assert!(event_ring_capacity(1) >= 64);
+    }
 }

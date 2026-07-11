@@ -10,7 +10,9 @@ use crate::event::Event;
 use crate::memory::{self, NeziaMemoryStats, vec_cap_bytes};
 use crate::metrics::{DropoutStats, DspStats};
 
-use super::{COMMAND_RING_CAPACITY, EVENT_RING_CAPACITY, SoundEngine};
+use ringbuf::traits::Observer;
+
+use super::{COMMAND_RING_CAPACITY, SoundEngine};
 
 impl SoundEngine {
     /// エンジン起動以降に audio thread が処理した累積フレーム数 (per-channel sample count)。
@@ -80,6 +82,7 @@ impl SoundEngine {
                 .load(Ordering::Relaxed),
             dropped_play_calls: self.metrics.dropped_play_calls.load(Ordering::Relaxed),
             command_queue_full: self.metrics.command_queue_full.load(Ordering::Relaxed),
+            event_queue_full: self.metrics.event_queue_full.load(Ordering::Relaxed),
         }
     }
 
@@ -142,7 +145,8 @@ impl SoundEngine {
         // ── graph_bytes: バス routing / send / snapshot / curve / container / callbacks /
         //                 SPSC リング (command/event/capture) + audio thread 側 World 全体 ──
         let command_ring_bytes = (COMMAND_RING_CAPACITY * std::mem::size_of::<Command>()) as u64;
-        let event_ring_bytes = (EVENT_RING_CAPACITY * std::mem::size_of::<Event>()) as u64;
+        let event_ring_bytes =
+            (self.event_consumer.capacity().get() * std::mem::size_of::<Event>()) as u64;
 
         let graph_bytes = self.bus_routing.memory_bytes() as u64
             + self.send_slots.memory_bytes() as u64

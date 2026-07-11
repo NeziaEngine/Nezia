@@ -55,6 +55,11 @@ pub(crate) struct EngineMetrics {
     /// こちらは「1 フレームで大量の API 呼び出しを行ったがリングが drain される前に
     /// 詰まった」ケースを示す。閾値超えが見えたら容量増加 or API 集約の判断材料に使う。
     pub command_queue_full: AtomicU64,
+    /// SPSC イベントリングが満杯で audio thread の `try_push` が失敗した累積回数。
+    /// イベントロスは `SourceDespawned` 消失 = スロットリークに直結するため、
+    /// 0 以外の値は容量設定 (`event_ring_capacity`) か `poll_events()` の呼び出し
+    /// 頻度に問題があるサイン。
+    pub event_queue_full: AtomicU64,
 }
 
 impl EngineMetrics {
@@ -112,6 +117,9 @@ pub struct DropoutStats {
     pub dropped_play_calls: u64,
     /// SPSC コマンドリングが満杯で `try_push` が失敗した累積回数。
     pub command_queue_full: u64,
+    /// SPSC イベントリングが満杯で audio thread 側の発行が失敗した累積回数。
+    /// 0 以外はイベントロス (スロットリーク・コールバック不発) が起きている。
+    pub event_queue_full: u64,
 }
 
 /// audio thread 側で `peak_callback_ns` を最大値に更新するヘルパ。
