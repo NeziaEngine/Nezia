@@ -12,8 +12,8 @@ use std::io;
 use std::time::Duration;
 
 use crossbeam_channel::{RecvTimeoutError, Sender, unbounded};
-use nezia_core::{BufferId, EntityId, SoundEngine, SpawnSpatialInit};
-use tokio::sync::oneshot;
+use nezia_core::{BufferId, EntityId, Event, SoundEngine, SpawnSpatialInit};
+use tokio::sync::{broadcast, oneshot};
 
 /// preview ボイスの発音優先度。単発試聴なので中庸の固定値で十分。
 const PREVIEW_PRIORITY: u8 = 128;
@@ -21,6 +21,11 @@ const PREVIEW_PRIORITY: u8 = 128;
 /// SoundEngine スレッドが要求を取りこぼさず処理しつつ、合間に `poll_events()` を
 /// 回すためのポーリング間隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+
+/// イベント配信 broadcast チャネルの容量。preview 用途のイベント頻度
+/// (ソース停止・エラー通知) に対して十分な余裕を持たせる。溢れた場合、
+/// 遅い購読者は古いイベントを取りこぼす (Lagged) が配信自体は止まらない。
+const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// エンジンスレッドへの要求。応答は同梱した oneshot で返す。
 enum EngineRequest {
@@ -59,9 +64,15 @@ pub enum EngineError {
 #[derive(Clone)]
 pub struct EngineHandle {
     tx: Sender<EngineRequest>,
+    events: broadcast::Sender<Event>,
 }
 
 impl EngineHandle {
+    /// エンジンイベントの購読を開始する。購読開始以降のイベントのみが届く。
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
+        self.events.subscribe()
+    }
+
     /// オーディオファイルをロードする。
     pub async fn load(&self, path: String) -> Result<BufferId, EngineError> {
         let (reply, rx) = oneshot::channel();
@@ -121,9 +132,11 @@ impl EngineHandle {
 /// `io::Error` として呼出側へ伝える。
 pub fn spawn() -> io::Result<EngineHandle> {
     let (tx, rx) = unbounded::<EngineRequest>();
+    let (events_tx, _) = broadcast::channel::<Event>(EVENT_CHANNEL_CAPACITY);
     // 初期化結果をメインスレッドへ返すための一回限りチャネル。
     let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
+    let sink_tx = events_tx.clone();
     std::thread::Builder::new()
         .name("nezia-engine".into())
         .spawn(move || {
@@ -137,12 +150,20 @@ pub fn spawn() -> io::Result<EngineHandle> {
                     return;
                 }
             };
+            // poll_events が drain した全イベントを broadcast へ横流しする。
+            // send は購読者ゼロだと Err を返すが、それは正常 (誰も聴いていないだけ)。
+            engine.set_event_sink(move |ev| {
+                let _ = sink_tx.send(ev);
+            });
             let master = engine.master_bus();
             run_loop(&mut engine, master, &rx);
         })?;
 
     match init_rx.recv() {
-        Ok(Ok(())) => Ok(EngineHandle { tx }),
+        Ok(Ok(())) => Ok(EngineHandle {
+            tx,
+            events: events_tx,
+        }),
         Ok(Err(msg)) => Err(io::Error::other(msg)),
         Err(_) => Err(io::Error::other("engine thread exited during init")),
     }

@@ -37,6 +37,7 @@ Commands:
   daemon start                ヘッドレス daemon を起動 (pid/port を返す)
   daemon stop [--pid n]      daemon を停止 (省略時は自動検出)
   daemon status [--pid n]    daemon の稼働状況を取得
+  subscribe                  エンジンイベントを JSONL でストリーム受信
   batch                      stdin から 1 行 1 コマンドを読み常駐実行
   schema                     全コマンド仕様を機械可読 JSON で出力
   version                    cli 自身のバージョン
@@ -159,6 +160,8 @@ func Dispatch(env *Env, name string, args []string) int {
 			stdin = os.Stdin
 		}
 		return cmdBatch(env, bufio.NewScanner(stdin))
+	case "subscribe":
+		return cmdSubscribe(env)
 	case "schema":
 		return cmdSchema(env)
 	case "version":

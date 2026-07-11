@@ -269,7 +269,7 @@ Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset P
 - [ ] Bus tree / Mixer asset ロード
 - [ ] Clip-centric パラメータ反映 (volume / pitch / loop / spatial / effect chain / send)
 - [ ] Random Container プレビュー
-- [ ] `SubscribeEvents` (SourceFinished / Error)
+- [x] `SubscribeEvents` (SourceStopped / PlayFailed / StreamingUnderrun / CaptureOverflow)
 
 0.2.0 で実装しないもの:
 - 共有メモリ telemetry (Phase 4-3 で追加)

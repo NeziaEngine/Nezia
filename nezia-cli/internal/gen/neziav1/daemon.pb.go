@@ -10,10 +10,9 @@
 // オーサリングツールからの RPC でアセットをロード・再生・停止する。設計は
 // docs/design/daemon/CONCEPT.md を正とする。
 //
-// このファイルは 0.2.0 の **Tier 1 (骨格)** スコープ:
-//   LoadBuffer / Play / Stop / StopAll / Ping
-// Bus/Mixer ロード・Clip-centric 反映・Random プレビュー・SubscribeEvents は
-// 後続 PR (Tier 2) で追加する。
+// このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
+//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents
+// Bus/Mixer ロード・Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
 
 package neziav1
 
@@ -484,6 +483,392 @@ func (x *PingResponse) GetVersion() string {
 	return ""
 }
 
+type SubscribeEventsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscribeEventsRequest) Reset() {
+	*x = SubscribeEventsRequest{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscribeEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscribeEventsRequest) ProtoMessage() {}
+
+func (x *SubscribeEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscribeEventsRequest.ProtoReflect.Descriptor instead.
+func (*SubscribeEventsRequest) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{10}
+}
+
+// エンジンイベント。core の `Event` enum のうち外部ツールに意味のあるものを
+// 変換して流す (コールバック token 等の内部表現は露出しない)。
+type EngineEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*EngineEvent_SourceStopped
+	//	*EngineEvent_PlayFailed
+	//	*EngineEvent_StreamingUnderrun
+	//	*EngineEvent_CaptureOverflow
+	//	*EngineEvent_SubscriberLagged
+	Event         isEngineEvent_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EngineEvent) Reset() {
+	*x = EngineEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EngineEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EngineEvent) ProtoMessage() {}
+
+func (x *EngineEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EngineEvent.ProtoReflect.Descriptor instead.
+func (*EngineEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *EngineEvent) GetEvent() isEngineEvent_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *EngineEvent) GetSourceStopped() *SourceStoppedEvent {
+	if x != nil {
+		if x, ok := x.Event.(*EngineEvent_SourceStopped); ok {
+			return x.SourceStopped
+		}
+	}
+	return nil
+}
+
+func (x *EngineEvent) GetPlayFailed() *PlayFailedEvent {
+	if x != nil {
+		if x, ok := x.Event.(*EngineEvent_PlayFailed); ok {
+			return x.PlayFailed
+		}
+	}
+	return nil
+}
+
+func (x *EngineEvent) GetStreamingUnderrun() *StreamingUnderrunEvent {
+	if x != nil {
+		if x, ok := x.Event.(*EngineEvent_StreamingUnderrun); ok {
+			return x.StreamingUnderrun
+		}
+	}
+	return nil
+}
+
+func (x *EngineEvent) GetCaptureOverflow() *CaptureOverflowEvent {
+	if x != nil {
+		if x, ok := x.Event.(*EngineEvent_CaptureOverflow); ok {
+			return x.CaptureOverflow
+		}
+	}
+	return nil
+}
+
+func (x *EngineEvent) GetSubscriberLagged() *SubscriberLaggedEvent {
+	if x != nil {
+		if x, ok := x.Event.(*EngineEvent_SubscriberLagged); ok {
+			return x.SubscriberLagged
+		}
+	}
+	return nil
+}
+
+type isEngineEvent_Event interface {
+	isEngineEvent_Event()
+}
+
+type EngineEvent_SourceStopped struct {
+	SourceStopped *SourceStoppedEvent `protobuf:"bytes,1,opt,name=source_stopped,json=sourceStopped,proto3,oneof"`
+}
+
+type EngineEvent_PlayFailed struct {
+	PlayFailed *PlayFailedEvent `protobuf:"bytes,2,opt,name=play_failed,json=playFailed,proto3,oneof"`
+}
+
+type EngineEvent_StreamingUnderrun struct {
+	StreamingUnderrun *StreamingUnderrunEvent `protobuf:"bytes,3,opt,name=streaming_underrun,json=streamingUnderrun,proto3,oneof"`
+}
+
+type EngineEvent_CaptureOverflow struct {
+	CaptureOverflow *CaptureOverflowEvent `protobuf:"bytes,4,opt,name=capture_overflow,json=captureOverflow,proto3,oneof"`
+}
+
+type EngineEvent_SubscriberLagged struct {
+	SubscriberLagged *SubscriberLaggedEvent `protobuf:"bytes,5,opt,name=subscriber_lagged,json=subscriberLagged,proto3,oneof"`
+}
+
+func (*EngineEvent_SourceStopped) isEngineEvent_Event() {}
+
+func (*EngineEvent_PlayFailed) isEngineEvent_Event() {}
+
+func (*EngineEvent_StreamingUnderrun) isEngineEvent_Event() {}
+
+func (*EngineEvent_CaptureOverflow) isEngineEvent_Event() {}
+
+func (*EngineEvent_SubscriberLagged) isEngineEvent_Event() {}
+
+// ソースが停止しハンドルが無効化された (自然終了 / Stop / StopAll のいずれも含む)。
+// core の `Event::SourceDespawned` に対応する。
+type SourceStoppedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        *SourceHandle          `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SourceStoppedEvent) Reset() {
+	*x = SourceStoppedEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SourceStoppedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SourceStoppedEvent) ProtoMessage() {}
+
+func (x *SourceStoppedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SourceStoppedEvent.ProtoReflect.Descriptor instead.
+func (*SourceStoppedEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SourceStoppedEvent) GetSource() *SourceHandle {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
+// 発音要求がボイス数上限で拒否された (core の `Event::PlayFailed`)。
+type PlayFailedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlayFailedEvent) Reset() {
+	*x = PlayFailedEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlayFailedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlayFailedEvent) ProtoMessage() {}
+
+func (x *PlayFailedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlayFailedEvent.ProtoReflect.Descriptor instead.
+func (*PlayFailedEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{13}
+}
+
+// ストリーミング再生のデコードが再生に追いつかなかった。
+type StreamingUnderrunEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Buffer        *BufferId              `protobuf:"bytes,1,opt,name=buffer,proto3" json:"buffer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamingUnderrunEvent) Reset() {
+	*x = StreamingUnderrunEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamingUnderrunEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamingUnderrunEvent) ProtoMessage() {}
+
+func (x *StreamingUnderrunEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamingUnderrunEvent.ProtoReflect.Descriptor instead.
+func (*StreamingUnderrunEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *StreamingUnderrunEvent) GetBuffer() *BufferId {
+	if x != nil {
+		return x.Buffer
+	}
+	return nil
+}
+
+// マスターキャプチャのリングが溢れてサンプルを取りこぼした。
+type CaptureOverflowEvent struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	DroppedSamples uint32                 `protobuf:"varint,1,opt,name=dropped_samples,json=droppedSamples,proto3" json:"dropped_samples,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CaptureOverflowEvent) Reset() {
+	*x = CaptureOverflowEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CaptureOverflowEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CaptureOverflowEvent) ProtoMessage() {}
+
+func (x *CaptureOverflowEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CaptureOverflowEvent.ProtoReflect.Descriptor instead.
+func (*CaptureOverflowEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CaptureOverflowEvent) GetDroppedSamples() uint32 {
+	if x != nil {
+		return x.DroppedSamples
+	}
+	return 0
+}
+
+// この購読者が配信に追いつけず、直近のイベントを取りこぼした。
+type SubscriberLaggedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventsDropped uint64                 `protobuf:"varint,1,opt,name=events_dropped,json=eventsDropped,proto3" json:"events_dropped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscriberLaggedEvent) Reset() {
+	*x = SubscriberLaggedEvent{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriberLaggedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriberLaggedEvent) ProtoMessage() {}
+
+func (x *SubscriberLaggedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriberLaggedEvent.ProtoReflect.Descriptor instead.
+func (*SubscriberLaggedEvent) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SubscriberLaggedEvent) GetEventsDropped() uint64 {
+	if x != nil {
+		return x.EventsDropped
+	}
+	return 0
+}
+
 var File_nezia_v1_daemon_proto protoreflect.FileDescriptor
 
 const file_nezia_v1_daemon_proto_rawDesc = "" +
@@ -509,14 +894,33 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"\r\n" +
 	"\vPingRequest\"(\n" +
 	"\fPingResponse\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion2\xbd\x02\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\x18\n" +
+	"\x16SubscribeEventsRequest\"\x8b\x03\n" +
+	"\vEngineEvent\x12E\n" +
+	"\x0esource_stopped\x18\x01 \x01(\v2\x1c.nezia.v1.SourceStoppedEventH\x00R\rsourceStopped\x12<\n" +
+	"\vplay_failed\x18\x02 \x01(\v2\x19.nezia.v1.PlayFailedEventH\x00R\n" +
+	"playFailed\x12Q\n" +
+	"\x12streaming_underrun\x18\x03 \x01(\v2 .nezia.v1.StreamingUnderrunEventH\x00R\x11streamingUnderrun\x12K\n" +
+	"\x10capture_overflow\x18\x04 \x01(\v2\x1e.nezia.v1.CaptureOverflowEventH\x00R\x0fcaptureOverflow\x12N\n" +
+	"\x11subscriber_lagged\x18\x05 \x01(\v2\x1f.nezia.v1.SubscriberLaggedEventH\x00R\x10subscriberLaggedB\a\n" +
+	"\x05event\"D\n" +
+	"\x12SourceStoppedEvent\x12.\n" +
+	"\x06source\x18\x01 \x01(\v2\x16.nezia.v1.SourceHandleR\x06source\"\x11\n" +
+	"\x0fPlayFailedEvent\"D\n" +
+	"\x16StreamingUnderrunEvent\x12*\n" +
+	"\x06buffer\x18\x01 \x01(\v2\x12.nezia.v1.BufferIdR\x06buffer\"?\n" +
+	"\x14CaptureOverflowEvent\x12'\n" +
+	"\x0fdropped_samples\x18\x01 \x01(\rR\x0edroppedSamples\">\n" +
+	"\x15SubscriberLaggedEvent\x12%\n" +
+	"\x0eevents_dropped\x18\x01 \x01(\x04R\reventsDropped2\x8b\x03\n" +
 	"\rPreviewDaemon\x12G\n" +
 	"\n" +
 	"LoadBuffer\x12\x1b.nezia.v1.LoadBufferRequest\x1a\x1c.nezia.v1.LoadBufferResponse\x125\n" +
 	"\x04Play\x12\x15.nezia.v1.PlayRequest\x1a\x16.nezia.v1.PlayResponse\x125\n" +
 	"\x04Stop\x12\x15.nezia.v1.StopRequest\x1a\x16.nezia.v1.StopResponse\x12>\n" +
 	"\aStopAll\x12\x18.nezia.v1.StopAllRequest\x1a\x19.nezia.v1.StopAllResponse\x125\n" +
-	"\x04Ping\x12\x15.nezia.v1.PingRequest\x1a\x16.nezia.v1.PingResponseb\x06proto3"
+	"\x04Ping\x12\x15.nezia.v1.PingRequest\x1a\x16.nezia.v1.PingResponse\x12L\n" +
+	"\x0fSubscribeEvents\x12 .nezia.v1.SubscribeEventsRequest\x1a\x15.nezia.v1.EngineEvent0\x01b\x06proto3"
 
 var (
 	file_nezia_v1_daemon_proto_rawDescOnce sync.Once
@@ -530,41 +934,57 @@ func file_nezia_v1_daemon_proto_rawDescGZIP() []byte {
 	return file_nezia_v1_daemon_proto_rawDescData
 }
 
-var file_nezia_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_nezia_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_nezia_v1_daemon_proto_goTypes = []any{
-	(*LoadBufferRequest)(nil),  // 0: nezia.v1.LoadBufferRequest
-	(*LoadBufferResponse)(nil), // 1: nezia.v1.LoadBufferResponse
-	(*PlayRequest)(nil),        // 2: nezia.v1.PlayRequest
-	(*PlayResponse)(nil),       // 3: nezia.v1.PlayResponse
-	(*StopRequest)(nil),        // 4: nezia.v1.StopRequest
-	(*StopResponse)(nil),       // 5: nezia.v1.StopResponse
-	(*StopAllRequest)(nil),     // 6: nezia.v1.StopAllRequest
-	(*StopAllResponse)(nil),    // 7: nezia.v1.StopAllResponse
-	(*PingRequest)(nil),        // 8: nezia.v1.PingRequest
-	(*PingResponse)(nil),       // 9: nezia.v1.PingResponse
-	(*BufferId)(nil),           // 10: nezia.v1.BufferId
-	(*SourceHandle)(nil),       // 11: nezia.v1.SourceHandle
+	(*LoadBufferRequest)(nil),      // 0: nezia.v1.LoadBufferRequest
+	(*LoadBufferResponse)(nil),     // 1: nezia.v1.LoadBufferResponse
+	(*PlayRequest)(nil),            // 2: nezia.v1.PlayRequest
+	(*PlayResponse)(nil),           // 3: nezia.v1.PlayResponse
+	(*StopRequest)(nil),            // 4: nezia.v1.StopRequest
+	(*StopResponse)(nil),           // 5: nezia.v1.StopResponse
+	(*StopAllRequest)(nil),         // 6: nezia.v1.StopAllRequest
+	(*StopAllResponse)(nil),        // 7: nezia.v1.StopAllResponse
+	(*PingRequest)(nil),            // 8: nezia.v1.PingRequest
+	(*PingResponse)(nil),           // 9: nezia.v1.PingResponse
+	(*SubscribeEventsRequest)(nil), // 10: nezia.v1.SubscribeEventsRequest
+	(*EngineEvent)(nil),            // 11: nezia.v1.EngineEvent
+	(*SourceStoppedEvent)(nil),     // 12: nezia.v1.SourceStoppedEvent
+	(*PlayFailedEvent)(nil),        // 13: nezia.v1.PlayFailedEvent
+	(*StreamingUnderrunEvent)(nil), // 14: nezia.v1.StreamingUnderrunEvent
+	(*CaptureOverflowEvent)(nil),   // 15: nezia.v1.CaptureOverflowEvent
+	(*SubscriberLaggedEvent)(nil),  // 16: nezia.v1.SubscriberLaggedEvent
+	(*BufferId)(nil),               // 17: nezia.v1.BufferId
+	(*SourceHandle)(nil),           // 18: nezia.v1.SourceHandle
 }
 var file_nezia_v1_daemon_proto_depIdxs = []int32{
-	10, // 0: nezia.v1.LoadBufferResponse.buffer:type_name -> nezia.v1.BufferId
-	10, // 1: nezia.v1.PlayRequest.buffer:type_name -> nezia.v1.BufferId
-	11, // 2: nezia.v1.PlayResponse.source:type_name -> nezia.v1.SourceHandle
-	11, // 3: nezia.v1.StopRequest.source:type_name -> nezia.v1.SourceHandle
-	0,  // 4: nezia.v1.PreviewDaemon.LoadBuffer:input_type -> nezia.v1.LoadBufferRequest
-	2,  // 5: nezia.v1.PreviewDaemon.Play:input_type -> nezia.v1.PlayRequest
-	4,  // 6: nezia.v1.PreviewDaemon.Stop:input_type -> nezia.v1.StopRequest
-	6,  // 7: nezia.v1.PreviewDaemon.StopAll:input_type -> nezia.v1.StopAllRequest
-	8,  // 8: nezia.v1.PreviewDaemon.Ping:input_type -> nezia.v1.PingRequest
-	1,  // 9: nezia.v1.PreviewDaemon.LoadBuffer:output_type -> nezia.v1.LoadBufferResponse
-	3,  // 10: nezia.v1.PreviewDaemon.Play:output_type -> nezia.v1.PlayResponse
-	5,  // 11: nezia.v1.PreviewDaemon.Stop:output_type -> nezia.v1.StopResponse
-	7,  // 12: nezia.v1.PreviewDaemon.StopAll:output_type -> nezia.v1.StopAllResponse
-	9,  // 13: nezia.v1.PreviewDaemon.Ping:output_type -> nezia.v1.PingResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	17, // 0: nezia.v1.LoadBufferResponse.buffer:type_name -> nezia.v1.BufferId
+	17, // 1: nezia.v1.PlayRequest.buffer:type_name -> nezia.v1.BufferId
+	18, // 2: nezia.v1.PlayResponse.source:type_name -> nezia.v1.SourceHandle
+	18, // 3: nezia.v1.StopRequest.source:type_name -> nezia.v1.SourceHandle
+	12, // 4: nezia.v1.EngineEvent.source_stopped:type_name -> nezia.v1.SourceStoppedEvent
+	13, // 5: nezia.v1.EngineEvent.play_failed:type_name -> nezia.v1.PlayFailedEvent
+	14, // 6: nezia.v1.EngineEvent.streaming_underrun:type_name -> nezia.v1.StreamingUnderrunEvent
+	15, // 7: nezia.v1.EngineEvent.capture_overflow:type_name -> nezia.v1.CaptureOverflowEvent
+	16, // 8: nezia.v1.EngineEvent.subscriber_lagged:type_name -> nezia.v1.SubscriberLaggedEvent
+	18, // 9: nezia.v1.SourceStoppedEvent.source:type_name -> nezia.v1.SourceHandle
+	17, // 10: nezia.v1.StreamingUnderrunEvent.buffer:type_name -> nezia.v1.BufferId
+	0,  // 11: nezia.v1.PreviewDaemon.LoadBuffer:input_type -> nezia.v1.LoadBufferRequest
+	2,  // 12: nezia.v1.PreviewDaemon.Play:input_type -> nezia.v1.PlayRequest
+	4,  // 13: nezia.v1.PreviewDaemon.Stop:input_type -> nezia.v1.StopRequest
+	6,  // 14: nezia.v1.PreviewDaemon.StopAll:input_type -> nezia.v1.StopAllRequest
+	8,  // 15: nezia.v1.PreviewDaemon.Ping:input_type -> nezia.v1.PingRequest
+	10, // 16: nezia.v1.PreviewDaemon.SubscribeEvents:input_type -> nezia.v1.SubscribeEventsRequest
+	1,  // 17: nezia.v1.PreviewDaemon.LoadBuffer:output_type -> nezia.v1.LoadBufferResponse
+	3,  // 18: nezia.v1.PreviewDaemon.Play:output_type -> nezia.v1.PlayResponse
+	5,  // 19: nezia.v1.PreviewDaemon.Stop:output_type -> nezia.v1.StopResponse
+	7,  // 20: nezia.v1.PreviewDaemon.StopAll:output_type -> nezia.v1.StopAllResponse
+	9,  // 21: nezia.v1.PreviewDaemon.Ping:output_type -> nezia.v1.PingResponse
+	11, // 22: nezia.v1.PreviewDaemon.SubscribeEvents:output_type -> nezia.v1.EngineEvent
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_nezia_v1_daemon_proto_init() }
@@ -573,13 +993,20 @@ func file_nezia_v1_daemon_proto_init() {
 		return
 	}
 	file_nezia_v1_common_proto_init()
+	file_nezia_v1_daemon_proto_msgTypes[11].OneofWrappers = []any{
+		(*EngineEvent_SourceStopped)(nil),
+		(*EngineEvent_PlayFailed)(nil),
+		(*EngineEvent_StreamingUnderrun)(nil),
+		(*EngineEvent_CaptureOverflow)(nil),
+		(*EngineEvent_SubscriberLagged)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nezia_v1_daemon_proto_rawDesc), len(file_nezia_v1_daemon_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

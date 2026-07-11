@@ -86,6 +86,10 @@ pub struct SoundEngine {
     pub(super) command_producer: ringbuf::HeapProd<Command>,
     /// イベントリングバッファのコンシューマ側（メインスレッドが所有）。
     pub(super) event_consumer: ringbuf::HeapCons<Event>,
+    /// `poll_events()` が drain した全イベントを横流しする観測用 sink
+    /// (daemon の SubscribeEvents 等)。コールバック機構とは独立で、
+    /// 登録してもイベントの通常 dispatch には影響しない。
+    pub(super) event_sink: Option<Box<dyn FnMut(Event) + Send>>,
     /// リスナー姿勢の triple buffer 入力側（newest-wins, alloc 無し）。
     pub(super) listener_input: triple_buffer::Input<ListenerState>,
     /// ソース位置更新の triple buffer 入力側（newest-wins, alloc 無し）。
@@ -299,6 +303,7 @@ impl SoundEngine {
         Ok(Self {
             command_producer,
             event_consumer,
+            event_sink: None,
             listener_input,
             position_updates_input,
             velocity_updates_input,

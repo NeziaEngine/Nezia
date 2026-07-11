@@ -3,14 +3,21 @@
 //! 各 RPC を `EngineHandle` への要求に変換し、エンジンスレッドからの応答を待って
 //! gRPC レスポンスに詰め替える。失敗は `tonic::Status` にマップする。
 
+use std::pin::Pin;
+
+use tokio::sync::broadcast;
+use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
 use crate::engine::{EngineError, EngineHandle};
+use crate::proto::v1::engine_event;
 use crate::proto::v1::preview_daemon_server::PreviewDaemon;
 use crate::proto::v1::{
-    BufferId as ProtoBufferId, LoadBufferRequest, LoadBufferResponse, PingRequest, PingResponse,
-    PlayRequest, PlayResponse, SourceHandle as ProtoSourceHandle, StopAllRequest, StopAllResponse,
-    StopRequest, StopResponse,
+    BufferId as ProtoBufferId, CaptureOverflowEvent, EngineEvent, LoadBufferRequest,
+    LoadBufferResponse, PingRequest, PingResponse, PlayFailedEvent, PlayRequest, PlayResponse,
+    SourceHandle as ProtoSourceHandle, SourceStoppedEvent, StopAllRequest, StopAllResponse,
+    StopRequest, StopResponse, StreamingUnderrunEvent, SubscribeEventsRequest,
+    SubscriberLaggedEvent,
 };
 
 pub struct PreviewService {
@@ -57,6 +64,32 @@ fn from_proto_source(handle: &ProtoSourceHandle) -> nezia_core::EntityId {
     nezia_core::EntityId {
         index: handle.index,
         generation: handle.generation,
+    }
+}
+
+/// core のイベントを proto へ変換する。外部ツールに意味のないもの
+/// (`SourceFinished` はコールバック token という内部表現のため) は `None`。
+fn to_proto_event(ev: nezia_core::Event) -> Option<engine_event::Event> {
+    match ev {
+        // token はコールバックレジストリの内部 ID なので露出しない。ソースの
+        // 終了自体は直後に流れる SourceDespawned (→ SourceStopped) で観測できる。
+        nezia_core::Event::SourceFinished { .. } => None,
+        nezia_core::Event::PlayFailed { .. } => {
+            Some(engine_event::Event::PlayFailed(PlayFailedEvent {}))
+        }
+        nezia_core::Event::SourceDespawned { id } => {
+            Some(engine_event::Event::SourceStopped(SourceStoppedEvent {
+                source: Some(to_proto_source(id)),
+            }))
+        }
+        nezia_core::Event::StreamingUnderrun { buffer } => Some(
+            engine_event::Event::StreamingUnderrun(StreamingUnderrunEvent {
+                buffer: Some(to_proto_buffer(buffer)),
+            }),
+        ),
+        nezia_core::Event::CaptureOverflow { dropped_samples } => Some(
+            engine_event::Event::CaptureOverflow(CaptureOverflowEvent { dropped_samples }),
+        ),
     }
 }
 
@@ -125,5 +158,41 @@ impl PreviewDaemon for PreviewService {
         Ok(Response::new(PingResponse {
             version: self.version.clone(),
         }))
+    }
+
+    type SubscribeEventsStream = Pin<Box<dyn Stream<Item = Result<EngineEvent, Status>> + Send>>;
+
+    async fn subscribe_events(
+        &self,
+        _request: Request<SubscribeEventsRequest>,
+    ) -> Result<Response<Self::SubscribeEventsStream>, Status> {
+        let mut rx = self.engine.subscribe_events();
+        // broadcast → gRPC ストリームへの中継タスク。クライアント切断で
+        // mpsc の send が失敗し、タスクは自然に終了する。
+        let (tx, out) = tokio::sync::mpsc::channel::<Result<EngineEvent, Status>>(64);
+        tokio::spawn(async move {
+            loop {
+                let item = match rx.recv().await {
+                    Ok(ev) => match to_proto_event(ev) {
+                        Some(event) => EngineEvent { event: Some(event) },
+                        None => continue,
+                    },
+                    // 購読者が配信に追いつけなかった: 取りこぼし数を通知して継続。
+                    Err(broadcast::error::RecvError::Lagged(n)) => EngineEvent {
+                        event: Some(engine_event::Event::SubscriberLagged(
+                            SubscriberLaggedEvent { events_dropped: n },
+                        )),
+                    },
+                    // エンジンスレッド終了 → ストリームを閉じる。
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if tx.send(Ok(item)).await.is_err() {
+                    break; // クライアント切断。
+                }
+            }
+        });
+        Ok(Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(out),
+        )))
     }
 }
