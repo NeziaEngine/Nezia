@@ -94,11 +94,10 @@ async fn serve(
     let service = PreviewService::new(engine, env!("CARGO_PKG_VERSION"));
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
-    // Ctrl-C で graceful shutdown。
-    let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
-        eprintln!("nezia-daemon: shutdown signal received");
-    };
+    // Ctrl-C (SIGINT) または SIGTERM で graceful shutdown する。
+    // SIGTERM を無視すると port discovery file の後始末 (下記) が走らず、
+    // 次回起動時に stale なファイルが残って接続解決を誤らせる。
+    let shutdown = shutdown_signal();
 
     let result = Server::builder()
         .add_service(PreviewDaemonServer::new(service))
@@ -109,4 +108,24 @@ async fn serve(
     let _ = std::fs::remove_file(&port_file);
 
     result.map_err(Into::into)
+}
+
+/// SIGINT (Ctrl-C) または SIGTERM を待つ。Windows には SIGTERM 相当が
+/// ないため ctrl_c のみを待つ。
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => eprintln!("nezia-daemon: SIGINT received"),
+        _ = sigterm.recv() => eprintln!("nezia-daemon: SIGTERM received"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    eprintln!("nezia-daemon: shutdown signal received");
 }

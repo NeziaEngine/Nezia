@@ -33,7 +33,6 @@ func cmdPing(env *Env) int {
 	if err != nil {
 		return env.fail(err)
 	}
-	defer c.Close()
 	ctx, cancel := env.Opts.Context()
 	defer cancel()
 	resp, err := c.PD.Ping(ctx, &neziav1.PingRequest{})
@@ -63,7 +62,6 @@ func cmdLoad(env *Env, args []string) int {
 	if err != nil {
 		return env.fail(err)
 	}
-	defer c.Close()
 	ctx, cancel := env.Opts.Context()
 	defer cancel()
 	resp, err := c.PD.LoadBuffer(ctx, &neziav1.LoadBufferRequest{Path: path})
@@ -97,7 +95,6 @@ func cmdPlay(env *Env, args []string) int {
 	if err != nil {
 		return env.fail(err)
 	}
-	defer c.Close()
 	ctx, cancel := env.Opts.Context()
 	defer cancel()
 	resp, err := c.PD.Play(ctx, &neziav1.PlayRequest{
@@ -128,7 +125,6 @@ func cmdStop(env *Env, args []string) int {
 	if err != nil {
 		return env.fail(err)
 	}
-	defer c.Close()
 	ctx, cancel := env.Opts.Context()
 	defer cancel()
 
