@@ -18,8 +18,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	neziav1 "jp.nezia/nezia-cli/internal/gen/neziav1"
 	"google.golang.org/grpc/codes"
+	neziav1 "jp.nezia/nezia-cli/internal/gen/neziav1"
 )
 
 // Exit code 規約 (docs/design/cli/CONCEPT.md §5)。
@@ -75,6 +75,11 @@ func Dial(opts Options) (*Client, error) {
 		}
 		port = p
 	}
+	return DialAddr(port)
+}
+
+// DialAddr は port を直接指定して daemon に接続する (daemonctl の status 確認等で使う)。
+func DialAddr(port int) (*Client, error) {
 	conn, err := grpc.NewClient(
 		fmt.Sprintf("127.0.0.1:%d", port),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

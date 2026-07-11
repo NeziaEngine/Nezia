@@ -5,6 +5,7 @@
 package command
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +34,11 @@ Commands:
       --loop                 ループ再生
   stop <source>              source を停止する
   stop --all                 全 source を停止する
+  daemon start                ヘッドレス daemon を起動 (pid/port を返す)
+  daemon stop [--pid n]      daemon を停止 (省略時は自動検出)
+  daemon status [--pid n]    daemon の稼働状況を取得
+  batch                      stdin から 1 行 1 コマンドを読み常駐実行
+  schema                     全コマンド仕様を機械可読 JSON で出力
   version                    cli 自身のバージョン
 
 Global flags:
@@ -50,17 +56,43 @@ Handle: <index>-<generation> 形式 (例: 3-1)
 type Env struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	Stdin  io.Reader
 	Format output.Format
 	Opts   client.Options
 	// DialFunc はテストでフェイク接続に差し替える。nil なら client.Dial。
 	DialFunc func(client.Options) (*client.Client, error)
+
+	conn *client.Client // dial() がメモ化する。batch モードで複数コマンド間で使い回す。
 }
 
+// dial は接続をメモ化する。プロセス起動 1 回・接続 1 回にとどめたい batch モード
+// (docs/design/cli/CONCEPT.md §6) のために、Env の寿命内では同じ接続を再利用する。
 func (e *Env) dial() (*client.Client, error) {
-	if e.DialFunc != nil {
-		return e.DialFunc(e.Opts)
+	if e.conn != nil {
+		return e.conn, nil
 	}
-	return client.Dial(e.Opts)
+	var (
+		c   *client.Client
+		err error
+	)
+	if e.DialFunc != nil {
+		c, err = e.DialFunc(e.Opts)
+	} else {
+		c, err = client.Dial(e.Opts)
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.conn = c
+	return c, nil
+}
+
+// Close は保持中の接続を閉じる。batch モードの終了時に呼ぶ。
+func (e *Env) Close() {
+	if e.conn != nil {
+		e.conn.Close()
+		e.conn = nil
+	}
 }
 
 // fail はエラーを契約どおり stdout に 1 行出力し、exit code を返す。
@@ -75,7 +107,7 @@ func (e *Env) fail(err error) int {
 }
 
 // Run が cli のエントリポイント。exit code を返す。
-func Run(args []string, stdout, stderr io.Writer) int {
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	global := flag.NewFlagSet("nezia-cli", flag.ContinueOnError)
 	global.SetOutput(stderr)
 	global.Usage = func() { fmt.Fprint(stderr, usage) }
@@ -91,6 +123,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	env := &Env{
 		Stdout: stdout,
 		Stderr: stderr,
+		Stdin:  stdin,
 		Format: format,
 		Opts:   client.Options{Port: *port, ParentPID: *parentPID, Timeout: *timeout},
 	}
@@ -103,6 +136,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		global.Usage()
 		return client.ExitAppErr
 	}
+	defer env.Close()
 	return Dispatch(env, rest[0], rest[1:])
 }
 
@@ -117,6 +151,16 @@ func Dispatch(env *Env, name string, args []string) int {
 		return cmdPlay(env, args)
 	case "stop":
 		return cmdStop(env, args)
+	case "daemon":
+		return cmdDaemon(env, args)
+	case "batch":
+		stdin := env.Stdin
+		if stdin == nil {
+			stdin = os.Stdin
+		}
+		return cmdBatch(env, bufio.NewScanner(stdin))
+	case "schema":
+		return cmdSchema(env)
 	case "version":
 		env.Format.OK(env.Stdout, output.KV{Key: "version", Value: version})
 		return client.ExitOK
@@ -134,5 +178,5 @@ func Dispatch(env *Env, name string, args []string) int {
 
 // Main は os 直結のエントリポイント。
 func Main() {
-	os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
