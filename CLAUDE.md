@@ -53,7 +53,7 @@ ID は**論理ID（Hash ID）**と**物理ID（Entity ID）**の二層構造を�
 
 ## 設計ドキュメント
 
-詳細な設計は `docs/design/{core,daemon,ffi,integration}/` に分離している。実装時に該当領域のドキュメントを読むこと。
+詳細な設計は `docs/design/{core,daemon,ffi,integration,cli}/` に分離している。実装時に該当領域のドキュメントを読むこと。
 
 - [ECS アーキテクチャ](docs/design/core/ecs.md) — Entity/Component/System の役割定義、命名規則、update() パターン
 - [スレッドモデル](docs/design/core/threading.md) — サウンドスレッド/メインスレッドの責務分担、リアルタイム制約、スレッド間通信
@@ -70,6 +70,7 @@ ID は**論理ID（Hash ID）**と**物理ID（Entity ID）**の二層構造を�
 - [マスター出力キャプチャ](docs/design/core/capture.md) — Unity Recorder 等向けの master post-fader PCM タップ (lock-free SPSC + DSP クロック)
 - [コールバック](docs/design/core/callbacks.md) — イベントリングバッファ経由のコールバック設計、イベント種別と優先度、実装方針
 - [統合戦略](docs/design/integration/CONCEPT.md) — エンジン標準サウンド API（Unity AudioSource / UE AudioComponent 等）とのドロップイン互換方針
+- [nezia-cli コンセプト](docs/design/cli/CONCEPT.md) — daemon の front door となる Go 製 CLI。AIエージェント特化 + エディタ拡張フレンドリー（Process 起動 + stdout 1 行 JSON、gRPC は cli↔daemon に閉じる）
 
 ## コーディング規約
 
