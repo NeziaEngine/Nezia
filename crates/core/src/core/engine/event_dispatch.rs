@@ -12,11 +12,30 @@ use super::SoundEngine;
 use super::callback_registry::CallbackKind;
 
 impl SoundEngine {
+    /// `poll_events()` が drain した全イベントを受け取る観測用 sink を登録する。
+    ///
+    /// per-source コールバック (`play_with_callback` 等) とは独立した経路で、
+    /// `SourceDespawned` / `PlayFailed` / `StreamingUnderrun` / `CaptureOverflow` を
+    /// 含む全種別が流れる (daemon の SubscribeEvents 等のイベント転送用)。
+    /// sink は `poll_events()` を呼んだスレッドで同期的に呼ばれるため、
+    /// 軽量な処理 (チャネル送信程度) に留めること。
+    pub fn set_event_sink(&mut self, sink: impl FnMut(Event) + Send + 'static) {
+        self.event_sink = Some(Box::new(sink));
+    }
+
+    /// 登録済みの観測用 sink を解除する。
+    pub fn clear_event_sink(&mut self) {
+        self.event_sink = None;
+    }
+
     /// ゲームループの毎フレーム末尾で呼ぶ。
     ///
     /// サウンドスレッドからのイベントをドレインし、登録済みの `on_finish` コールバックを呼び出す。
     pub fn poll_events(&mut self) {
         while let Some(ev) = self.event_consumer.try_pop() {
+            if let Some(sink) = self.event_sink.as_mut() {
+                sink(ev);
+            }
             match ev {
                 Event::SourceFinished { token } => {
                     match self.callbacks.complete(token) {

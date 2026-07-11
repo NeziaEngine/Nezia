@@ -10,10 +10,9 @@
 // オーサリングツールからの RPC でアセットをロード・再生・停止する。設計は
 // docs/design/daemon/CONCEPT.md を正とする。
 //
-// このファイルは 0.2.0 の **Tier 1 (骨格)** スコープ:
-//   LoadBuffer / Play / Stop / StopAll / Ping
-// Bus/Mixer ロード・Clip-centric 反映・Random プレビュー・SubscribeEvents は
-// 後続 PR (Tier 2) で追加する。
+// このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
+//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents
+// Bus/Mixer ロード・Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
 
 package neziav1
 
@@ -30,11 +29,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PreviewDaemon_LoadBuffer_FullMethodName = "/nezia.v1.PreviewDaemon/LoadBuffer"
-	PreviewDaemon_Play_FullMethodName       = "/nezia.v1.PreviewDaemon/Play"
-	PreviewDaemon_Stop_FullMethodName       = "/nezia.v1.PreviewDaemon/Stop"
-	PreviewDaemon_StopAll_FullMethodName    = "/nezia.v1.PreviewDaemon/StopAll"
-	PreviewDaemon_Ping_FullMethodName       = "/nezia.v1.PreviewDaemon/Ping"
+	PreviewDaemon_LoadBuffer_FullMethodName      = "/nezia.v1.PreviewDaemon/LoadBuffer"
+	PreviewDaemon_Play_FullMethodName            = "/nezia.v1.PreviewDaemon/Play"
+	PreviewDaemon_Stop_FullMethodName            = "/nezia.v1.PreviewDaemon/Stop"
+	PreviewDaemon_StopAll_FullMethodName         = "/nezia.v1.PreviewDaemon/StopAll"
+	PreviewDaemon_Ping_FullMethodName            = "/nezia.v1.PreviewDaemon/Ping"
+	PreviewDaemon_SubscribeEvents_FullMethodName = "/nezia.v1.PreviewDaemon/SubscribeEvents"
 )
 
 // PreviewDaemonClient is the client API for PreviewDaemon service.
@@ -54,6 +54,11 @@ type PreviewDaemonClient interface {
 	StopAll(ctx context.Context, in *StopAllRequest, opts ...grpc.CallOption) (*StopAllResponse, error)
 	// 疎通確認 (port discovery 後のハンドシェイク用)。
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
+	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
+	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
+	// 取りこぼす (lagged)。取りこぼしは events_dropped で通知する。
+	SubscribeEvents(ctx context.Context, in *SubscribeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineEvent], error)
 }
 
 type previewDaemonClient struct {
@@ -114,6 +119,25 @@ func (c *previewDaemonClient) Ping(ctx context.Context, in *PingRequest, opts ..
 	return out, nil
 }
 
+func (c *previewDaemonClient) SubscribeEvents(ctx context.Context, in *SubscribeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &PreviewDaemon_ServiceDesc.Streams[0], PreviewDaemon_SubscribeEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SubscribeEventsRequest, EngineEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PreviewDaemon_SubscribeEventsClient = grpc.ServerStreamingClient[EngineEvent]
+
 // PreviewDaemonServer is the server API for PreviewDaemon service.
 // All implementations must embed UnimplementedPreviewDaemonServer
 // for forward compatibility.
@@ -131,6 +155,11 @@ type PreviewDaemonServer interface {
 	StopAll(context.Context, *StopAllRequest) (*StopAllResponse, error)
 	// 疎通確認 (port discovery 後のハンドシェイク用)。
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
+	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
+	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
+	// 取りこぼす (lagged)。取りこぼしは events_dropped で通知する。
+	SubscribeEvents(*SubscribeEventsRequest, grpc.ServerStreamingServer[EngineEvent]) error
 	mustEmbedUnimplementedPreviewDaemonServer()
 }
 
@@ -155,6 +184,9 @@ func (UnimplementedPreviewDaemonServer) StopAll(context.Context, *StopAllRequest
 }
 func (UnimplementedPreviewDaemonServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedPreviewDaemonServer) SubscribeEvents(*SubscribeEventsRequest, grpc.ServerStreamingServer[EngineEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeEvents not implemented")
 }
 func (UnimplementedPreviewDaemonServer) mustEmbedUnimplementedPreviewDaemonServer() {}
 func (UnimplementedPreviewDaemonServer) testEmbeddedByValue()                       {}
@@ -267,6 +299,17 @@ func _PreviewDaemon_Ping_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PreviewDaemon_SubscribeEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SubscribeEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PreviewDaemonServer).SubscribeEvents(m, &grpc.GenericServerStream[SubscribeEventsRequest, EngineEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type PreviewDaemon_SubscribeEventsServer = grpc.ServerStreamingServer[EngineEvent]
+
 // PreviewDaemon_ServiceDesc is the grpc.ServiceDesc for PreviewDaemon service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -295,6 +338,12 @@ var PreviewDaemon_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PreviewDaemon_Ping_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SubscribeEvents",
+			Handler:       _PreviewDaemon_SubscribeEvents_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "nezia/v1/daemon.proto",
 }

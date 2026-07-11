@@ -46,7 +46,7 @@ func (f *fakeDaemon) StopAll(context.Context, *neziav1.StopAllRequest) (*neziav1
 }
 
 // newEnv はフェイク daemon に接続する Env とサーバ停止関数を返す。
-func newEnv(t *testing.T, fake *fakeDaemon, format output.Format) (*Env, *strings.Builder) {
+func newEnv(t *testing.T, fake neziav1.PreviewDaemonServer, format output.Format) (*Env, *strings.Builder) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()

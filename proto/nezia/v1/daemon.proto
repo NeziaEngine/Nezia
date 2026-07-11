@@ -6,10 +6,9 @@ syntax = "proto3";
 // オーサリングツールからの RPC でアセットをロード・再生・停止する。設計は
 // docs/design/daemon/CONCEPT.md を正とする。
 //
-// このファイルは 0.2.0 の **Tier 1 (骨格)** スコープ:
-//   LoadBuffer / Play / Stop / StopAll / Ping
-// Bus/Mixer ロード・Clip-centric 反映・Random プレビュー・SubscribeEvents は
-// 後続 PR (Tier 2) で追加する。
+// このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
+//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents
+// Bus/Mixer ロード・Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
 package nezia.v1;
 
 import "nezia/v1/common.proto";
@@ -31,6 +30,12 @@ service PreviewDaemon {
 
   // 疎通確認 (port discovery 後のハンドシェイク用)。
   rpc Ping(PingRequest) returns (PingResponse);
+
+  // エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
+  // 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
+  // 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
+  // 取りこぼす (lagged)。取りこぼしは events_dropped で通知する。
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream EngineEvent);
 }
 
 message LoadBufferRequest {
@@ -69,4 +74,42 @@ message PingRequest {}
 message PingResponse {
   // daemon binary のバージョン (workspace version)。
   string version = 1;
+}
+
+message SubscribeEventsRequest {}
+
+// エンジンイベント。core の `Event` enum のうち外部ツールに意味のあるものを
+// 変換して流す (コールバック token 等の内部表現は露出しない)。
+message EngineEvent {
+  oneof event {
+    SourceStoppedEvent source_stopped = 1;
+    PlayFailedEvent play_failed = 2;
+    StreamingUnderrunEvent streaming_underrun = 3;
+    CaptureOverflowEvent capture_overflow = 4;
+    SubscriberLaggedEvent subscriber_lagged = 5;
+  }
+}
+
+// ソースが停止しハンドルが無効化された (自然終了 / Stop / StopAll のいずれも含む)。
+// core の `Event::SourceDespawned` に対応する。
+message SourceStoppedEvent {
+  SourceHandle source = 1;
+}
+
+// 発音要求がボイス数上限で拒否された (core の `Event::PlayFailed`)。
+message PlayFailedEvent {}
+
+// ストリーミング再生のデコードが再生に追いつかなかった。
+message StreamingUnderrunEvent {
+  BufferId buffer = 1;
+}
+
+// マスターキャプチャのリングが溢れてサンプルを取りこぼした。
+message CaptureOverflowEvent {
+  uint32 dropped_samples = 1;
+}
+
+// この購読者が配信に追いつけず、直近のイベントを取りこぼした。
+message SubscriberLaggedEvent {
+  uint64 events_dropped = 1;
 }

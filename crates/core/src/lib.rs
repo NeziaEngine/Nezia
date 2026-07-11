@@ -54,6 +54,10 @@ pub use container::ContainerId;
 /// バス・ソースを識別するランタイムハンドル。
 pub use entity::EntityId;
 
+/// audio thread から `poll_events()` 経由で届くエンジンイベント。
+/// `SoundEngine::set_event_sink` で全イベントを観測できる (daemon の転送用)。
+pub use event::Event;
+
 /// ベンチマーク / プロファイリング用の DSP CPU 計測値とドロップアウトカウンタ。
 pub use metrics::{DropoutStats, DspStats};
 

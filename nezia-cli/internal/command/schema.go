@@ -73,6 +73,7 @@ func cmdSchema(env *Env) int {
 					"running": "bool", "pid": "int?", "port": "int?", "version": "string?",
 				},
 			},
+			{Name: "subscribe", Output: "JSONL stream: {event: source_stopped|play_failed|streaming_underrun|capture_overflow|subscriber_lagged, ...}"},
 			{Name: "batch", Output: "stdin から 1 行 1 コマンド、stdout に 1 行 1 結果 (JSONL)"},
 			{Name: "schema", Output: "this document"},
 			{Name: "version", Output: map[string]string{"version": "string"}},
