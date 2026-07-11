@@ -291,12 +291,13 @@ impl AudioThread {
 
         // 再生終了 Source の despawn。SourceFinished イベントを push する。
         let event_producer = &mut self.event_producer;
+        let metrics = &self.metrics;
         SourceLifecycleSystem::update(
             &mut self.source_world,
             &mut self.spatial_world,
             &buffers,
             &mut |ev| {
-                let _ = event_producer.try_push(ev);
+                emit_event(event_producer, metrics, ev);
             },
         );
 
@@ -329,9 +330,13 @@ impl AudioThread {
                 // 1 度だけ発火する。連続発火時は「何 sample 落ちたか」が累積で
                 // dropped_samples() 経由で取れるので、イベント側は U32_MAX で頭打ち。
                 let dropped_u32 = dropped.min(u32::MAX as u64) as u32;
-                let _ = self.event_producer.try_push(Event::CaptureOverflow {
-                    dropped_samples: dropped_u32,
-                });
+                emit_event(
+                    &mut self.event_producer,
+                    &self.metrics,
+                    Event::CaptureOverflow {
+                        dropped_samples: dropped_u32,
+                    },
+                );
             }
         }
 
@@ -358,9 +363,11 @@ impl AudioThread {
                     .streaming_underrun_count
                     .fetch_add(1, Ordering::Relaxed);
                 if let Some(id) = state.buffer_id() {
-                    let _ = self
-                        .event_producer
-                        .try_push(Event::StreamingUnderrun { buffer: id });
+                    emit_event(
+                        &mut self.event_producer,
+                        &self.metrics,
+                        Event::StreamingUnderrun { buffer: id },
+                    );
                 }
             }
         }
@@ -416,6 +423,21 @@ impl AudioThread {
             .callback_total_ns
             .fetch_add(elapsed_ns, Ordering::Relaxed);
         update_peak(&self.metrics.peak_callback_ns, elapsed_ns);
+    }
+}
+
+/// イベントリングへ push し、満杯による失敗を `event_queue_full` で計数する。
+///
+/// audio thread から呼ばれるため非ブロッキング必須 (`try_push` + atomic add のみ)。
+/// リング容量は `event_ring_capacity()` で worst-case バーストを収容するよう
+/// 設計されているので、このカウンタが増える = 容量前提の破れを意味する。
+pub(super) fn emit_event(
+    producer: &mut ringbuf::HeapProd<Event>,
+    metrics: &EngineMetrics,
+    ev: Event,
+) {
+    if producer.try_push(ev).is_err() {
+        metrics.event_queue_full.fetch_add(1, Ordering::Relaxed);
     }
 }
 

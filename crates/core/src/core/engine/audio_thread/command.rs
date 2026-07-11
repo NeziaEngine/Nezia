@@ -6,8 +6,6 @@
 
 use std::sync::atomic::Ordering;
 
-use ringbuf::traits::Producer;
-
 use crate::bus::{BusComponent, BusWorld, SendDestKind};
 use crate::command::{Command, SendDestination, SpawnSpatialInit};
 use crate::effect::{CompressorWorld, EffectKind, EffectWorld, EffectWorlds};
@@ -18,6 +16,7 @@ use crate::source::{SourceComponent, SourceState, SourceWorld};
 use crate::spatial::SpatialWorld;
 
 use super::effect::{apply_effect_param, despawn_effect, spawn_effect};
+use super::emit_event;
 
 /// 1 個のコマンドをサウンドスレッド側のワールドに反映する。
 #[allow(clippy::too_many_arguments)]
@@ -39,7 +38,7 @@ pub(super) fn process_command(
         Command::SetVolume(v) => {
             bus_world.set_gain(master_bus_id, v.clamp(0.0, 1.0));
         }
-        Command::StopAll => stop_all(source_world, spatial_world, event_producer),
+        Command::StopAll => stop_all(source_world, spatial_world, event_producer, metrics),
         Command::UpdateProcessOrder { order, len } => {
             bus_world.set_process_order(&order[..len as usize]);
         }
@@ -392,20 +391,25 @@ fn try_spawn_source(
     } else {
         metrics.dropped_play_calls.fetch_add(1, Ordering::Relaxed);
         if token != 0 {
-            let _ = event_producer.try_push(Event::PlayFailed { token });
+            emit_event(event_producer, metrics, Event::PlayFailed { token });
         }
     }
 }
 
 /// `Command::StopAll` 本体。既存ソースぶんの despawn 通知を発行してから world を作り直す。
+///
+/// despawn 通知は全生存ソースぶんが 1 callback で一括発行される worst-case バースト。
+/// イベントリング容量 (`event_ring_capacity` = 2 × max_sources + margin) はこのケースを
+/// 収容する前提で設計されている。
 fn stop_all(
     source_world: &mut SourceWorld,
     spatial_world: &mut SpatialWorld,
     event_producer: &mut ringbuf::HeapProd<Event>,
+    metrics: &EngineMetrics,
 ) {
     for dense in 0..source_world.len() {
         if let Some(id) = source_world.entity_at_dense(dense) {
-            let _ = event_producer.try_push(Event::SourceDespawned { id });
+            emit_event(event_producer, metrics, Event::SourceDespawned { id });
         }
     }
     *source_world = SourceWorld::new();
