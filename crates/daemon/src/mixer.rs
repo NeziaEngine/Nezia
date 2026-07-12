@@ -139,7 +139,8 @@ fn build_inner(
             let Some(params) = &eff.params else {
                 return Err(format!("bus {:?} effect[{idx}] has no params", bus.name));
             };
-            let (kind, id) = spawn_effect(engine, bus_id, position, params).ok_or_else(|| {
+            let (kind, id) = spawn_effect(engine, EffectTarget::Bus(bus_id), position, params)
+                .ok_or_else(|| {
                 format!("bus {:?} effect[{idx}]: effect capacity reached", bus.name)
             })?;
             if !eff.enabled {
@@ -192,14 +193,77 @@ fn build_inner(
     Ok(())
 }
 
+/// クリップの Source 対象エフェクト / Send をスポーン済みソースへ適用する。
+///
+/// 戻り値は生成した EffectId 群 (ソース despawn 後に呼び出し側が `remove_effect`
+/// で回収する。Source 起点 Send は core が despawn 時に自動解放するため追跡不要)。
+/// 途中で失敗した場合は生成済みエフェクトを巻き戻してからエラーを返す。
+pub fn apply_clip(
+    engine: &mut SoundEngine,
+    source: EntityId,
+    clip: &crate::proto::v1::ClipParams,
+    mixer: Option<&MixerState>,
+) -> Result<Vec<EffectId>, String> {
+    let mut ids: Vec<EffectId> = Vec::new();
+    let rollback = |engine: &mut SoundEngine, ids: &[EffectId]| {
+        for &id in ids {
+            let _ = engine.remove_effect(id);
+        }
+        let _ = engine.stop_source(source);
+    };
+
+    for (idx, eff) in clip.effects.iter().enumerate() {
+        let Some(params) = &eff.params else {
+            rollback(engine, &ids);
+            return Err(format!("clip effect[{idx}] has no params"));
+        };
+        if matches!(
+            params,
+            effect_def::Params::Reverb(_) | effect_def::Params::Compressor(_)
+        ) {
+            rollback(engine, &ids);
+            return Err(format!(
+                "clip effect[{idx}]: reverb/compressor are bus-only (use an aux bus + send)"
+            ));
+        }
+        let position = to_effect_position(eff.position);
+        let Some((_, id)) = spawn_effect(engine, EffectTarget::Source(source), position, params)
+        else {
+            rollback(engine, &ids);
+            return Err(format!("clip effect[{idx}]: rejected (capacity or unsupported position)"));
+        };
+        if !eff.enabled {
+            let _ = engine.set_effect_enabled(id, false);
+        }
+        ids.push(id);
+    }
+
+    for (idx, send) in clip.sends.iter().enumerate() {
+        let dst = mixer
+            .and_then(|m| m.resolve(&send.target_bus))
+            .ok_or_else(|| {
+                rollback(engine, &ids);
+                format!("clip send[{idx}]: unknown target bus {:?}", send.target_bus)
+            })?;
+        if engine
+            .add_source_send(source, dst, to_send_position(send.position), send.gain)
+            .is_none()
+        {
+            rollback(engine, &ids);
+            return Err(format!("clip send[{idx}]: rejected (capacity)"));
+        }
+    }
+
+    Ok(ids)
+}
+
 /// EffectDef の oneof からエフェクトを spawn し、種別ごとのパラメータを流し込む。
 fn spawn_effect(
     engine: &mut SoundEngine,
-    bus: EntityId,
+    target: EffectTarget,
     position: EffectPosition,
     params: &effect_def::Params,
 ) -> Option<(EffectKind, EffectId)> {
-    let target = EffectTarget::Bus(bus);
     match params {
         effect_def::Params::LowPass(p) => {
             let id = engine.add_effect(target, EffectKind::Lpf, position)?;

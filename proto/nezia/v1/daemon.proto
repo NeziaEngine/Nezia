@@ -60,6 +60,48 @@ message PlayRequest {
   // 出力先バスの論理名 (LoadMixer で定義したもの)。空 = Master 直結。
   // 未知の名前は NOT_FOUND エラー。
   string bus = 5;
+  // Clip-centric パラメータ (優先度 / 3D / エフェクト / Send)。省略 = 2D 素通し。
+  // Unity の NeziaSoundAsset の音響デフォルトに対応する (IP-4「クリップが音を持つ」)。
+  ClipParams clip = 6;
+}
+
+// クリップ側の音響デフォルト。volume / pitch / loop / bus は PlayRequest 直下。
+message ClipParams {
+  // 発音優先度。0 = 最高、255 = 最低 (Unity AudioSource.priority 互換)。
+  // 省略 (0) はデフォルト 128 として扱う点に注意: 明示的に最高優先度に
+  // したい場合は 1 を指定する。
+  uint32 priority = 1;
+  // 3D 空間処理。省略 = 2D ソース。
+  SpatialParams spatial = 2;
+  // Source 対象エフェクトチェーン。Bus 専用種別 (Reverb / Compressor) は
+  // INVALID_ARGUMENT (Aux Bus + Send 経由で使う)。
+  repeated EffectDef effects = 3;
+  // Source 起点の Aux Send。ソース despawn 時に core 側で自動解放される。
+  repeated SourceSendDef sends = 4;
+}
+
+message SpatialParams {
+  AttenuationModel model = 1;
+  float min_distance = 2;
+  float max_distance = 3;
+  float rolloff = 4;
+  // [0.0, 1.0]。Unity AudioSource.dopplerLevel 互換。
+  float doppler_level = 5;
+  // Custom Attenuation Curve は 0.2.0 では未対応 (後続で追加検討)。
+}
+
+enum AttenuationModel {
+  ATTENUATION_MODEL_INVERSE_DISTANCE = 0;  // OpenAL AL_INVERSE_DISTANCE_CLAMPED 相当
+  ATTENUATION_MODEL_NONE = 1;
+  ATTENUATION_MODEL_LINEAR = 2;
+  ATTENUATION_MODEL_EXPONENTIAL = 3;
+}
+
+// Source 起点 Send。宛て先はバスのみ (Compressor sidechain はバス起点のみ対応)。
+message SourceSendDef {
+  string target_bus = 1;
+  ChainPosition position = 2;
+  float gain = 3;
 }
 message PlayResponse {
   SourceHandle source = 1;

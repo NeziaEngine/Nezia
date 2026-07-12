@@ -81,6 +81,7 @@ func cmdPlay(env *Env, args []string) int {
 	pitch := fs.Float64("pitch", 1.0, "playback rate")
 	loop := fs.Bool("loop", false, "loop playback")
 	bus := fs.String("bus", "", "target bus name (from mixer load)")
+	clipPath := fs.String("clip", "", "clip params JSON file (ClipParams)")
 	pos, err := parseAnywhere(fs, args)
 	if err != nil {
 		return client.ExitAppErr
@@ -91,6 +92,14 @@ func cmdPlay(env *Env, args []string) int {
 	h, err := client.ParseHandle(pos[0])
 	if err != nil {
 		return env.fail(err)
+	}
+	// --clip: ClipParams (proto) を protojson で読む。JSON スキーマ = proto 定義。
+	var clip *neziav1.ClipParams
+	if *clipPath != "" {
+		clip = &neziav1.ClipParams{}
+		if cerr := readProtoJSON(*clipPath, clip); cerr != nil {
+			return env.fail(cerr)
+		}
 	}
 	c, err := env.dial()
 	if err != nil {
@@ -104,6 +113,7 @@ func cmdPlay(env *Env, args []string) int {
 		Pitch:   float32(*pitch),
 		Looping: *loop,
 		Bus:     *bus,
+		Clip:    clip,
 	})
 	if err != nil {
 		return env.fail(client.MapRPCError(err))
