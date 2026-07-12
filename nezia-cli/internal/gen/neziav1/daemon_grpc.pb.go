@@ -11,8 +11,8 @@
 // docs/design/daemon/CONCEPT.md を正とする。
 //
 // このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
-//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents
-// Bus/Mixer ロード・Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
+//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents / LoadMixer
+// Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
 
 package neziav1
 
@@ -34,6 +34,7 @@ const (
 	PreviewDaemon_Stop_FullMethodName            = "/nezia.v1.PreviewDaemon/Stop"
 	PreviewDaemon_StopAll_FullMethodName         = "/nezia.v1.PreviewDaemon/StopAll"
 	PreviewDaemon_Ping_FullMethodName            = "/nezia.v1.PreviewDaemon/Ping"
+	PreviewDaemon_LoadMixer_FullMethodName       = "/nezia.v1.PreviewDaemon/LoadMixer"
 	PreviewDaemon_SubscribeEvents_FullMethodName = "/nezia.v1.PreviewDaemon/SubscribeEvents"
 )
 
@@ -54,6 +55,10 @@ type PreviewDaemonClient interface {
 	StopAll(ctx context.Context, in *StopAllRequest, opts ...grpc.CallOption) (*StopAllResponse, error)
 	// 疎通確認 (port discovery 後のハンドシェイク用)。
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	// ミキサー構成 (バス木 + エフェクト + Send) を一括ロードする。
+	// 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
+	// Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
+	LoadMixer(ctx context.Context, in *LoadMixerRequest, opts ...grpc.CallOption) (*LoadMixerResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -119,6 +124,16 @@ func (c *previewDaemonClient) Ping(ctx context.Context, in *PingRequest, opts ..
 	return out, nil
 }
 
+func (c *previewDaemonClient) LoadMixer(ctx context.Context, in *LoadMixerRequest, opts ...grpc.CallOption) (*LoadMixerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LoadMixerResponse)
+	err := c.cc.Invoke(ctx, PreviewDaemon_LoadMixer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *previewDaemonClient) SubscribeEvents(ctx context.Context, in *SubscribeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &PreviewDaemon_ServiceDesc.Streams[0], PreviewDaemon_SubscribeEvents_FullMethodName, cOpts...)
@@ -155,6 +170,10 @@ type PreviewDaemonServer interface {
 	StopAll(context.Context, *StopAllRequest) (*StopAllResponse, error)
 	// 疎通確認 (port discovery 後のハンドシェイク用)。
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	// ミキサー構成 (バス木 + エフェクト + Send) を一括ロードする。
+	// 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
+	// Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
+	LoadMixer(context.Context, *LoadMixerRequest) (*LoadMixerResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -184,6 +203,9 @@ func (UnimplementedPreviewDaemonServer) StopAll(context.Context, *StopAllRequest
 }
 func (UnimplementedPreviewDaemonServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedPreviewDaemonServer) LoadMixer(context.Context, *LoadMixerRequest) (*LoadMixerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LoadMixer not implemented")
 }
 func (UnimplementedPreviewDaemonServer) SubscribeEvents(*SubscribeEventsRequest, grpc.ServerStreamingServer[EngineEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeEvents not implemented")
@@ -299,6 +321,24 @@ func _PreviewDaemon_Ping_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PreviewDaemon_LoadMixer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LoadMixerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PreviewDaemonServer).LoadMixer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PreviewDaemon_LoadMixer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PreviewDaemonServer).LoadMixer(ctx, req.(*LoadMixerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PreviewDaemon_SubscribeEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -336,6 +376,10 @@ var PreviewDaemon_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Ping",
 			Handler:    _PreviewDaemon_Ping_Handler,
+		},
+		{
+			MethodName: "LoadMixer",
+			Handler:    _PreviewDaemon_LoadMixer_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -139,6 +139,60 @@ func (x *SourceHandle) GetGeneration() uint32 {
 	return 0
 }
 
+// バスを制御するハンドル。core の物理ID (`EntityId`) に対応する。
+// LoadMixer の再ロードで旧ハンドルは無効化される。
+type BusHandle struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	Generation    uint32                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BusHandle) Reset() {
+	*x = BusHandle{}
+	mi := &file_nezia_v1_common_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BusHandle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BusHandle) ProtoMessage() {}
+
+func (x *BusHandle) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_common_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BusHandle.ProtoReflect.Descriptor instead.
+func (*BusHandle) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *BusHandle) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *BusHandle) GetGeneration() uint32 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
 var File_nezia_v1_common_proto protoreflect.FileDescriptor
 
 const file_nezia_v1_common_proto_rawDesc = "" +
@@ -150,6 +204,11 @@ const file_nezia_v1_common_proto_rawDesc = "" +
 	"generation\x18\x02 \x01(\rR\n" +
 	"generation\"D\n" +
 	"\fSourceHandle\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\rR\n" +
+	"generation\"A\n" +
+	"\tBusHandle\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\rR\n" +
@@ -167,10 +226,11 @@ func file_nezia_v1_common_proto_rawDescGZIP() []byte {
 	return file_nezia_v1_common_proto_rawDescData
 }
 
-var file_nezia_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_nezia_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_nezia_v1_common_proto_goTypes = []any{
 	(*BufferId)(nil),     // 0: nezia.v1.BufferId
 	(*SourceHandle)(nil), // 1: nezia.v1.SourceHandle
+	(*BusHandle)(nil),    // 2: nezia.v1.BusHandle
 }
 var file_nezia_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -191,7 +251,7 @@ func file_nezia_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nezia_v1_common_proto_rawDesc), len(file_nezia_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

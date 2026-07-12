@@ -29,14 +29,14 @@ Commands:
   ping                       daemon の疎通確認とバージョン取得
   load <path>                オーディオファイルをロードし buffer handle を返す
   play <buffer> [flags]      buffer を再生し source handle を返す
-      --volume <f>           線形ゲイン (default 1.0)
-      --pitch <f>            再生レート倍率 (default 1.0)
-      --loop                 ループ再生
+      --volume <f> --pitch <f> --loop
+      --bus <name>           出力先バス (mixer load の論理名、省略 = Master)
   stop <source>              source を停止する
   stop --all                 全 source を停止する
   daemon start                ヘッドレス daemon を起動 (pid/port を返す)
   daemon stop [--pid n]      daemon を停止 (省略時は自動検出)
   daemon status [--pid n]    daemon の稼働状況を取得
+  mixer load <file.json>     ミキサー構成 (バス/エフェクト/send) を一括ロード
   subscribe                  エンジンイベントを JSONL でストリーム受信
   batch                      stdin から 1 行 1 コマンドを読み常駐実行
   schema                     全コマンド仕様を機械可読 JSON で出力
@@ -160,6 +160,8 @@ func Dispatch(env *Env, name string, args []string) int {
 			stdin = os.Stdin
 		}
 		return cmdBatch(env, bufio.NewScanner(stdin))
+	case "mixer":
+		return cmdMixer(env, args)
 	case "subscribe":
 		return cmdSubscribe(env)
 	case "schema":

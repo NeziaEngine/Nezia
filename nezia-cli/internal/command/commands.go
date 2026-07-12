@@ -80,12 +80,13 @@ func cmdPlay(env *Env, args []string) int {
 	volume := fs.Float64("volume", 1.0, "linear gain")
 	pitch := fs.Float64("pitch", 1.0, "playback rate")
 	loop := fs.Bool("loop", false, "loop playback")
+	bus := fs.String("bus", "", "target bus name (from mixer load)")
 	pos, err := parseAnywhere(fs, args)
 	if err != nil {
 		return client.ExitAppErr
 	}
 	if len(pos) != 1 {
-		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: "usage: play <buffer> [--volume f] [--pitch f] [--loop]", Exit: client.ExitAppErr})
+		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: "usage: play <buffer> [--volume f] [--pitch f] [--loop] [--bus name]", Exit: client.ExitAppErr})
 	}
 	h, err := client.ParseHandle(pos[0])
 	if err != nil {
@@ -102,6 +103,7 @@ func cmdPlay(env *Env, args []string) int {
 		Volume:  float32(*volume),
 		Pitch:   float32(*pitch),
 		Looping: *loop,
+		Bus:     *bus,
 	})
 	if err != nil {
 		return env.fail(client.MapRPCError(err))

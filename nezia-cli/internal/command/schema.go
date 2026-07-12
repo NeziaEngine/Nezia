@@ -49,6 +49,7 @@ func cmdSchema(env *Env) int {
 					{Name: "--volume", Type: "float", Default: 1.0},
 					{Name: "--pitch", Type: "float", Default: 1.0},
 					{Name: "--loop", Type: "bool", Default: false},
+					{Name: "--bus", Type: "string", Optional: true},
 				},
 				Output: map[string]string{"source": "string (<index>-<generation>)"},
 			},
@@ -72,6 +73,11 @@ func cmdSchema(env *Env) int {
 				Output: map[string]string{
 					"running": "bool", "pid": "int?", "port": "int?", "version": "string?",
 				},
+			},
+			{
+				Name:   "mixer load",
+				Args:   []schemaArg{{Name: "file", Type: "string", Positional: true}},
+				Output: map[string]string{"buses": "object (name -> bus handle)"},
 			},
 			{Name: "subscribe", Output: "JSONL stream: {event: source_stopped|play_failed|streaming_underrun|capture_overflow|subscriber_lagged, ...}"},
 			{Name: "batch", Output: "stdin から 1 行 1 コマンド、stdout に 1 行 1 結果 (JSONL)"},

@@ -266,7 +266,7 @@ Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset P
 - [x] daemon binary 骨格 (gRPC server + port discovery file + parent PID 監視)
 - [x] `LoadBuffer` / `Play` / `Stop` (Tier 1 相当、`StopAll` / `Ping` を追加)
 - [ ] **`nezia-cli` — daemon gRPC を叩く front door** (`load` / `play` / `stop`、stdout JSON)
-- [ ] Bus tree / Mixer asset ロード
+- [x] Bus tree / Mixer asset ロード (`LoadMixer` — バス木 + エフェクト 4 種 + Send/Sidechain、再ロードは破棄再構築)
 - [ ] Clip-centric パラメータ反映 (volume / pitch / loop / spatial / effect chain / send)
 - [ ] Random Container プレビュー
 - [x] `SubscribeEvents` (SourceStopped / PlayFailed / StreamingUnderrun / CaptureOverflow)
