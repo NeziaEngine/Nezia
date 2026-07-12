@@ -38,6 +38,9 @@ Commands:
   daemon stop [--pid n]      daemon を停止 (省略時は自動検出)
   daemon status [--pid n]    daemon の稼働状況を取得
   mixer load <file.json>     ミキサー構成 (バス/エフェクト/send) を一括ロード
+  container create <buf...>  Random Container を生成 (play ごとにランダム選択)
+  container play <c> [flags] container から 1 つ選んで再生 (--volume 等は play と同じ)
+  container destroy <c>      container を破棄
   subscribe                  エンジンイベントを JSONL でストリーム受信
   batch                      stdin から 1 行 1 コマンドを読み常駐実行
   schema                     全コマンド仕様を機械可読 JSON で出力
@@ -161,6 +164,8 @@ func Dispatch(env *Env, name string, args []string) int {
 			stdin = os.Stdin
 		}
 		return cmdBatch(env, bufio.NewScanner(stdin))
+	case "container":
+		return cmdContainer(env, args)
 	case "mixer":
 		return cmdMixer(env, args)
 	case "subscribe":

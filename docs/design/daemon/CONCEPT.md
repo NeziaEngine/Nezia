@@ -268,7 +268,7 @@ Phase 4-α / Phase 4-3 を参照。0.2.0 の到達目標は **Unity IP-6 Asset P
 - [ ] **`nezia-cli` — daemon gRPC を叩く front door** (`load` / `play` / `stop`、stdout JSON)
 - [x] Bus tree / Mixer asset ロード (`LoadMixer` — バス木 + エフェクト 4 種 + Send/Sidechain、再ロードは破棄再構築)
 - [x] Clip-centric パラメータ反映 (`PlayRequest.clip` — priority / spatial / source effect chain / source send。custom attenuation curve は未対応)
-- [ ] Random Container プレビュー
+- [x] Random Container プレビュー (`CreateContainer` / `PlayContainer` / `DestroyContainer`)
 - [x] `SubscribeEvents` (SourceStopped / PlayFailed / StreamingUnderrun / CaptureOverflow)
 
 0.2.0 で実装しないもの:

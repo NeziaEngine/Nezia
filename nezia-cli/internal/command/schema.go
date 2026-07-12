@@ -80,6 +80,26 @@ func cmdSchema(env *Env) int {
 				Args:   []schemaArg{{Name: "file", Type: "string", Positional: true}},
 				Output: map[string]string{"buses": "object (name -> bus handle)"},
 			},
+			{
+				Name:   "container create",
+				Args:   []schemaArg{{Name: "buffer...", Type: "string", Positional: true}},
+				Output: map[string]string{"container": "string"},
+			},
+			{
+				Name: "container play",
+				Args: []schemaArg{
+					{Name: "container", Type: "string", Positional: true},
+					{Name: "--volume", Type: "float", Default: 1.0},
+					{Name: "--pitch", Type: "float", Default: 1.0},
+					{Name: "--loop", Type: "bool", Default: false},
+					{Name: "--bus", Type: "string", Optional: true},
+				},
+				Output: map[string]string{"source": "string"},
+			},
+			{
+				Name: "container destroy",
+				Args: []schemaArg{{Name: "container", Type: "string", Positional: true}},
+			},
 			{Name: "subscribe", Output: "JSONL stream: {event: source_stopped|play_failed|streaming_underrun|capture_overflow|subscriber_lagged, ...}"},
 			{Name: "batch", Output: "stdin から 1 行 1 コマンド、stdout に 1 行 1 結果 (JSONL)"},
 			{Name: "schema", Output: "this document"},

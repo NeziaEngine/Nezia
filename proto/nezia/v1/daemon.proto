@@ -7,8 +7,8 @@ syntax = "proto3";
 // docs/design/daemon/CONCEPT.md を正とする。
 //
 // このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
-//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents / LoadMixer
-// Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
+// 0.2.0 の Tier 1 (骨格) + Tier 2 (LoadMixer / Clip-centric / Random Container /
+// SubscribeEvents) を含む。
 package nezia.v1;
 
 import "nezia/v1/common.proto";
@@ -35,6 +35,15 @@ service PreviewDaemon {
   // 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
   // Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
   rpc LoadMixer(LoadMixerRequest) returns (LoadMixerResponse);
+
+  // Random Container を生成する。children から再生ごとにランダムに 1 つ選ぶ。
+  rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
+
+  // Container から子を 1 つ選んで再生する。選択結果の source handle を返す。
+  rpc PlayContainer(PlayContainerRequest) returns (PlayResponse);
+
+  // Container を破棄する。再生中の Source には影響しない。
+  rpc DestroyContainer(DestroyContainerRequest) returns (DestroyContainerResponse);
 
   // エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
   // 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
@@ -263,4 +272,32 @@ message CompressorTarget {
   string bus = 1;
   // そのバスの effects 内 index (Compressor であること)。
   uint32 effect_index = 2;
+}
+
+// ── Random Container ──────────────────────────────────────────────────────
+
+message CreateContainerRequest {
+  // 子バッファ (LoadBuffer 済み)。空は INVALID_ARGUMENT。
+  repeated BufferId children = 1;
+}
+message CreateContainerResponse {
+  ContainerHandle container = 1;
+}
+
+message PlayContainerRequest {
+  ContainerHandle container = 1;
+  float volume = 2;  // 線形ゲイン (1.0 = 0 dB)
+  float pitch = 3;   // 再生レート倍率 (1.0 = 原音)
+  bool looping = 4;
+  // 出力先バスの論理名 (LoadMixer 参照)。空 = Master 直結。
+  // ClipParams 適用は core 側 API の拡張後に追加する (未対応)。
+  string bus = 5;
+}
+
+message DestroyContainerRequest {
+  ContainerHandle container = 1;
+}
+message DestroyContainerResponse {
+  // false = 未存在 or generation 不一致。
+  bool destroyed = 1;
 }

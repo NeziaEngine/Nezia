@@ -31,3 +31,9 @@ message BusHandle {
   uint32 index = 1;
   uint32 generation = 2;
 }
+
+// Random Container のハンドル。core の `ContainerId` に対応する。
+message ContainerHandle {
+  uint32 index = 1;
+  uint32 generation = 2;
+}

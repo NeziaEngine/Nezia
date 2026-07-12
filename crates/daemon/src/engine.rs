@@ -12,7 +12,7 @@ use std::io;
 use std::time::Duration;
 
 use crossbeam_channel::{RecvTimeoutError, Sender, unbounded};
-use nezia_core::{BufferId, EntityId, Event, SoundEngine, SpawnSpatialInit};
+use nezia_core::{BufferId, ContainerId, EntityId, Event, SoundEngine, SpawnSpatialInit};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::mixer::{self, MixerState};
@@ -57,6 +57,22 @@ enum EngineRequest {
     LoadMixer {
         def: MixerDef,
         reply: oneshot::Sender<Result<Vec<(String, EntityId)>, String>>,
+    },
+    CreateContainer {
+        children: Vec<BufferId>,
+        reply: oneshot::Sender<Option<ContainerId>>,
+    },
+    PlayContainer {
+        container: ContainerId,
+        volume: f32,
+        pitch: f32,
+        looping: bool,
+        bus: Option<String>,
+        reply: oneshot::Sender<PlayReply>,
+    },
+    DestroyContainer {
+        container: ContainerId,
+        reply: oneshot::Sender<bool>,
     },
 }
 
@@ -150,6 +166,50 @@ impl EngineHandle {
             Ok(Err(msg)) => Err(EngineError::Invalid(msg)),
             Err(_) => Err(EngineError::Disconnected),
         }
+    }
+
+    /// Random Container を生成する。`None` = 子が無効 or 容量上限。
+    pub async fn create_container(
+        &self,
+        children: Vec<BufferId>,
+    ) -> Result<Option<ContainerId>, EngineError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(EngineRequest::CreateContainer { children, reply })
+            .map_err(|_| EngineError::Disconnected)?;
+        rx.await.map_err(|_| EngineError::Disconnected)
+    }
+
+    /// Container から子を 1 つ選んで再生する。
+    pub async fn play_container(
+        &self,
+        container: ContainerId,
+        volume: f32,
+        pitch: f32,
+        looping: bool,
+        bus: Option<String>,
+    ) -> Result<PlayReply, EngineError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(EngineRequest::PlayContainer {
+                container,
+                volume,
+                pitch,
+                looping,
+                bus,
+                reply,
+            })
+            .map_err(|_| EngineError::Disconnected)?;
+        rx.await.map_err(|_| EngineError::Disconnected)
+    }
+
+    /// Container を破棄する。
+    pub async fn destroy_container(&self, container: ContainerId) -> Result<bool, EngineError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(EngineRequest::DestroyContainer { container, reply })
+            .map_err(|_| EngineError::Disconnected)?;
+        rx.await.map_err(|_| EngineError::Disconnected)
     }
 
     /// 指定ハンドルのボイスを停止する。戻り値はコマンド受理可否。
@@ -369,6 +429,32 @@ fn handle(
         }
         EngineRequest::StopAll { reply } => {
             let _ = reply.send(engine.stop_all());
+        }
+        EngineRequest::CreateContainer { children, reply } => {
+            let _ = reply.send(engine.create_random_container(&children));
+        }
+        EngineRequest::PlayContainer {
+            container,
+            volume,
+            pitch,
+            looping,
+            bus,
+            reply,
+        } => {
+            let target_bus = match bus.as_deref() {
+                None | Some("") => Some(master),
+                Some(name) => mixer_state.as_ref().and_then(|m| m.resolve(name)),
+            };
+            let Some(target_bus) = target_bus else {
+                let _ = reply.send(PlayReply::UnknownBus);
+                return;
+            };
+            let handle =
+                engine.play_container_with_handle(container, volume, pitch, target_bus, looping);
+            let _ = reply.send(PlayReply::Source(handle));
+        }
+        EngineRequest::DestroyContainer { container, reply } => {
+            let _ = reply.send(engine.destroy_container(container));
         }
         EngineRequest::LoadMixer { def, reply } => {
             // 再ロード: 既存構成を破棄してから構築する (hot reload は 0.2.0 非対応)。

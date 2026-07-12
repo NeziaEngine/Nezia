@@ -15,7 +15,9 @@ import (
 // mixerDaemon は LoadMixer / Play を記録するフェイク。
 type mixerDaemon struct {
 	fakeDaemon
-	lastMixer *neziav1.MixerDef
+	lastMixer         *neziav1.MixerDef
+	lastChildren      []*neziav1.BufferId
+	lastContainerPlay *neziav1.PlayContainerRequest
 }
 
 func (m *mixerDaemon) LoadMixer(
@@ -128,5 +130,48 @@ func TestPlayForwardsClipParams(t *testing.T) {
 	}
 	if clip.GetSends()[0].GetTargetBus() != "ReverbBus" {
 		t.Errorf("sends=%v", clip.GetSends())
+	}
+}
+
+func (m *mixerDaemon) CreateContainer(
+	_ context.Context,
+	req *neziav1.CreateContainerRequest,
+) (*neziav1.CreateContainerResponse, error) {
+	m.lastChildren = req.GetChildren()
+	return &neziav1.CreateContainerResponse{
+		Container: &neziav1.ContainerHandle{Index: 7, Generation: 2},
+	}, nil
+}
+
+func (m *mixerDaemon) PlayContainer(
+	_ context.Context,
+	req *neziav1.PlayContainerRequest,
+) (*neziav1.PlayResponse, error) {
+	m.lastContainerPlay = req
+	return &neziav1.PlayResponse{Source: &neziav1.SourceHandle{Index: 9, Generation: 1}}, nil
+}
+
+func TestContainerCreateAndPlay(t *testing.T) {
+	fake := &mixerDaemon{}
+	env, stdout := newEnv(t, fake, output.JSON)
+	if code := Dispatch(env, "container", []string{"create", "0-0", "1-0", "2-0"}); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if len(fake.lastChildren) != 3 || fake.lastChildren[2].GetIndex() != 2 {
+		t.Errorf("children=%v", fake.lastChildren)
+	}
+	if got := stdout.String(); got != `{"ok":true,"container":"7-2"}`+"\n" {
+		t.Errorf("stdout=%q", got)
+	}
+
+	env2, stdout2 := newEnv(t, fake, output.Text)
+	if code := Dispatch(env2, "container", []string{"play", "7-2", "--bus", "SFX", "--volume", "0.5"}); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if fake.lastContainerPlay.GetBus() != "SFX" || fake.lastContainerPlay.GetVolume() != 0.5 {
+		t.Errorf("play=%v", fake.lastContainerPlay)
+	}
+	if got := stdout2.String(); got != "ok source=9-1\n" {
+		t.Errorf("stdout=%q", got)
 	}
 }

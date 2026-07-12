@@ -13,9 +13,11 @@ use crate::engine::{EngineError, EngineHandle, PlayReply};
 use crate::proto::v1::engine_event;
 use crate::proto::v1::preview_daemon_server::PreviewDaemon;
 use crate::proto::v1::{
-    BufferId as ProtoBufferId, BusHandle as ProtoBusHandle, CaptureOverflowEvent, EngineEvent,
+    BufferId as ProtoBufferId, BusHandle as ProtoBusHandle,
+    ContainerHandle as ProtoContainerHandle, CaptureOverflowEvent, CreateContainerRequest,
+    CreateContainerResponse, DestroyContainerRequest, DestroyContainerResponse, EngineEvent,
     LoadBufferRequest, LoadBufferResponse, LoadMixerRequest, LoadMixerResponse, NamedBus,
-    PingRequest, PingResponse, PlayFailedEvent, PlayRequest, PlayResponse,
+    PingRequest, PingResponse, PlayContainerRequest, PlayFailedEvent, PlayRequest, PlayResponse,
     SourceHandle as ProtoSourceHandle, SourceStoppedEvent, StopAllRequest, StopAllResponse,
     StopRequest, StopResponse, StreamingUnderrunEvent, SubscribeEventsRequest,
     SubscriberLaggedEvent,
@@ -192,6 +194,89 @@ impl PreviewDaemon for PreviewService {
         Ok(Response::new(PingResponse {
             version: self.version.clone(),
         }))
+    }
+
+    async fn create_container(
+        &self,
+        request: Request<CreateContainerRequest>,
+    ) -> Result<Response<CreateContainerResponse>, Status> {
+        let req = request.into_inner();
+        if req.children.is_empty() {
+            return Err(Status::invalid_argument("children must not be empty"));
+        }
+        let children: Vec<nezia_core::BufferId> =
+            req.children.iter().map(from_proto_buffer).collect();
+        match self
+            .engine
+            .create_container(children)
+            .await
+            .map_err(map_engine_error)?
+        {
+            Some(id) => Ok(Response::new(CreateContainerResponse {
+                container: Some(ProtoContainerHandle {
+                    index: id.index,
+                    generation: id.generation,
+                }),
+            })),
+            None => Err(Status::resource_exhausted(
+                "could not create container (invalid child buffer or capacity reached)",
+            )),
+        }
+    }
+
+    async fn play_container(
+        &self,
+        request: Request<PlayContainerRequest>,
+    ) -> Result<Response<PlayResponse>, Status> {
+        let req = request.into_inner();
+        let container = req
+            .container
+            .as_ref()
+            .map(|c| nezia_core::ContainerId {
+                index: c.index,
+                generation: c.generation,
+            })
+            .ok_or_else(|| Status::invalid_argument("container is required"))?;
+        let bus = (!req.bus.is_empty()).then(|| req.bus.clone());
+        match self
+            .engine
+            .play_container(container, req.volume, req.pitch, req.looping, bus)
+            .await
+            .map_err(map_engine_error)?
+        {
+            PlayReply::Source(Some(id)) => Ok(Response::new(PlayResponse {
+                source: Some(to_proto_source(id)),
+            })),
+            PlayReply::Source(None) => Err(Status::resource_exhausted(
+                "could not play container (stale handle, invalid child, or voice capacity)",
+            )),
+            PlayReply::UnknownBus => Err(Status::not_found(format!(
+                "bus {:?} not found (load a mixer first)",
+                req.bus
+            ))),
+            PlayReply::ClipInvalid(msg) => Err(Status::invalid_argument(msg)),
+        }
+    }
+
+    async fn destroy_container(
+        &self,
+        request: Request<DestroyContainerRequest>,
+    ) -> Result<Response<DestroyContainerResponse>, Status> {
+        let container = request
+            .into_inner()
+            .container
+            .as_ref()
+            .map(|c| nezia_core::ContainerId {
+                index: c.index,
+                generation: c.generation,
+            })
+            .ok_or_else(|| Status::invalid_argument("container is required"))?;
+        let destroyed = self
+            .engine
+            .destroy_container(container)
+            .await
+            .map_err(map_engine_error)?;
+        Ok(Response::new(DestroyContainerResponse { destroyed }))
     }
 
     type SubscribeEventsStream = Pin<Box<dyn Stream<Item = Result<EngineEvent, Status>> + Send>>;
