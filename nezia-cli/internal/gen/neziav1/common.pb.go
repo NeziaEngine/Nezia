@@ -193,6 +193,59 @@ func (x *BusHandle) GetGeneration() uint32 {
 	return 0
 }
 
+// Random Container のハンドル。core の `ContainerId` に対応する。
+type ContainerHandle struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	Generation    uint32                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerHandle) Reset() {
+	*x = ContainerHandle{}
+	mi := &file_nezia_v1_common_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerHandle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerHandle) ProtoMessage() {}
+
+func (x *ContainerHandle) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_common_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerHandle.ProtoReflect.Descriptor instead.
+func (*ContainerHandle) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_common_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ContainerHandle) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *ContainerHandle) GetGeneration() uint32 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
 var File_nezia_v1_common_proto protoreflect.FileDescriptor
 
 const file_nezia_v1_common_proto_rawDesc = "" +
@@ -212,6 +265,11 @@ const file_nezia_v1_common_proto_rawDesc = "" +
 	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\rR\n" +
+	"generation\"G\n" +
+	"\x0fContainerHandle\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\rR\n" +
 	"generationb\x06proto3"
 
 var (
@@ -226,11 +284,12 @@ func file_nezia_v1_common_proto_rawDescGZIP() []byte {
 	return file_nezia_v1_common_proto_rawDescData
 }
 
-var file_nezia_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_nezia_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_nezia_v1_common_proto_goTypes = []any{
-	(*BufferId)(nil),     // 0: nezia.v1.BufferId
-	(*SourceHandle)(nil), // 1: nezia.v1.SourceHandle
-	(*BusHandle)(nil),    // 2: nezia.v1.BusHandle
+	(*BufferId)(nil),        // 0: nezia.v1.BufferId
+	(*SourceHandle)(nil),    // 1: nezia.v1.SourceHandle
+	(*BusHandle)(nil),       // 2: nezia.v1.BusHandle
+	(*ContainerHandle)(nil), // 3: nezia.v1.ContainerHandle
 }
 var file_nezia_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -251,7 +310,7 @@ func file_nezia_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nezia_v1_common_proto_rawDesc), len(file_nezia_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

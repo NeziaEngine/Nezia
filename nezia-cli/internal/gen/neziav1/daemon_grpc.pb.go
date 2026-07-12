@@ -11,8 +11,8 @@
 // docs/design/daemon/CONCEPT.md を正とする。
 //
 // このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
-//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents / LoadMixer
-// Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
+// 0.2.0 の Tier 1 (骨格) + Tier 2 (LoadMixer / Clip-centric / Random Container /
+// SubscribeEvents) を含む。
 
 package neziav1
 
@@ -29,13 +29,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PreviewDaemon_LoadBuffer_FullMethodName      = "/nezia.v1.PreviewDaemon/LoadBuffer"
-	PreviewDaemon_Play_FullMethodName            = "/nezia.v1.PreviewDaemon/Play"
-	PreviewDaemon_Stop_FullMethodName            = "/nezia.v1.PreviewDaemon/Stop"
-	PreviewDaemon_StopAll_FullMethodName         = "/nezia.v1.PreviewDaemon/StopAll"
-	PreviewDaemon_Ping_FullMethodName            = "/nezia.v1.PreviewDaemon/Ping"
-	PreviewDaemon_LoadMixer_FullMethodName       = "/nezia.v1.PreviewDaemon/LoadMixer"
-	PreviewDaemon_SubscribeEvents_FullMethodName = "/nezia.v1.PreviewDaemon/SubscribeEvents"
+	PreviewDaemon_LoadBuffer_FullMethodName       = "/nezia.v1.PreviewDaemon/LoadBuffer"
+	PreviewDaemon_Play_FullMethodName             = "/nezia.v1.PreviewDaemon/Play"
+	PreviewDaemon_Stop_FullMethodName             = "/nezia.v1.PreviewDaemon/Stop"
+	PreviewDaemon_StopAll_FullMethodName          = "/nezia.v1.PreviewDaemon/StopAll"
+	PreviewDaemon_Ping_FullMethodName             = "/nezia.v1.PreviewDaemon/Ping"
+	PreviewDaemon_LoadMixer_FullMethodName        = "/nezia.v1.PreviewDaemon/LoadMixer"
+	PreviewDaemon_CreateContainer_FullMethodName  = "/nezia.v1.PreviewDaemon/CreateContainer"
+	PreviewDaemon_PlayContainer_FullMethodName    = "/nezia.v1.PreviewDaemon/PlayContainer"
+	PreviewDaemon_DestroyContainer_FullMethodName = "/nezia.v1.PreviewDaemon/DestroyContainer"
+	PreviewDaemon_SubscribeEvents_FullMethodName  = "/nezia.v1.PreviewDaemon/SubscribeEvents"
 )
 
 // PreviewDaemonClient is the client API for PreviewDaemon service.
@@ -59,6 +62,12 @@ type PreviewDaemonClient interface {
 	// 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
 	// Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
 	LoadMixer(ctx context.Context, in *LoadMixerRequest, opts ...grpc.CallOption) (*LoadMixerResponse, error)
+	// Random Container を生成する。children から再生ごとにランダムに 1 つ選ぶ。
+	CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*CreateContainerResponse, error)
+	// Container から子を 1 つ選んで再生する。選択結果の source handle を返す。
+	PlayContainer(ctx context.Context, in *PlayContainerRequest, opts ...grpc.CallOption) (*PlayResponse, error)
+	// Container を破棄する。再生中の Source には影響しない。
+	DestroyContainer(ctx context.Context, in *DestroyContainerRequest, opts ...grpc.CallOption) (*DestroyContainerResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -134,6 +143,36 @@ func (c *previewDaemonClient) LoadMixer(ctx context.Context, in *LoadMixerReques
 	return out, nil
 }
 
+func (c *previewDaemonClient) CreateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*CreateContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateContainerResponse)
+	err := c.cc.Invoke(ctx, PreviewDaemon_CreateContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *previewDaemonClient) PlayContainer(ctx context.Context, in *PlayContainerRequest, opts ...grpc.CallOption) (*PlayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlayResponse)
+	err := c.cc.Invoke(ctx, PreviewDaemon_PlayContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *previewDaemonClient) DestroyContainer(ctx context.Context, in *DestroyContainerRequest, opts ...grpc.CallOption) (*DestroyContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DestroyContainerResponse)
+	err := c.cc.Invoke(ctx, PreviewDaemon_DestroyContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *previewDaemonClient) SubscribeEvents(ctx context.Context, in *SubscribeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &PreviewDaemon_ServiceDesc.Streams[0], PreviewDaemon_SubscribeEvents_FullMethodName, cOpts...)
@@ -174,6 +213,12 @@ type PreviewDaemonServer interface {
 	// 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
 	// Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
 	LoadMixer(context.Context, *LoadMixerRequest) (*LoadMixerResponse, error)
+	// Random Container を生成する。children から再生ごとにランダムに 1 つ選ぶ。
+	CreateContainer(context.Context, *CreateContainerRequest) (*CreateContainerResponse, error)
+	// Container から子を 1 つ選んで再生する。選択結果の source handle を返す。
+	PlayContainer(context.Context, *PlayContainerRequest) (*PlayResponse, error)
+	// Container を破棄する。再生中の Source には影響しない。
+	DestroyContainer(context.Context, *DestroyContainerRequest) (*DestroyContainerResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -206,6 +251,15 @@ func (UnimplementedPreviewDaemonServer) Ping(context.Context, *PingRequest) (*Pi
 }
 func (UnimplementedPreviewDaemonServer) LoadMixer(context.Context, *LoadMixerRequest) (*LoadMixerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LoadMixer not implemented")
+}
+func (UnimplementedPreviewDaemonServer) CreateContainer(context.Context, *CreateContainerRequest) (*CreateContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateContainer not implemented")
+}
+func (UnimplementedPreviewDaemonServer) PlayContainer(context.Context, *PlayContainerRequest) (*PlayResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PlayContainer not implemented")
+}
+func (UnimplementedPreviewDaemonServer) DestroyContainer(context.Context, *DestroyContainerRequest) (*DestroyContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DestroyContainer not implemented")
 }
 func (UnimplementedPreviewDaemonServer) SubscribeEvents(*SubscribeEventsRequest, grpc.ServerStreamingServer[EngineEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeEvents not implemented")
@@ -339,6 +393,60 @@ func _PreviewDaemon_LoadMixer_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PreviewDaemon_CreateContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PreviewDaemonServer).CreateContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PreviewDaemon_CreateContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PreviewDaemonServer).CreateContainer(ctx, req.(*CreateContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PreviewDaemon_PlayContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PlayContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PreviewDaemonServer).PlayContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PreviewDaemon_PlayContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PreviewDaemonServer).PlayContainer(ctx, req.(*PlayContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PreviewDaemon_DestroyContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DestroyContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PreviewDaemonServer).DestroyContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PreviewDaemon_DestroyContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PreviewDaemonServer).DestroyContainer(ctx, req.(*DestroyContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PreviewDaemon_SubscribeEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -380,6 +488,18 @@ var PreviewDaemon_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LoadMixer",
 			Handler:    _PreviewDaemon_LoadMixer_Handler,
+		},
+		{
+			MethodName: "CreateContainer",
+			Handler:    _PreviewDaemon_CreateContainer_Handler,
+		},
+		{
+			MethodName: "PlayContainer",
+			Handler:    _PreviewDaemon_PlayContainer_Handler,
+		},
+		{
+			MethodName: "DestroyContainer",
+			Handler:    _PreviewDaemon_DestroyContainer_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

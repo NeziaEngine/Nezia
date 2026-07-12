@@ -11,8 +11,8 @@
 // docs/design/daemon/CONCEPT.md を正とする。
 //
 // このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
-//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents / LoadMixer
-// Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
+// 0.2.0 の Tier 1 (骨格) + Tier 2 (LoadMixer / Clip-centric / Random Container /
+// SubscribeEvents) を含む。
 
 package neziav1
 
@@ -2032,6 +2032,262 @@ func (x *CompressorTarget) GetEffectIndex() uint32 {
 	return 0
 }
 
+type CreateContainerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 子バッファ (LoadBuffer 済み)。空は INVALID_ARGUMENT。
+	Children      []*BufferId `protobuf:"bytes,1,rep,name=children,proto3" json:"children,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateContainerRequest) Reset() {
+	*x = CreateContainerRequest{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateContainerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateContainerRequest) ProtoMessage() {}
+
+func (x *CreateContainerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateContainerRequest.ProtoReflect.Descriptor instead.
+func (*CreateContainerRequest) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *CreateContainerRequest) GetChildren() []*BufferId {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
+type CreateContainerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Container     *ContainerHandle       `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateContainerResponse) Reset() {
+	*x = CreateContainerResponse{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateContainerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateContainerResponse) ProtoMessage() {}
+
+func (x *CreateContainerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateContainerResponse.ProtoReflect.Descriptor instead.
+func (*CreateContainerResponse) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *CreateContainerResponse) GetContainer() *ContainerHandle {
+	if x != nil {
+		return x.Container
+	}
+	return nil
+}
+
+type PlayContainerRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Container *ContainerHandle       `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"`
+	Volume    float32                `protobuf:"fixed32,2,opt,name=volume,proto3" json:"volume,omitempty"` // 線形ゲイン (1.0 = 0 dB)
+	Pitch     float32                `protobuf:"fixed32,3,opt,name=pitch,proto3" json:"pitch,omitempty"`   // 再生レート倍率 (1.0 = 原音)
+	Looping   bool                   `protobuf:"varint,4,opt,name=looping,proto3" json:"looping,omitempty"`
+	// 出力先バスの論理名 (LoadMixer 参照)。空 = Master 直結。
+	// ClipParams 適用は core 側 API の拡張後に追加する (未対応)。
+	Bus           string `protobuf:"bytes,5,opt,name=bus,proto3" json:"bus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlayContainerRequest) Reset() {
+	*x = PlayContainerRequest{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlayContainerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlayContainerRequest) ProtoMessage() {}
+
+func (x *PlayContainerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlayContainerRequest.ProtoReflect.Descriptor instead.
+func (*PlayContainerRequest) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *PlayContainerRequest) GetContainer() *ContainerHandle {
+	if x != nil {
+		return x.Container
+	}
+	return nil
+}
+
+func (x *PlayContainerRequest) GetVolume() float32 {
+	if x != nil {
+		return x.Volume
+	}
+	return 0
+}
+
+func (x *PlayContainerRequest) GetPitch() float32 {
+	if x != nil {
+		return x.Pitch
+	}
+	return 0
+}
+
+func (x *PlayContainerRequest) GetLooping() bool {
+	if x != nil {
+		return x.Looping
+	}
+	return false
+}
+
+func (x *PlayContainerRequest) GetBus() string {
+	if x != nil {
+		return x.Bus
+	}
+	return ""
+}
+
+type DestroyContainerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Container     *ContainerHandle       `protobuf:"bytes,1,opt,name=container,proto3" json:"container,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DestroyContainerRequest) Reset() {
+	*x = DestroyContainerRequest{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DestroyContainerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DestroyContainerRequest) ProtoMessage() {}
+
+func (x *DestroyContainerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DestroyContainerRequest.ProtoReflect.Descriptor instead.
+func (*DestroyContainerRequest) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *DestroyContainerRequest) GetContainer() *ContainerHandle {
+	if x != nil {
+		return x.Container
+	}
+	return nil
+}
+
+type DestroyContainerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// false = 未存在 or generation 不一致。
+	Destroyed     bool `protobuf:"varint,1,opt,name=destroyed,proto3" json:"destroyed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DestroyContainerResponse) Reset() {
+	*x = DestroyContainerResponse{}
+	mi := &file_nezia_v1_daemon_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DestroyContainerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DestroyContainerResponse) ProtoMessage() {}
+
+func (x *DestroyContainerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nezia_v1_daemon_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DestroyContainerResponse.ProtoReflect.Descriptor instead.
+func (*DestroyContainerResponse) Descriptor() ([]byte, []int) {
+	return file_nezia_v1_daemon_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *DestroyContainerResponse) GetDestroyed() bool {
+	if x != nil {
+		return x.Destroyed
+	}
+	return false
+}
+
 var File_nezia_v1_daemon_proto protoreflect.FileDescriptor
 
 const file_nezia_v1_daemon_proto_rawDesc = "" +
@@ -2154,7 +2410,21 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\x06target\"G\n" +
 	"\x10CompressorTarget\x12\x10\n" +
 	"\x03bus\x18\x01 \x01(\tR\x03bus\x12!\n" +
-	"\feffect_index\x18\x02 \x01(\rR\veffectIndex*\x97\x01\n" +
+	"\feffect_index\x18\x02 \x01(\rR\veffectIndex\"H\n" +
+	"\x16CreateContainerRequest\x12.\n" +
+	"\bchildren\x18\x01 \x03(\v2\x12.nezia.v1.BufferIdR\bchildren\"R\n" +
+	"\x17CreateContainerResponse\x127\n" +
+	"\tcontainer\x18\x01 \x01(\v2\x19.nezia.v1.ContainerHandleR\tcontainer\"\xa9\x01\n" +
+	"\x14PlayContainerRequest\x127\n" +
+	"\tcontainer\x18\x01 \x01(\v2\x19.nezia.v1.ContainerHandleR\tcontainer\x12\x16\n" +
+	"\x06volume\x18\x02 \x01(\x02R\x06volume\x12\x14\n" +
+	"\x05pitch\x18\x03 \x01(\x02R\x05pitch\x12\x18\n" +
+	"\alooping\x18\x04 \x01(\bR\alooping\x12\x10\n" +
+	"\x03bus\x18\x05 \x01(\tR\x03bus\"R\n" +
+	"\x17DestroyContainerRequest\x127\n" +
+	"\tcontainer\x18\x01 \x01(\v2\x19.nezia.v1.ContainerHandleR\tcontainer\"8\n" +
+	"\x18DestroyContainerResponse\x12\x1c\n" +
+	"\tdestroyed\x18\x01 \x01(\bR\tdestroyed*\x97\x01\n" +
 	"\x10AttenuationModel\x12&\n" +
 	"\"ATTENUATION_MODEL_INVERSE_DISTANCE\x10\x00\x12\x1a\n" +
 	"\x16ATTENUATION_MODEL_NONE\x10\x01\x12\x1c\n" +
@@ -2162,7 +2432,7 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\x1dATTENUATION_MODEL_EXPONENTIAL\x10\x03*@\n" +
 	"\rChainPosition\x12\x16\n" +
 	"\x12CHAIN_POSITION_PRE\x10\x00\x12\x17\n" +
-	"\x13CHAIN_POSITION_POST\x10\x012\xd1\x03\n" +
+	"\x13CHAIN_POSITION_POST\x10\x012\xcd\x05\n" +
 	"\rPreviewDaemon\x12G\n" +
 	"\n" +
 	"LoadBuffer\x12\x1b.nezia.v1.LoadBufferRequest\x1a\x1c.nezia.v1.LoadBufferResponse\x125\n" +
@@ -2170,7 +2440,10 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\x04Stop\x12\x15.nezia.v1.StopRequest\x1a\x16.nezia.v1.StopResponse\x12>\n" +
 	"\aStopAll\x12\x18.nezia.v1.StopAllRequest\x1a\x19.nezia.v1.StopAllResponse\x125\n" +
 	"\x04Ping\x12\x15.nezia.v1.PingRequest\x1a\x16.nezia.v1.PingResponse\x12D\n" +
-	"\tLoadMixer\x12\x1a.nezia.v1.LoadMixerRequest\x1a\x1b.nezia.v1.LoadMixerResponse\x12L\n" +
+	"\tLoadMixer\x12\x1a.nezia.v1.LoadMixerRequest\x1a\x1b.nezia.v1.LoadMixerResponse\x12V\n" +
+	"\x0fCreateContainer\x12 .nezia.v1.CreateContainerRequest\x1a!.nezia.v1.CreateContainerResponse\x12G\n" +
+	"\rPlayContainer\x12\x1e.nezia.v1.PlayContainerRequest\x1a\x16.nezia.v1.PlayResponse\x12Y\n" +
+	"\x10DestroyContainer\x12!.nezia.v1.DestroyContainerRequest\x1a\".nezia.v1.DestroyContainerResponse\x12L\n" +
 	"\x0fSubscribeEvents\x12 .nezia.v1.SubscribeEventsRequest\x1a\x15.nezia.v1.EngineEvent0\x01b\x06proto3"
 
 var (
@@ -2186,67 +2459,73 @@ func file_nezia_v1_daemon_proto_rawDescGZIP() []byte {
 }
 
 var file_nezia_v1_daemon_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_nezia_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_nezia_v1_daemon_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_nezia_v1_daemon_proto_goTypes = []any{
-	(AttenuationModel)(0),          // 0: nezia.v1.AttenuationModel
-	(ChainPosition)(0),             // 1: nezia.v1.ChainPosition
-	(*LoadBufferRequest)(nil),      // 2: nezia.v1.LoadBufferRequest
-	(*LoadBufferResponse)(nil),     // 3: nezia.v1.LoadBufferResponse
-	(*PlayRequest)(nil),            // 4: nezia.v1.PlayRequest
-	(*ClipParams)(nil),             // 5: nezia.v1.ClipParams
-	(*SpatialParams)(nil),          // 6: nezia.v1.SpatialParams
-	(*SourceSendDef)(nil),          // 7: nezia.v1.SourceSendDef
-	(*PlayResponse)(nil),           // 8: nezia.v1.PlayResponse
-	(*StopRequest)(nil),            // 9: nezia.v1.StopRequest
-	(*StopResponse)(nil),           // 10: nezia.v1.StopResponse
-	(*StopAllRequest)(nil),         // 11: nezia.v1.StopAllRequest
-	(*StopAllResponse)(nil),        // 12: nezia.v1.StopAllResponse
-	(*PingRequest)(nil),            // 13: nezia.v1.PingRequest
-	(*PingResponse)(nil),           // 14: nezia.v1.PingResponse
-	(*SubscribeEventsRequest)(nil), // 15: nezia.v1.SubscribeEventsRequest
-	(*EngineEvent)(nil),            // 16: nezia.v1.EngineEvent
-	(*SourceStoppedEvent)(nil),     // 17: nezia.v1.SourceStoppedEvent
-	(*PlayFailedEvent)(nil),        // 18: nezia.v1.PlayFailedEvent
-	(*StreamingUnderrunEvent)(nil), // 19: nezia.v1.StreamingUnderrunEvent
-	(*CaptureOverflowEvent)(nil),   // 20: nezia.v1.CaptureOverflowEvent
-	(*SubscriberLaggedEvent)(nil),  // 21: nezia.v1.SubscriberLaggedEvent
-	(*LoadMixerRequest)(nil),       // 22: nezia.v1.LoadMixerRequest
-	(*LoadMixerResponse)(nil),      // 23: nezia.v1.LoadMixerResponse
-	(*NamedBus)(nil),               // 24: nezia.v1.NamedBus
-	(*MixerDef)(nil),               // 25: nezia.v1.MixerDef
-	(*BusDef)(nil),                 // 26: nezia.v1.BusDef
-	(*EffectDef)(nil),              // 27: nezia.v1.EffectDef
-	(*LowPassParams)(nil),          // 28: nezia.v1.LowPassParams
-	(*HighPassParams)(nil),         // 29: nezia.v1.HighPassParams
-	(*ReverbParams)(nil),           // 30: nezia.v1.ReverbParams
-	(*CompressorParams)(nil),       // 31: nezia.v1.CompressorParams
-	(*SendDef)(nil),                // 32: nezia.v1.SendDef
-	(*CompressorTarget)(nil),       // 33: nezia.v1.CompressorTarget
-	(*BufferId)(nil),               // 34: nezia.v1.BufferId
-	(*SourceHandle)(nil),           // 35: nezia.v1.SourceHandle
-	(*BusHandle)(nil),              // 36: nezia.v1.BusHandle
+	(AttenuationModel)(0),            // 0: nezia.v1.AttenuationModel
+	(ChainPosition)(0),               // 1: nezia.v1.ChainPosition
+	(*LoadBufferRequest)(nil),        // 2: nezia.v1.LoadBufferRequest
+	(*LoadBufferResponse)(nil),       // 3: nezia.v1.LoadBufferResponse
+	(*PlayRequest)(nil),              // 4: nezia.v1.PlayRequest
+	(*ClipParams)(nil),               // 5: nezia.v1.ClipParams
+	(*SpatialParams)(nil),            // 6: nezia.v1.SpatialParams
+	(*SourceSendDef)(nil),            // 7: nezia.v1.SourceSendDef
+	(*PlayResponse)(nil),             // 8: nezia.v1.PlayResponse
+	(*StopRequest)(nil),              // 9: nezia.v1.StopRequest
+	(*StopResponse)(nil),             // 10: nezia.v1.StopResponse
+	(*StopAllRequest)(nil),           // 11: nezia.v1.StopAllRequest
+	(*StopAllResponse)(nil),          // 12: nezia.v1.StopAllResponse
+	(*PingRequest)(nil),              // 13: nezia.v1.PingRequest
+	(*PingResponse)(nil),             // 14: nezia.v1.PingResponse
+	(*SubscribeEventsRequest)(nil),   // 15: nezia.v1.SubscribeEventsRequest
+	(*EngineEvent)(nil),              // 16: nezia.v1.EngineEvent
+	(*SourceStoppedEvent)(nil),       // 17: nezia.v1.SourceStoppedEvent
+	(*PlayFailedEvent)(nil),          // 18: nezia.v1.PlayFailedEvent
+	(*StreamingUnderrunEvent)(nil),   // 19: nezia.v1.StreamingUnderrunEvent
+	(*CaptureOverflowEvent)(nil),     // 20: nezia.v1.CaptureOverflowEvent
+	(*SubscriberLaggedEvent)(nil),    // 21: nezia.v1.SubscriberLaggedEvent
+	(*LoadMixerRequest)(nil),         // 22: nezia.v1.LoadMixerRequest
+	(*LoadMixerResponse)(nil),        // 23: nezia.v1.LoadMixerResponse
+	(*NamedBus)(nil),                 // 24: nezia.v1.NamedBus
+	(*MixerDef)(nil),                 // 25: nezia.v1.MixerDef
+	(*BusDef)(nil),                   // 26: nezia.v1.BusDef
+	(*EffectDef)(nil),                // 27: nezia.v1.EffectDef
+	(*LowPassParams)(nil),            // 28: nezia.v1.LowPassParams
+	(*HighPassParams)(nil),           // 29: nezia.v1.HighPassParams
+	(*ReverbParams)(nil),             // 30: nezia.v1.ReverbParams
+	(*CompressorParams)(nil),         // 31: nezia.v1.CompressorParams
+	(*SendDef)(nil),                  // 32: nezia.v1.SendDef
+	(*CompressorTarget)(nil),         // 33: nezia.v1.CompressorTarget
+	(*CreateContainerRequest)(nil),   // 34: nezia.v1.CreateContainerRequest
+	(*CreateContainerResponse)(nil),  // 35: nezia.v1.CreateContainerResponse
+	(*PlayContainerRequest)(nil),     // 36: nezia.v1.PlayContainerRequest
+	(*DestroyContainerRequest)(nil),  // 37: nezia.v1.DestroyContainerRequest
+	(*DestroyContainerResponse)(nil), // 38: nezia.v1.DestroyContainerResponse
+	(*BufferId)(nil),                 // 39: nezia.v1.BufferId
+	(*SourceHandle)(nil),             // 40: nezia.v1.SourceHandle
+	(*BusHandle)(nil),                // 41: nezia.v1.BusHandle
+	(*ContainerHandle)(nil),          // 42: nezia.v1.ContainerHandle
 }
 var file_nezia_v1_daemon_proto_depIdxs = []int32{
-	34, // 0: nezia.v1.LoadBufferResponse.buffer:type_name -> nezia.v1.BufferId
-	34, // 1: nezia.v1.PlayRequest.buffer:type_name -> nezia.v1.BufferId
+	39, // 0: nezia.v1.LoadBufferResponse.buffer:type_name -> nezia.v1.BufferId
+	39, // 1: nezia.v1.PlayRequest.buffer:type_name -> nezia.v1.BufferId
 	5,  // 2: nezia.v1.PlayRequest.clip:type_name -> nezia.v1.ClipParams
 	6,  // 3: nezia.v1.ClipParams.spatial:type_name -> nezia.v1.SpatialParams
 	27, // 4: nezia.v1.ClipParams.effects:type_name -> nezia.v1.EffectDef
 	7,  // 5: nezia.v1.ClipParams.sends:type_name -> nezia.v1.SourceSendDef
 	0,  // 6: nezia.v1.SpatialParams.model:type_name -> nezia.v1.AttenuationModel
 	1,  // 7: nezia.v1.SourceSendDef.position:type_name -> nezia.v1.ChainPosition
-	35, // 8: nezia.v1.PlayResponse.source:type_name -> nezia.v1.SourceHandle
-	35, // 9: nezia.v1.StopRequest.source:type_name -> nezia.v1.SourceHandle
+	40, // 8: nezia.v1.PlayResponse.source:type_name -> nezia.v1.SourceHandle
+	40, // 9: nezia.v1.StopRequest.source:type_name -> nezia.v1.SourceHandle
 	17, // 10: nezia.v1.EngineEvent.source_stopped:type_name -> nezia.v1.SourceStoppedEvent
 	18, // 11: nezia.v1.EngineEvent.play_failed:type_name -> nezia.v1.PlayFailedEvent
 	19, // 12: nezia.v1.EngineEvent.streaming_underrun:type_name -> nezia.v1.StreamingUnderrunEvent
 	20, // 13: nezia.v1.EngineEvent.capture_overflow:type_name -> nezia.v1.CaptureOverflowEvent
 	21, // 14: nezia.v1.EngineEvent.subscriber_lagged:type_name -> nezia.v1.SubscriberLaggedEvent
-	35, // 15: nezia.v1.SourceStoppedEvent.source:type_name -> nezia.v1.SourceHandle
-	34, // 16: nezia.v1.StreamingUnderrunEvent.buffer:type_name -> nezia.v1.BufferId
+	40, // 15: nezia.v1.SourceStoppedEvent.source:type_name -> nezia.v1.SourceHandle
+	39, // 16: nezia.v1.StreamingUnderrunEvent.buffer:type_name -> nezia.v1.BufferId
 	25, // 17: nezia.v1.LoadMixerRequest.mixer:type_name -> nezia.v1.MixerDef
 	24, // 18: nezia.v1.LoadMixerResponse.buses:type_name -> nezia.v1.NamedBus
-	36, // 19: nezia.v1.NamedBus.bus:type_name -> nezia.v1.BusHandle
+	41, // 19: nezia.v1.NamedBus.bus:type_name -> nezia.v1.BusHandle
 	26, // 20: nezia.v1.MixerDef.buses:type_name -> nezia.v1.BusDef
 	32, // 21: nezia.v1.MixerDef.sends:type_name -> nezia.v1.SendDef
 	27, // 22: nezia.v1.BusDef.effects:type_name -> nezia.v1.EffectDef
@@ -2257,25 +2536,35 @@ var file_nezia_v1_daemon_proto_depIdxs = []int32{
 	31, // 27: nezia.v1.EffectDef.compressor:type_name -> nezia.v1.CompressorParams
 	33, // 28: nezia.v1.SendDef.compressor:type_name -> nezia.v1.CompressorTarget
 	1,  // 29: nezia.v1.SendDef.position:type_name -> nezia.v1.ChainPosition
-	2,  // 30: nezia.v1.PreviewDaemon.LoadBuffer:input_type -> nezia.v1.LoadBufferRequest
-	4,  // 31: nezia.v1.PreviewDaemon.Play:input_type -> nezia.v1.PlayRequest
-	9,  // 32: nezia.v1.PreviewDaemon.Stop:input_type -> nezia.v1.StopRequest
-	11, // 33: nezia.v1.PreviewDaemon.StopAll:input_type -> nezia.v1.StopAllRequest
-	13, // 34: nezia.v1.PreviewDaemon.Ping:input_type -> nezia.v1.PingRequest
-	22, // 35: nezia.v1.PreviewDaemon.LoadMixer:input_type -> nezia.v1.LoadMixerRequest
-	15, // 36: nezia.v1.PreviewDaemon.SubscribeEvents:input_type -> nezia.v1.SubscribeEventsRequest
-	3,  // 37: nezia.v1.PreviewDaemon.LoadBuffer:output_type -> nezia.v1.LoadBufferResponse
-	8,  // 38: nezia.v1.PreviewDaemon.Play:output_type -> nezia.v1.PlayResponse
-	10, // 39: nezia.v1.PreviewDaemon.Stop:output_type -> nezia.v1.StopResponse
-	12, // 40: nezia.v1.PreviewDaemon.StopAll:output_type -> nezia.v1.StopAllResponse
-	14, // 41: nezia.v1.PreviewDaemon.Ping:output_type -> nezia.v1.PingResponse
-	23, // 42: nezia.v1.PreviewDaemon.LoadMixer:output_type -> nezia.v1.LoadMixerResponse
-	16, // 43: nezia.v1.PreviewDaemon.SubscribeEvents:output_type -> nezia.v1.EngineEvent
-	37, // [37:44] is the sub-list for method output_type
-	30, // [30:37] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	39, // 30: nezia.v1.CreateContainerRequest.children:type_name -> nezia.v1.BufferId
+	42, // 31: nezia.v1.CreateContainerResponse.container:type_name -> nezia.v1.ContainerHandle
+	42, // 32: nezia.v1.PlayContainerRequest.container:type_name -> nezia.v1.ContainerHandle
+	42, // 33: nezia.v1.DestroyContainerRequest.container:type_name -> nezia.v1.ContainerHandle
+	2,  // 34: nezia.v1.PreviewDaemon.LoadBuffer:input_type -> nezia.v1.LoadBufferRequest
+	4,  // 35: nezia.v1.PreviewDaemon.Play:input_type -> nezia.v1.PlayRequest
+	9,  // 36: nezia.v1.PreviewDaemon.Stop:input_type -> nezia.v1.StopRequest
+	11, // 37: nezia.v1.PreviewDaemon.StopAll:input_type -> nezia.v1.StopAllRequest
+	13, // 38: nezia.v1.PreviewDaemon.Ping:input_type -> nezia.v1.PingRequest
+	22, // 39: nezia.v1.PreviewDaemon.LoadMixer:input_type -> nezia.v1.LoadMixerRequest
+	34, // 40: nezia.v1.PreviewDaemon.CreateContainer:input_type -> nezia.v1.CreateContainerRequest
+	36, // 41: nezia.v1.PreviewDaemon.PlayContainer:input_type -> nezia.v1.PlayContainerRequest
+	37, // 42: nezia.v1.PreviewDaemon.DestroyContainer:input_type -> nezia.v1.DestroyContainerRequest
+	15, // 43: nezia.v1.PreviewDaemon.SubscribeEvents:input_type -> nezia.v1.SubscribeEventsRequest
+	3,  // 44: nezia.v1.PreviewDaemon.LoadBuffer:output_type -> nezia.v1.LoadBufferResponse
+	8,  // 45: nezia.v1.PreviewDaemon.Play:output_type -> nezia.v1.PlayResponse
+	10, // 46: nezia.v1.PreviewDaemon.Stop:output_type -> nezia.v1.StopResponse
+	12, // 47: nezia.v1.PreviewDaemon.StopAll:output_type -> nezia.v1.StopAllResponse
+	14, // 48: nezia.v1.PreviewDaemon.Ping:output_type -> nezia.v1.PingResponse
+	23, // 49: nezia.v1.PreviewDaemon.LoadMixer:output_type -> nezia.v1.LoadMixerResponse
+	35, // 50: nezia.v1.PreviewDaemon.CreateContainer:output_type -> nezia.v1.CreateContainerResponse
+	8,  // 51: nezia.v1.PreviewDaemon.PlayContainer:output_type -> nezia.v1.PlayResponse
+	38, // 52: nezia.v1.PreviewDaemon.DestroyContainer:output_type -> nezia.v1.DestroyContainerResponse
+	16, // 53: nezia.v1.PreviewDaemon.SubscribeEvents:output_type -> nezia.v1.EngineEvent
+	44, // [44:54] is the sub-list for method output_type
+	34, // [34:44] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_nezia_v1_daemon_proto_init() }
@@ -2307,7 +2596,7 @@ func file_nezia_v1_daemon_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nezia_v1_daemon_proto_rawDesc), len(file_nezia_v1_daemon_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   32,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
