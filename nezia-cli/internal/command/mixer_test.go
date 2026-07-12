@@ -95,3 +95,38 @@ func TestPlayForwardsBusName(t *testing.T) {
 		t.Errorf("bus=%q", fake.lastPlay.GetBus())
 	}
 }
+
+const clipJSON = `{
+  "priority": 32,
+  "spatial": {"model": "ATTENUATION_MODEL_LINEAR", "minDistance": 2, "maxDistance": 50,
+              "rolloff": 1.0, "dopplerLevel": 0.5},
+  "effects": [{"position": "CHAIN_POSITION_PRE", "enabled": true,
+               "highPass": {"cutoff": 300, "q": 0.7}}],
+  "sends": [{"targetBus": "ReverbBus", "position": "CHAIN_POSITION_POST", "gain": 0.4}]
+}`
+
+func TestPlayForwardsClipParams(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clip.json")
+	if err := os.WriteFile(path, []byte(clipJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &mixerDaemon{}
+	env, _ := newEnv(t, fake, output.JSON)
+	if code := Dispatch(env, "play", []string{"3-1", "--clip", path}); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	clip := fake.lastPlay.GetClip()
+	if clip.GetPriority() != 32 {
+		t.Errorf("priority=%d", clip.GetPriority())
+	}
+	sp := clip.GetSpatial()
+	if sp.GetModel() != neziav1.AttenuationModel_ATTENUATION_MODEL_LINEAR || sp.GetMaxDistance() != 50 {
+		t.Errorf("spatial=%v", sp)
+	}
+	if clip.GetEffects()[0].GetHighPass().GetCutoff() != 300 {
+		t.Errorf("effects=%v", clip.GetEffects())
+	}
+	if clip.GetSends()[0].GetTargetBus() != "ReverbBus" {
+		t.Errorf("sends=%v", clip.GetSends())
+	}
+}

@@ -128,7 +128,7 @@ impl PreviewDaemon for PreviewService {
 
         match self
             .engine
-            .play(buffer, req.volume, req.pitch, req.looping, bus)
+            .play(buffer, req.volume, req.pitch, req.looping, bus, req.clip)
             .await
             .map_err(map_engine_error)?
         {
@@ -142,6 +142,7 @@ impl PreviewDaemon for PreviewService {
                 "bus {:?} not found (load a mixer first)",
                 req.bus
             ))),
+            PlayReply::ClipInvalid(msg) => Err(Status::invalid_argument(msg)),
         }
     }
 

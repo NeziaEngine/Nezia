@@ -6,11 +6,33 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	"jp.nezia/nezia-cli/internal/client"
 	neziav1 "jp.nezia/nezia-cli/internal/gen/neziav1"
 	"jp.nezia/nezia-cli/internal/output"
 )
+
+// readProtoJSON はファイルを protojson で proto メッセージへ読み込む。
+// JSON スキーマは proto 定義そのもの (フィールド名は lowerCamel / snake の両対応)。
+func readProtoJSON(path string, msg proto.Message) *client.CodedError {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &client.CodedError{
+			Code: "INVALID_ARGUMENT",
+			Msg:  fmt.Sprintf("read %s: %v", path, err),
+			Exit: client.ExitAppErr,
+		}
+	}
+	if err := protojson.Unmarshal(data, msg); err != nil {
+		return &client.CodedError{
+			Code: "INVALID_ARGUMENT",
+			Msg:  fmt.Sprintf("parse %s: %v", path, err),
+			Exit: client.ExitAppErr,
+		}
+	}
+	return nil
+}
 
 // cmdMixer は mixer サブコマンド群のディスパッチ。現状は load のみ。
 func cmdMixer(env *Env, args []string) int {
@@ -41,21 +63,9 @@ func cmdMixerLoad(env *Env, args []string) int {
 			Exit: client.ExitAppErr,
 		})
 	}
-	data, err := os.ReadFile(args[0])
-	if err != nil {
-		return env.fail(&client.CodedError{
-			Code: "INVALID_ARGUMENT",
-			Msg:  fmt.Sprintf("read %s: %v", args[0], err),
-			Exit: client.ExitAppErr,
-		})
-	}
 	def := &neziav1.MixerDef{}
-	if err := protojson.Unmarshal(data, def); err != nil {
-		return env.fail(&client.CodedError{
-			Code: "INVALID_ARGUMENT",
-			Msg:  fmt.Sprintf("parse %s: %v", args[0], err),
-			Exit: client.ExitAppErr,
-		})
+	if cerr := readProtoJSON(args[0], def); cerr != nil {
+		return env.fail(cerr)
 	}
 
 	c, err := env.dial()

@@ -31,6 +31,7 @@ Commands:
   play <buffer> [flags]      buffer を再生し source handle を返す
       --volume <f> --pitch <f> --loop
       --bus <name>           出力先バス (mixer load の論理名、省略 = Master)
+      --clip <file.json>     クリップ音響パラメータ (優先度/3D/effects/sends)
   stop <source>              source を停止する
   stop --all                 全 source を停止する
   daemon start                ヘッドレス daemon を起動 (pid/port を返す)

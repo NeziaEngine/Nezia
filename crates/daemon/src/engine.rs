@@ -16,7 +16,7 @@ use nezia_core::{BufferId, EntityId, Event, SoundEngine, SpawnSpatialInit};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::mixer::{self, MixerState};
-use crate::proto::v1::MixerDef;
+use crate::proto::v1::{ClipParams, MixerDef};
 
 /// preview ボイスの発音優先度。単発試聴なので中庸の固定値で十分。
 const PREVIEW_PRIORITY: u8 = 128;
@@ -43,6 +43,8 @@ enum EngineRequest {
         looping: bool,
         /// 出力先バスの論理名。`None` = Master 直結。
         bus: Option<String>,
+        /// Clip-centric パラメータ (優先度 / 3D / エフェクト / Send)。
+        clip: Option<ClipParams>,
         reply: oneshot::Sender<PlayReply>,
     },
     Stop {
@@ -64,6 +66,9 @@ pub enum PlayReply {
     Source(Option<EntityId>),
     /// 指定されたバス名が現在のミキサーに存在しない。
     UnknownBus,
+    /// ClipParams の適用に失敗した (不正なエフェクト種別 / 未知の send 先など)。
+    /// spawn 済みソースは巻き戻し済み。
+    ClipInvalid(String),
 }
 
 /// `EngineHandle` 経由の操作で起こりうる失敗。
@@ -113,6 +118,7 @@ impl EngineHandle {
         pitch: f32,
         looping: bool,
         bus: Option<String>,
+        clip: Option<ClipParams>,
     ) -> Result<PlayReply, EngineError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -122,6 +128,7 @@ impl EngineHandle {
                 pitch,
                 looping,
                 bus,
+                clip,
                 reply,
             })
             .map_err(|_| EngineError::Disconnected)?;
@@ -175,6 +182,9 @@ pub fn spawn() -> io::Result<EngineHandle> {
     let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
     let sink_tx = events_tx.clone();
+    // クリップエフェクト回収用の購読。spawn 時点で subscribe しておくことで
+    // 最初の Play より前のイベントも取りこぼさない。
+    let reaper_rx = events_tx.subscribe();
     std::thread::Builder::new()
         .name("nezia-engine".into())
         .spawn(move || {
@@ -194,7 +204,7 @@ pub fn spawn() -> io::Result<EngineHandle> {
                 let _ = sink_tx.send(ev);
             });
             let master = engine.master_bus();
-            run_loop(&mut engine, master, &rx);
+            run_loop(&mut engine, master, &rx, reaper_rx);
         })?;
 
     match init_rx.recv() {
@@ -213,18 +223,90 @@ fn run_loop(
     engine: &mut SoundEngine,
     master: EntityId,
     rx: &crossbeam_channel::Receiver<EngineRequest>,
+    mut despawn_rx: broadcast::Receiver<Event>,
 ) {
     let mut mixer_state: Option<MixerState> = None;
+    // Play (clip 付き) がソースに生やしたエフェクト。ソース despawn 後に
+    // remove_effect で回収する (core は source 対象エフェクトを自動解放しない)。
+    let mut clip_effects: std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>> =
+        std::collections::HashMap::new();
     loop {
         match rx.recv_timeout(POLL_INTERVAL) {
             Ok(req) => {
-                handle(engine, master, &mut mixer_state, req);
+                handle(engine, master, &mut mixer_state, &mut clip_effects, req);
                 // 終了したソースのスロット回収 / コールバック処理。
                 engine.poll_events();
             }
             Err(RecvTimeoutError::Timeout) => engine.poll_events(),
             // 全 Sender が drop された (daemon 終了) → ループを抜けてエンジンを破棄。
             Err(RecvTimeoutError::Disconnected) => break,
+        }
+        reap_clip_effects(engine, &mut clip_effects, &mut despawn_rx);
+    }
+}
+
+/// ClipParams から spawn 時パラメータ (priority, SpawnSpatialInit) を組み立てる。
+///
+/// proto3 のゼロ値と実用デフォルトのずれをここで吸収する:
+/// - priority 0 はデフォルト 128 として扱う (proto コメントに明記)
+/// - min/max_distance / rolloff の 0 は core のデフォルト値に置き換える
+fn clip_spawn_params(clip: Option<&ClipParams>) -> (u8, SpawnSpatialInit) {
+    let Some(clip) = clip else {
+        return (PREVIEW_PRIORITY, SpawnSpatialInit::NONE);
+    };
+    let priority = if clip.priority == 0 {
+        PREVIEW_PRIORITY
+    } else {
+        clip.priority.min(255) as u8
+    };
+    let spatial = match &clip.spatial {
+        None => SpawnSpatialInit::NONE,
+        Some(s) => {
+            use crate::proto::v1::AttenuationModel as ProtoModel;
+            use nezia_core::AttenuationModel;
+            let model = match ProtoModel::try_from(s.model) {
+                Ok(ProtoModel::None) => AttenuationModel::None,
+                Ok(ProtoModel::Linear) => AttenuationModel::Linear,
+                Ok(ProtoModel::Exponential) => AttenuationModel::Exponential,
+                _ => AttenuationModel::InverseDistance,
+            };
+            SpawnSpatialInit {
+                enabled: true,
+                model,
+                min_distance: if s.min_distance > 0.0 { s.min_distance } else { 1.0 },
+                max_distance: if s.max_distance > 0.0 { s.max_distance } else { 500.0 },
+                rolloff: if s.rolloff > 0.0 { s.rolloff } else { 1.0 },
+                doppler_level: s.doppler_level.clamp(0.0, 1.0),
+                ..SpawnSpatialInit::NONE
+            }
+        }
+    };
+    (priority, spatial)
+}
+
+/// despawn したソースのクリップエフェクトを回収する。
+///
+/// event sink → broadcast 経由で `SourceDespawned` を受け取り、該当ソースに
+/// 生やしたエフェクトを `remove_effect` する。broadcast が Lagged した場合
+/// (容量 256 超のバースト) は取りこぼす可能性があるが、preview 用途の
+/// イベントレートでは実質発生しない。
+fn reap_clip_effects(
+    engine: &mut SoundEngine,
+    clip_effects: &mut std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>>,
+    despawn_rx: &mut broadcast::Receiver<Event>,
+) {
+    loop {
+        match despawn_rx.try_recv() {
+            Ok(Event::SourceDespawned { id }) => {
+                if let Some(ids) = clip_effects.remove(&id) {
+                    for effect in ids {
+                        let _ = engine.remove_effect(effect);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => break, // Empty / Closed
         }
     }
 }
@@ -233,6 +315,7 @@ fn handle(
     engine: &mut SoundEngine,
     master: EntityId,
     mixer_state: &mut Option<MixerState>,
+    clip_effects: &mut std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>>,
     req: EngineRequest,
 ) {
     match req {
@@ -246,6 +329,7 @@ fn handle(
             pitch,
             looping,
             bus,
+            clip,
             reply,
         } => {
             // バス名の解決。未指定は Master、指定はロード済みミキサーから引く。
@@ -257,15 +341,27 @@ fn handle(
                 let _ = reply.send(PlayReply::UnknownBus);
                 return;
             };
+            let (priority, spatial) = clip_spawn_params(clip.as_ref());
             let handle = engine.play_with_handle(
-                buffer,
-                volume,
-                pitch,
-                target_bus,
-                looping,
-                PREVIEW_PRIORITY,
-                SpawnSpatialInit::NONE,
+                buffer, volume, pitch, target_bus, looping, priority, spatial,
             );
+            // クリップのエフェクト / Send を spawn 済みソースへ適用する。
+            if let (Some(source), Some(clip)) = (handle, clip.as_ref())
+                && !(clip.effects.is_empty() && clip.sends.is_empty())
+            {
+                match mixer::apply_clip(engine, source, clip, mixer_state.as_ref()) {
+                    Ok(ids) => {
+                        if !ids.is_empty() {
+                            clip_effects.insert(source, ids);
+                        }
+                    }
+                    Err(msg) => {
+                        // apply_clip がソース停止まで巻き戻し済み。
+                        let _ = reply.send(PlayReply::ClipInvalid(msg));
+                        return;
+                    }
+                }
+            }
             let _ = reply.send(PlayReply::Source(handle));
         }
         EngineRequest::Stop { source, reply } => {

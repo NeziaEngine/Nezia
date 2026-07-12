@@ -50,6 +50,7 @@ func cmdSchema(env *Env) int {
 					{Name: "--pitch", Type: "float", Default: 1.0},
 					{Name: "--loop", Type: "bool", Default: false},
 					{Name: "--bus", Type: "string", Optional: true},
+					{Name: "--clip", Type: "string", Optional: true},
 				},
 				Output: map[string]string{"source": "string (<index>-<generation>)"},
 			},
