@@ -15,6 +15,9 @@ use crossbeam_channel::{RecvTimeoutError, Sender, unbounded};
 use nezia_core::{BufferId, EntityId, Event, SoundEngine, SpawnSpatialInit};
 use tokio::sync::{broadcast, oneshot};
 
+use crate::mixer::{self, MixerState};
+use crate::proto::v1::MixerDef;
+
 /// preview ボイスの発音優先度。単発試聴なので中庸の固定値で十分。
 const PREVIEW_PRIORITY: u8 = 128;
 
@@ -38,7 +41,9 @@ enum EngineRequest {
         volume: f32,
         pitch: f32,
         looping: bool,
-        reply: oneshot::Sender<Option<EntityId>>,
+        /// 出力先バスの論理名。`None` = Master 直結。
+        bus: Option<String>,
+        reply: oneshot::Sender<PlayReply>,
     },
     Stop {
         source: EntityId,
@@ -47,6 +52,18 @@ enum EngineRequest {
     StopAll {
         reply: oneshot::Sender<bool>,
     },
+    LoadMixer {
+        def: MixerDef,
+        reply: oneshot::Sender<Result<Vec<(String, EntityId)>, String>>,
+    },
+}
+
+/// Play の結果。バス名解決の失敗を spawn 失敗と区別する。
+pub enum PlayReply {
+    /// spawn 結果 (`None` = 無効バッファ / ボイス上限)。
+    Source(Option<EntityId>),
+    /// 指定されたバス名が現在のミキサーに存在しない。
+    UnknownBus,
 }
 
 /// `EngineHandle` 経由の操作で起こりうる失敗。
@@ -56,6 +73,8 @@ pub enum EngineError {
     Disconnected,
     /// ロード失敗 (ファイル不在 / デコード不能など)。core からのメッセージを保持する。
     Load(String),
+    /// リクエスト内容の検証エラー (LoadMixer の不正構成など)。
+    Invalid(String),
 }
 
 /// gRPC ハンドラが保持する、エンジンスレッドへの送信ハンドル。
@@ -86,14 +105,15 @@ impl EngineHandle {
         }
     }
 
-    /// マスターバスにボイスを再生する。`None` は spawn 失敗 (無効バッファ / 容量上限)。
+    /// ボイスを再生する。`bus` はミキサーの論理名 (`None` = Master 直結)。
     pub async fn play(
         &self,
         buffer: BufferId,
         volume: f32,
         pitch: f32,
         looping: bool,
-    ) -> Result<Option<EntityId>, EngineError> {
+        bus: Option<String>,
+    ) -> Result<PlayReply, EngineError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(EngineRequest::Play {
@@ -101,10 +121,28 @@ impl EngineHandle {
                 volume,
                 pitch,
                 looping,
+                bus,
                 reply,
             })
             .map_err(|_| EngineError::Disconnected)?;
         rx.await.map_err(|_| EngineError::Disconnected)
+    }
+
+    /// ミキサー構成を一括ロードする。成功時は (論理名, ハンドル) の生成順リスト。
+    /// 検証エラーは `EngineError::Invalid` で返る。
+    pub async fn load_mixer(
+        &self,
+        def: MixerDef,
+    ) -> Result<Vec<(String, EntityId)>, EngineError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(EngineRequest::LoadMixer { def, reply })
+            .map_err(|_| EngineError::Disconnected)?;
+        match rx.await {
+            Ok(Ok(buses)) => Ok(buses),
+            Ok(Err(msg)) => Err(EngineError::Invalid(msg)),
+            Err(_) => Err(EngineError::Disconnected),
+        }
     }
 
     /// 指定ハンドルのボイスを停止する。戻り値はコマンド受理可否。
@@ -170,15 +208,17 @@ pub fn spawn() -> io::Result<EngineHandle> {
 }
 
 /// エンジンスレッドの本体ループ。要求処理と `poll_events()` を交互に回す。
+/// ロード済みミキサーの状態 (`MixerState`) はこのループのローカルとして所有する。
 fn run_loop(
     engine: &mut SoundEngine,
     master: EntityId,
     rx: &crossbeam_channel::Receiver<EngineRequest>,
 ) {
+    let mut mixer_state: Option<MixerState> = None;
     loop {
         match rx.recv_timeout(POLL_INTERVAL) {
             Ok(req) => {
-                handle(engine, master, req);
+                handle(engine, master, &mut mixer_state, req);
                 // 終了したソースのスロット回収 / コールバック処理。
                 engine.poll_events();
             }
@@ -189,7 +229,12 @@ fn run_loop(
     }
 }
 
-fn handle(engine: &mut SoundEngine, master: EntityId, req: EngineRequest) {
+fn handle(
+    engine: &mut SoundEngine,
+    master: EntityId,
+    mixer_state: &mut Option<MixerState>,
+    req: EngineRequest,
+) {
     match req {
         EngineRequest::Load { path, reply } => {
             let result = engine.load(&path).map_err(|e| e.to_string());
@@ -200,24 +245,49 @@ fn handle(engine: &mut SoundEngine, master: EntityId, req: EngineRequest) {
             volume,
             pitch,
             looping,
+            bus,
             reply,
         } => {
+            // バス名の解決。未指定は Master、指定はロード済みミキサーから引く。
+            let target_bus = match bus.as_deref() {
+                None | Some("") => Some(master),
+                Some(name) => mixer_state.as_ref().and_then(|m| m.resolve(name)),
+            };
+            let Some(target_bus) = target_bus else {
+                let _ = reply.send(PlayReply::UnknownBus);
+                return;
+            };
             let handle = engine.play_with_handle(
                 buffer,
                 volume,
                 pitch,
-                master,
+                target_bus,
                 looping,
                 PREVIEW_PRIORITY,
                 SpawnSpatialInit::NONE,
             );
-            let _ = reply.send(handle);
+            let _ = reply.send(PlayReply::Source(handle));
         }
         EngineRequest::Stop { source, reply } => {
             let _ = reply.send(engine.stop_source(source));
         }
         EngineRequest::StopAll { reply } => {
             let _ = reply.send(engine.stop_all());
+        }
+        EngineRequest::LoadMixer { def, reply } => {
+            // 再ロード: 既存構成を破棄してから構築する (hot reload は 0.2.0 非対応)。
+            if let Some(prev) = mixer_state.take() {
+                mixer::destroy_mixer(engine, prev);
+            }
+            let result = match mixer::build_mixer(engine, &def) {
+                Ok(state) => {
+                    let buses = state.named_buses().to_vec();
+                    *mixer_state = Some(state);
+                    Ok(buses)
+                }
+                Err(msg) => Err(msg),
+            };
+            let _ = reply.send(result);
         }
     }
 }

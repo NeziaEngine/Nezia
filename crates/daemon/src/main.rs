@@ -16,6 +16,7 @@
 
 mod engine;
 mod lifecycle;
+mod mixer;
 mod proto;
 mod service;
 

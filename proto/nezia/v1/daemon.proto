@@ -7,8 +7,8 @@ syntax = "proto3";
 // docs/design/daemon/CONCEPT.md を正とする。
 //
 // このファイルは 0.2.0 の Tier 1 (骨格) + Tier 2 の一部:
-//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents
-// Bus/Mixer ロード・Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
+//   LoadBuffer / Play / Stop / StopAll / Ping / SubscribeEvents / LoadMixer
+// Clip-centric 反映・Random プレビューは後続 PR (Tier 2) で追加する。
 package nezia.v1;
 
 import "nezia/v1/common.proto";
@@ -31,6 +31,11 @@ service PreviewDaemon {
   // 疎通確認 (port discovery 後のハンドシェイク用)。
   rpc Ping(PingRequest) returns (PingResponse);
 
+  // ミキサー構成 (バス木 + エフェクト + Send) を一括ロードする。
+  // 2 回目以降の呼び出しは既存構成を破棄して再構築する (再生中ソースは全停止)。
+  // Unity の NeziaMixerAsset / 将来の authoring tool が同じ構造を流し込む。
+  rpc LoadMixer(LoadMixerRequest) returns (LoadMixerResponse);
+
   // エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
   // 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
   // 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -52,6 +57,9 @@ message PlayRequest {
   float volume = 2;  // 線形ゲイン (1.0 = 0 dB)
   float pitch = 3;   // 再生レート倍率 (1.0 = 原音)
   bool looping = 4;
+  // 出力先バスの論理名 (LoadMixer で定義したもの)。空 = Master 直結。
+  // 未知の名前は NOT_FOUND エラー。
+  string bus = 5;
 }
 message PlayResponse {
   SourceHandle source = 1;
@@ -112,4 +120,105 @@ message CaptureOverflowEvent {
 // この購読者が配信に追いつけず、直近のイベントを取りこぼした。
 message SubscriberLaggedEvent {
   uint64 events_dropped = 1;
+}
+
+// ── LoadMixer ─────────────────────────────────────────────────────────────
+//
+// Unity の NeziaMixerAsset (BusNode / BusEffect / SendNode) と 1:1 で対応する
+// 明示構造。daemon はこれを create_bus → add_effect → add_send の列に再生する。
+// core にアセットフォーマットのパーサは持たない (daemon CONCEPT.md 非目標)。
+
+message LoadMixerRequest {
+  MixerDef mixer = 1;
+}
+
+message LoadMixerResponse {
+  // 論理名 → バスハンドル。Play の bus 指定は論理名で行えるため参照は任意だが、
+  // 可視化ツール等がハンドルを直接使う余地を残す。
+  repeated NamedBus buses = 1;
+}
+
+message NamedBus {
+  string name = 1;
+  BusHandle bus = 2;
+}
+
+message MixerDef {
+  repeated BusDef buses = 1;
+  repeated SendDef sends = 2;
+}
+
+message BusDef {
+  // ミキサー内で一意の論理名。空文字・重複は INVALID_ARGUMENT。
+  string name = 1;
+  // 親バスの論理名。空 = Master 直下。前方参照可 (順序はロード側で解決する)。
+  string parent = 2;
+  float gain = 3;  // 線形ゲイン (1.0 = 0 dB)
+  bool muted = 4;
+  repeated EffectDef effects = 5;
+}
+
+enum ChainPosition {
+  // Bus: Pre-Fader / Source: Pre-Spatial (core の EffectPosition::Pre / SendPosition::Pre)
+  CHAIN_POSITION_PRE = 0;
+  CHAIN_POSITION_POST = 1;
+}
+
+message EffectDef {
+  ChainPosition position = 1;
+  bool enabled = 2;
+  oneof params {
+    LowPassParams low_pass = 3;
+    HighPassParams high_pass = 4;
+    ReverbParams reverb = 5;
+    CompressorParams compressor = 6;
+  }
+}
+
+message LowPassParams {
+  float cutoff = 1;  // Hz
+  float q = 2;
+}
+
+message HighPassParams {
+  float cutoff = 1;  // Hz
+  float q = 2;
+}
+
+// すべて正規化値 [0.0, 1.0] (core ReverbParam と同一)。
+message ReverbParams {
+  float room_size = 1;
+  float damping = 2;
+  float wet = 3;
+  float dry = 4;
+  float width = 5;
+}
+
+message CompressorParams {
+  float threshold_db = 1;
+  float ratio = 2;
+  float attack_ms = 3;
+  float release_ms = 4;
+  float knee_db = 5;
+  float makeup_db = 6;
+}
+
+message SendDef {
+  // 送り元バスの論理名 (Master は不可)。
+  string source_bus = 1;
+  oneof target {
+    // バス宛て send。
+    string target_bus = 2;
+    // Compressor sidechain 宛て send (ダッキング)。
+    CompressorTarget compressor = 3;
+  }
+  ChainPosition position = 4;
+  float gain = 5;
+}
+
+message CompressorTarget {
+  // Compressor が載っているバスの論理名。
+  string bus = 1;
+  // そのバスの effects 内 index (Compressor であること)。
+  uint32 effect_index = 2;
 }

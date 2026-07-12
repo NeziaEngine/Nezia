@@ -24,3 +24,10 @@ message SourceHandle {
   uint32 index = 1;
   uint32 generation = 2;
 }
+
+// バスを制御するハンドル。core の物理ID (`EntityId`) に対応する。
+// LoadMixer の再ロードで旧ハンドルは無効化される。
+message BusHandle {
+  uint32 index = 1;
+  uint32 generation = 2;
+}

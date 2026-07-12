@@ -257,7 +257,7 @@ GUI を持たないエージェントセッションでは、セッション所�
 | **M0** | 骨格 | scaffold、buf codegen、`ping` が実 daemon と疎通 [済] |
 | **M1** | Tier 1 完了 | `load` / `play` / `stop` / `stop --all`、JSON / text 両フォーマット、エラーコード体系 (Unity IP-6 解除の前提が揃う) [済] |
 | **M2** | セッション運用 | `daemon start/stop/status` (daemon 既存のスタンドアロンモードを利用)、`batch`、`schema` [済] |
-| **M3** | Tier 2 追随 | `subscribe` (JSONL) [済]、`mixer load`、Clip-centric 反映系コマンド |
+| **M3** | Tier 2 追随 | `subscribe` (JSONL) [済]、`mixer load` (protojson) [済]、Clip-centric 反映系コマンド |
 
 ---
 

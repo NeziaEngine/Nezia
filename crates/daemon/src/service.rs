@@ -9,12 +9,13 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 
-use crate::engine::{EngineError, EngineHandle};
+use crate::engine::{EngineError, EngineHandle, PlayReply};
 use crate::proto::v1::engine_event;
 use crate::proto::v1::preview_daemon_server::PreviewDaemon;
 use crate::proto::v1::{
-    BufferId as ProtoBufferId, CaptureOverflowEvent, EngineEvent, LoadBufferRequest,
-    LoadBufferResponse, PingRequest, PingResponse, PlayFailedEvent, PlayRequest, PlayResponse,
+    BufferId as ProtoBufferId, BusHandle as ProtoBusHandle, CaptureOverflowEvent, EngineEvent,
+    LoadBufferRequest, LoadBufferResponse, LoadMixerRequest, LoadMixerResponse, NamedBus,
+    PingRequest, PingResponse, PlayFailedEvent, PlayRequest, PlayResponse,
     SourceHandle as ProtoSourceHandle, SourceStoppedEvent, StopAllRequest, StopAllResponse,
     StopRequest, StopResponse, StreamingUnderrunEvent, SubscribeEventsRequest,
     SubscriberLaggedEvent,
@@ -34,9 +35,13 @@ impl PreviewService {
     }
 }
 
-/// エンジンスレッド消失は gRPC 上「サービス利用不可」として扱う。
-fn unavailable(_: EngineError) -> Status {
-    Status::unavailable("engine thread is no longer running")
+/// `EngineError` を gRPC Status にマップする。
+fn map_engine_error(err: EngineError) -> Status {
+    match err {
+        EngineError::Disconnected => Status::unavailable("engine thread is no longer running"),
+        EngineError::Load(msg) => Status::internal(msg),
+        EngineError::Invalid(msg) => Status::invalid_argument(msg),
+    }
 }
 
 fn to_proto_buffer(id: nezia_core::BufferId) -> ProtoBufferId {
@@ -108,7 +113,7 @@ impl PreviewDaemon for PreviewService {
                 buffer: Some(to_proto_buffer(id)),
             })),
             Err(EngineError::Load(msg)) => Err(Status::internal(msg)),
-            Err(err) => Err(unavailable(err)),
+            Err(err) => Err(map_engine_error(err)),
         }
     }
 
@@ -119,20 +124,48 @@ impl PreviewDaemon for PreviewService {
             .as_ref()
             .map(from_proto_buffer)
             .ok_or_else(|| Status::invalid_argument("buffer is required"))?;
+        let bus = (!req.bus.is_empty()).then(|| req.bus.clone());
 
         match self
             .engine
-            .play(buffer, req.volume, req.pitch, req.looping)
+            .play(buffer, req.volume, req.pitch, req.looping, bus)
             .await
-            .map_err(unavailable)?
+            .map_err(map_engine_error)?
         {
-            Some(id) => Ok(Response::new(PlayResponse {
+            PlayReply::Source(Some(id)) => Ok(Response::new(PlayResponse {
                 source: Some(to_proto_source(id)),
             })),
-            None => Err(Status::resource_exhausted(
+            PlayReply::Source(None) => Err(Status::resource_exhausted(
                 "could not spawn source (invalid buffer or voice capacity reached)",
             )),
+            PlayReply::UnknownBus => Err(Status::not_found(format!(
+                "bus {:?} not found (load a mixer first)",
+                req.bus
+            ))),
         }
+    }
+
+    async fn load_mixer(
+        &self,
+        request: Request<LoadMixerRequest>,
+    ) -> Result<Response<LoadMixerResponse>, Status> {
+        let def = request
+            .into_inner()
+            .mixer
+            .ok_or_else(|| Status::invalid_argument("mixer is required"))?;
+        let buses = self.engine.load_mixer(def).await.map_err(map_engine_error)?;
+        Ok(Response::new(LoadMixerResponse {
+            buses: buses
+                .into_iter()
+                .map(|(name, id)| NamedBus {
+                    name,
+                    bus: Some(ProtoBusHandle {
+                        index: id.index,
+                        generation: id.generation,
+                    }),
+                })
+                .collect(),
+        }))
     }
 
     async fn stop(&self, request: Request<StopRequest>) -> Result<Response<StopResponse>, Status> {
@@ -142,7 +175,7 @@ impl PreviewDaemon for PreviewService {
             .as_ref()
             .map(from_proto_source)
             .ok_or_else(|| Status::invalid_argument("source is required"))?;
-        let accepted = self.engine.stop(source).await.map_err(unavailable)?;
+        let accepted = self.engine.stop(source).await.map_err(map_engine_error)?;
         Ok(Response::new(StopResponse { accepted }))
     }
 
@@ -150,7 +183,7 @@ impl PreviewDaemon for PreviewService {
         &self,
         _request: Request<StopAllRequest>,
     ) -> Result<Response<StopAllResponse>, Status> {
-        let accepted = self.engine.stop_all().await.map_err(unavailable)?;
+        let accepted = self.engine.stop_all().await.map_err(map_engine_error)?;
         Ok(Response::new(StopAllResponse { accepted }))
     }
 
