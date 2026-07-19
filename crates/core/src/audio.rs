@@ -187,6 +187,48 @@ pub fn peek_metadata(bytes: &[u8]) -> Result<AudioMetadata, Box<dyn std::error::
     })
 }
 
+/// エンコード済みバイト列から波形ピーク列を計算する (Editor の波形表示用)。
+///
+/// フルデコードした PCM を `bins` 個の等幅ビンに分割し、各ビンの max |sample|
+/// (全チャンネル混合) を [0, 1] で返す。戻り値の長さは常に `bins`
+/// (フレーム数がビン数より少ない場合、余りのビンは 0.0)。
+///
+/// `SoundEngine` インスタンス無しで呼べる。import 時に 1 度だけ実行して
+/// 結果をアセットへ焼き込む用途を想定 (ランタイムでは呼ばない)。
+pub fn compute_peaks(bytes: &[u8], bins: usize) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    if bins == 0 {
+        return Err("bins must be > 0".into());
+    }
+    let buffer = load_from_memory(bytes)?;
+    let samples = buffer
+        .static_samples()
+        .ok_or("decoded buffer is not static")?;
+    let channels = buffer.channels.max(1) as usize;
+    let frames = samples.len() / channels;
+
+    let mut peaks = vec![0.0f32; bins];
+    if frames == 0 {
+        return Ok(peaks);
+    }
+    for frame in 0..frames {
+        // ビン割当は整数演算で安定させる (frame * bins が usize に収まる範囲:
+        // bins は Editor 用途で高々数百、frames は数億でも overflow しない 64bit)。
+        let bin = (frame * bins) / frames;
+        let base = frame * channels;
+        for ch in 0..channels {
+            let v = samples[base + ch].abs();
+            if v > peaks[bin] {
+                peaks[bin] = v;
+            }
+        }
+    }
+    // 念のため [0, 1] へクランプ (デコーダがフルスケール超を返すコーデック対策)。
+    for p in &mut peaks {
+        *p = p.min(1.0);
+    }
+    Ok(peaks)
+}
+
 /// MediaSource からデコードする内部実装。
 fn decode(
     source: Box<dyn MediaSource>,
