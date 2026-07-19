@@ -19,6 +19,7 @@ import (
 type fakeDaemon struct {
 	neziav1.UnimplementedPreviewDaemonServer
 	lastLoadPath string
+	lastLoad     *neziav1.LoadBufferRequest
 	lastPlay     *neziav1.PlayRequest
 	stopAccepted bool
 }
@@ -29,6 +30,7 @@ func (f *fakeDaemon) Ping(context.Context, *neziav1.PingRequest) (*neziav1.PingR
 
 func (f *fakeDaemon) LoadBuffer(_ context.Context, req *neziav1.LoadBufferRequest) (*neziav1.LoadBufferResponse, error) {
 	f.lastLoadPath = req.GetPath()
+	f.lastLoad = req
 	return &neziav1.LoadBufferResponse{Buffer: &neziav1.BufferId{Index: 3, Generation: 1}}, nil
 }
 
@@ -98,6 +100,35 @@ func TestLoadSendsAbsolutePath(t *testing.T) {
 	}
 	if got := stdout.String(); got != `{"ok":true,"buffer":"3-1"}`+"\n" {
 		t.Errorf("stdout=%q", got)
+	}
+}
+
+func TestLoadStreamingFlags(t *testing.T) {
+	fake := &fakeDaemon{}
+	env, stdout := newEnv(t, fake, output.JSON)
+	code := Dispatch(env, "load", []string{"--streaming", "--buffer-seconds", "2.5", "relative/bgm.mp3"})
+	if code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if !fake.lastLoad.GetStreaming() {
+		t.Error("streaming flag not sent")
+	}
+	if got := fake.lastLoad.GetBufferSeconds(); got != 2.5 {
+		t.Errorf("buffer_seconds=%v", got)
+	}
+	if got := stdout.String(); got != `{"ok":true,"buffer":"3-1"}`+"\n" {
+		t.Errorf("stdout=%q", got)
+	}
+}
+
+func TestLoadDefaultIsStatic(t *testing.T) {
+	fake := &fakeDaemon{}
+	env, _ := newEnv(t, fake, output.JSON)
+	if code := Dispatch(env, "load", []string{"relative/x.wav"}); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if fake.lastLoad.GetStreaming() || fake.lastLoad.GetBufferSeconds() != 0 {
+		t.Errorf("static load should not set streaming fields: %+v", fake.lastLoad)
 	}
 }
 

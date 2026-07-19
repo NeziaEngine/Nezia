@@ -38,8 +38,12 @@ func cmdSchema(env *Env) int {
 		Commands: []schemaCommand{
 			{Name: "ping", Output: map[string]string{"version": "string"}},
 			{
-				Name:   "load",
-				Args:   []schemaArg{{Name: "path", Type: "string", Positional: true}},
+				Name: "load",
+				Args: []schemaArg{
+					{Name: "path", Type: "string", Positional: true},
+					{Name: "--streaming", Type: "bool", Default: false},
+					{Name: "--buffer-seconds", Type: "float", Default: 0.0},
+				},
 				Output: map[string]string{"buffer": "string (<index>-<generation>)"},
 			},
 			{
