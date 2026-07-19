@@ -14,6 +14,7 @@ use crate::proto::v1::engine_event;
 use crate::proto::v1::preview_daemon_server::PreviewDaemon;
 use crate::proto::v1::{
     BufferId as ProtoBufferId, BusHandle as ProtoBusHandle,
+    ComputePeaksRequest, ComputePeaksResponse,
     ContainerHandle as ProtoContainerHandle, CaptureOverflowEvent, CreateContainerRequest,
     CreateContainerResponse, DestroyContainerRequest, DestroyContainerResponse, EngineEvent,
     LoadBufferRequest, LoadBufferResponse, LoadMixerRequest, LoadMixerResponse, NamedBus,
@@ -194,6 +195,41 @@ impl PreviewDaemon for PreviewService {
         Ok(Response::new(StopAllResponse { accepted }))
     }
 
+    async fn compute_peaks(
+        &self,
+        request: Request<ComputePeaksRequest>,
+    ) -> Result<Response<ComputePeaksResponse>, Status> {
+        let req = request.into_inner();
+        if req.path.is_empty() {
+            return Err(Status::invalid_argument("path must not be empty"));
+        }
+        if req.bins == 0 || req.bins > 4096 {
+            return Err(Status::invalid_argument("bins must be in 1..=4096"));
+        }
+        let bins = req.bins as usize;
+        let path = req.path;
+        // エンジン (再生系) には触れない: デコードとビン分割はブロッキング
+        // タスクで完結させ、tokio ワーカーを塞がない。
+        let peaks = tokio::task::spawn_blocking(move || -> Result<Vec<f32>, Status> {
+            let bytes = std::fs::read(&path)
+                .map_err(|e| Status::not_found(format!("read {path:?}: {e}")))?;
+            let buffer = nezia_core::load_from_memory(&bytes)
+                .map_err(|e| Status::internal(format!("decode failed: {e}")))?;
+            let samples = buffer
+                .samples()
+                .ok_or_else(|| Status::internal("decoded buffer is not static"))?;
+            Ok(compute_peak_bins(
+                samples,
+                buffer.channels.max(1) as usize,
+                bins,
+            ))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("peaks task panicked: {e}")))??;
+
+        Ok(Response::new(ComputePeaksResponse { peaks }))
+    }
+
     async fn ping(&self, _request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         Ok(Response::new(PingResponse {
             version: self.version.clone(),
@@ -318,4 +354,31 @@ impl PreviewDaemon for PreviewService {
             tokio_stream::wrappers::ReceiverStream::new(out),
         )))
     }
+}
+
+/// interleaved PCM を `bins` 個の等幅ビンへ分割し、各ビンの max |sample|
+/// (全チャンネル混合、[0, 1] クランプ) を返す。戻り値の長さは常に `bins`
+/// (フレーム数がビン数より少ない場合、余りのビンは 0.0)。
+///
+/// 波形表示という Editor 固有の加工なので core ではなく daemon (ツール層) に置く。
+fn compute_peak_bins(samples: &[f32], channels: usize, bins: usize) -> Vec<f32> {
+    let mut peaks = vec![0.0f32; bins];
+    let frames = samples.len() / channels;
+    if frames == 0 {
+        return peaks;
+    }
+    for frame in 0..frames {
+        let bin = (frame * bins) / frames;
+        let base = frame * channels;
+        for ch in 0..channels {
+            let v = samples[base + ch].abs();
+            if v > peaks[bin] {
+                peaks[bin] = v;
+            }
+        }
+    }
+    for p in &mut peaks {
+        *p = p.min(1.0);
+    }
+    peaks
 }

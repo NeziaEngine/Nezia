@@ -38,6 +38,7 @@ const (
 	PreviewDaemon_CreateContainer_FullMethodName  = "/nezia.v1.PreviewDaemon/CreateContainer"
 	PreviewDaemon_PlayContainer_FullMethodName    = "/nezia.v1.PreviewDaemon/PlayContainer"
 	PreviewDaemon_DestroyContainer_FullMethodName = "/nezia.v1.PreviewDaemon/DestroyContainer"
+	PreviewDaemon_ComputePeaks_FullMethodName     = "/nezia.v1.PreviewDaemon/ComputePeaks"
 	PreviewDaemon_SubscribeEvents_FullMethodName  = "/nezia.v1.PreviewDaemon/SubscribeEvents"
 )
 
@@ -68,6 +69,10 @@ type PreviewDaemonClient interface {
 	PlayContainer(ctx context.Context, in *PlayContainerRequest, opts ...grpc.CallOption) (*PlayResponse, error)
 	// Container を破棄する。再生中の Source には影響しない。
 	DestroyContainer(ctx context.Context, in *DestroyContainerRequest, opts ...grpc.CallOption) (*DestroyContainerResponse, error)
+	// 波形ピークを計算する (Editor の波形表示用)。ファイルをフルデコードし、
+	// bins 個の等幅ビンごとの max |sample| (全 ch 混合、[0,1]) を返す。
+	// エンジン (再生系) には触れず、ハンドラ内のブロッキングタスクで完結する。
+	ComputePeaks(ctx context.Context, in *ComputePeaksRequest, opts ...grpc.CallOption) (*ComputePeaksResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -173,6 +178,16 @@ func (c *previewDaemonClient) DestroyContainer(ctx context.Context, in *DestroyC
 	return out, nil
 }
 
+func (c *previewDaemonClient) ComputePeaks(ctx context.Context, in *ComputePeaksRequest, opts ...grpc.CallOption) (*ComputePeaksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ComputePeaksResponse)
+	err := c.cc.Invoke(ctx, PreviewDaemon_ComputePeaks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *previewDaemonClient) SubscribeEvents(ctx context.Context, in *SubscribeEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &PreviewDaemon_ServiceDesc.Streams[0], PreviewDaemon_SubscribeEvents_FullMethodName, cOpts...)
@@ -219,6 +234,10 @@ type PreviewDaemonServer interface {
 	PlayContainer(context.Context, *PlayContainerRequest) (*PlayResponse, error)
 	// Container を破棄する。再生中の Source には影響しない。
 	DestroyContainer(context.Context, *DestroyContainerRequest) (*DestroyContainerResponse, error)
+	// 波形ピークを計算する (Editor の波形表示用)。ファイルをフルデコードし、
+	// bins 個の等幅ビンごとの max |sample| (全 ch 混合、[0,1]) を返す。
+	// エンジン (再生系) には触れず、ハンドラ内のブロッキングタスクで完結する。
+	ComputePeaks(context.Context, *ComputePeaksRequest) (*ComputePeaksResponse, error)
 	// エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
 	// 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
 	// 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -260,6 +279,9 @@ func (UnimplementedPreviewDaemonServer) PlayContainer(context.Context, *PlayCont
 }
 func (UnimplementedPreviewDaemonServer) DestroyContainer(context.Context, *DestroyContainerRequest) (*DestroyContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DestroyContainer not implemented")
+}
+func (UnimplementedPreviewDaemonServer) ComputePeaks(context.Context, *ComputePeaksRequest) (*ComputePeaksResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ComputePeaks not implemented")
 }
 func (UnimplementedPreviewDaemonServer) SubscribeEvents(*SubscribeEventsRequest, grpc.ServerStreamingServer[EngineEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method SubscribeEvents not implemented")
@@ -447,6 +469,24 @@ func _PreviewDaemon_DestroyContainer_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PreviewDaemon_ComputePeaks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComputePeaksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PreviewDaemonServer).ComputePeaks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PreviewDaemon_ComputePeaks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PreviewDaemonServer).ComputePeaks(ctx, req.(*ComputePeaksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PreviewDaemon_SubscribeEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(SubscribeEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -500,6 +540,10 @@ var PreviewDaemon_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DestroyContainer",
 			Handler:    _PreviewDaemon_DestroyContainer_Handler,
+		},
+		{
+			MethodName: "ComputePeaks",
+			Handler:    _PreviewDaemon_ComputePeaks_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

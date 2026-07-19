@@ -73,6 +73,16 @@ impl AudioBuffer {
         }
     }
 
+    /// デコード済み PCM (interleaved f32) への読み取り専用アクセス。
+    /// streaming バッファの場合は None (PCM を全量保持しないため)。
+    ///
+    /// エンジン外のツール層 (daemon の波形ピーク計算等) が、デコード結果を
+    /// そのまま読むための窓口。エンジン内部は `static_samples` を使う。
+    #[must_use]
+    pub fn samples(&self) -> Option<&[f32]> {
+        self.static_samples()
+    }
+
     /// 静的バッファのサンプル列への参照。streaming の場合は None。
     ///
     /// ミキシングシステムが random access (looping wrap) を行うために使う。

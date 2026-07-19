@@ -28,6 +28,7 @@ Usage:
 Commands:
   ping                       daemon の疎通確認とバージョン取得
   load <path> [flags]        オーディオファイルをロードし buffer handle を返す
+  peaks <path> [--bins n]    波形ピーク列を計算する (Editor の波形表示用)
       --streaming            ストリーミングバッファとしてロード (長尺 BGM 向け、即応答)
       --buffer-seconds <f>   ストリーミングリング容量の目安 (省略 = daemon 既定)
   play <buffer> [flags]      buffer を再生し source handle を返す
@@ -154,6 +155,8 @@ func Dispatch(env *Env, name string, args []string) int {
 		return cmdPing(env)
 	case "load":
 		return cmdLoad(env, args)
+	case "peaks":
+		return cmdPeaks(env, args)
 	case "play":
 		return cmdPlay(env, args)
 	case "stop":

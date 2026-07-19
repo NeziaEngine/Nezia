@@ -28,7 +28,7 @@ pub use core::engine::SoundEngine;
 pub use config::EngineConfig;
 
 /// メモリ上のバイト列からオーディオメタデータを取得する。
-pub use audio::{AudioMetadata, peek_metadata};
+pub use audio::{AudioBuffer, AudioMetadata, load_from_memory, peek_metadata};
 
 /// バッファリーダー（任意スレッドから PCM を読める読み取りハンドル）。
 pub use core::engine::BufferReader;
