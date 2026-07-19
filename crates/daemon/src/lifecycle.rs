@@ -33,8 +33,18 @@ pub async fn monitor_parent(parent_pid: u32, port_file: PathBuf) {
     loop {
         tokio::time::sleep(interval).await;
         if !parent_alive(parent_pid) {
-            eprintln!("nezia-daemon: parent process {parent_pid} is gone, exiting");
+            // 先に後始末を済ませ、ログは最後 + 失敗無視で書く。親が stdout/stderr を
+            // パイプで奪ったまま死ぬと書き込みが EPIPE になり、`eprintln!` は panic
+            // する。panic するとこの監視タスクだけが落ちて daemon が孤児として
+            // 生き残る (Unity Editor の Process 起動 + リダイレクトで実際に発生)。
             let _ = fs::remove_file(&port_file);
+            {
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "nezia-daemon: parent process {parent_pid} is gone, exiting"
+                );
+            }
             std::process::exit(0);
         }
     }
