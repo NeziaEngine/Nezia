@@ -217,15 +217,11 @@ pub fn apply_clip(
             rollback(engine, &ids);
             return Err(format!("clip effect[{idx}] has no params"));
         };
-        if matches!(
-            params,
-            effect_def::Params::Reverb(_) | effect_def::Params::Compressor(_)
-        ) {
-            rollback(engine, &ids);
-            return Err(format!(
-                "clip effect[{idx}]: reverb/compressor are bus-only (use an aux bus + send)"
-            ));
-        }
+        // Reverb / Compressor は core のサウンドスレッドが Source 対象を silently drop
+        // する (bus 専用、core/engine/audio_thread/effect.rs)。以前はここでエラーに
+        // していたが、実機経路 (FFI 直の nezia_effect_add) は同条件で「エラーなく
+        // 無音適用」になるため、preview だけ再生失敗するのは挙動乖離だった。
+        // 実機と同じくエラーにせず通す (適用されないことの警告はフロント側の責務)。
         let position = to_effect_position(eff.position);
         let Some((_, id)) = spawn_effect(engine, EffectTarget::Source(source), position, params)
         else {
