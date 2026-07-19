@@ -45,6 +45,11 @@ service PreviewDaemon {
   // Container を破棄する。再生中の Source には影響しない。
   rpc DestroyContainer(DestroyContainerRequest) returns (DestroyContainerResponse);
 
+  // 波形ピークを計算する (Editor の波形表示用)。ファイルをフルデコードし、
+  // bins 個の等幅ビンごとの max |sample| (全 ch 混合、[0,1]) を返す。
+  // エンジン (再生系) には触れず、ハンドラ内のブロッキングタスクで完結する。
+  rpc ComputePeaks(ComputePeaksRequest) returns (ComputePeaksResponse);
+
   // エンジンイベントを購読する。接続中は daemon → client へ push し続ける。
   // 購読開始「以降」のイベントのみが流れる (過去分のリプレイはしない)。
   // 配信バッファが溢れた場合、遅い購読者はドロップされずに古いイベントを
@@ -142,6 +147,17 @@ message StopResponse {
 message StopAllRequest {}
 message StopAllResponse {
   bool accepted = 1;
+}
+
+message ComputePeaksRequest {
+  // 対象ファイルの絶対パス (LoadBuffer と同じ規約)。
+  string path = 1;
+  // ビン数 (波形表示の横解像度)。0 以下は INVALID_ARGUMENT。上限 4096。
+  uint32 bins = 2;
+}
+message ComputePeaksResponse {
+  // 長さ bins。フレーム数がビン数より少ない場合、余りは 0.0。
+  repeated float peaks = 1;
 }
 
 message PingRequest {}

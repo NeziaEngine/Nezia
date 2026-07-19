@@ -86,6 +86,35 @@ func cmdLoad(env *Env, args []string) int {
 	return client.ExitOK
 }
 
+func cmdPeaks(env *Env, args []string) int {
+	fs := flag.NewFlagSet("peaks", flag.ContinueOnError)
+	fs.SetOutput(env.Stderr)
+	bins := fs.Int("bins", 256, "number of peak bins (1..4096)")
+	pos, err := parseAnywhere(fs, args)
+	if err != nil {
+		return client.ExitAppErr
+	}
+	if len(pos) != 1 {
+		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: "usage: peaks <path> [--bins n]", Exit: client.ExitAppErr})
+	}
+	path, err := filepath.Abs(pos[0])
+	if err != nil {
+		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: err.Error(), Exit: client.ExitAppErr})
+	}
+	c, err := env.dial()
+	if err != nil {
+		return env.fail(err)
+	}
+	ctx, cancel := env.Opts.Context()
+	defer cancel()
+	resp, err := c.PD.ComputePeaks(ctx, &neziav1.ComputePeaksRequest{Path: path, Bins: uint32(*bins)})
+	if err != nil {
+		return env.fail(client.MapRPCError(err))
+	}
+	env.Format.OK(env.Stdout, output.KV{Key: "peaks", Value: resp.GetPeaks()})
+	return client.ExitOK
+}
+
 func cmdPlay(env *Env, args []string) int {
 	fs := flag.NewFlagSet("play", flag.ContinueOnError)
 	fs.SetOutput(env.Stderr)

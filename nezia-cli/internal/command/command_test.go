@@ -20,6 +20,7 @@ type fakeDaemon struct {
 	neziav1.UnimplementedPreviewDaemonServer
 	lastLoadPath string
 	lastLoad     *neziav1.LoadBufferRequest
+	lastPeaks    *neziav1.ComputePeaksRequest
 	lastPlay     *neziav1.PlayRequest
 	stopAccepted bool
 }
@@ -32,6 +33,11 @@ func (f *fakeDaemon) LoadBuffer(_ context.Context, req *neziav1.LoadBufferReques
 	f.lastLoadPath = req.GetPath()
 	f.lastLoad = req
 	return &neziav1.LoadBufferResponse{Buffer: &neziav1.BufferId{Index: 3, Generation: 1}}, nil
+}
+
+func (f *fakeDaemon) ComputePeaks(_ context.Context, req *neziav1.ComputePeaksRequest) (*neziav1.ComputePeaksResponse, error) {
+	f.lastPeaks = req
+	return &neziav1.ComputePeaksResponse{Peaks: []float32{0.5, 1}}, nil
 }
 
 func (f *fakeDaemon) Play(_ context.Context, req *neziav1.PlayRequest) (*neziav1.PlayResponse, error) {
@@ -129,6 +135,23 @@ func TestLoadDefaultIsStatic(t *testing.T) {
 	}
 	if fake.lastLoad.GetStreaming() || fake.lastLoad.GetBufferSeconds() != 0 {
 		t.Errorf("static load should not set streaming fields: %+v", fake.lastLoad)
+	}
+}
+
+func TestPeaksSendsBinsAndPath(t *testing.T) {
+	fake := &fakeDaemon{}
+	env, stdout := newEnv(t, fake, output.JSON)
+	if code := Dispatch(env, "peaks", []string{"--bins", "2", "relative/x.wav"}); code != 0 {
+		t.Fatalf("exit=%d", code)
+	}
+	if got := fake.lastPeaks.GetBins(); got != 2 {
+		t.Errorf("bins=%d", got)
+	}
+	if !strings.HasPrefix(fake.lastPeaks.GetPath(), "/") {
+		t.Errorf("path not absolute: %q", fake.lastPeaks.GetPath())
+	}
+	if got := stdout.String(); got != `{"ok":true,"peaks":[0.5,1]}`+"\n" {
+		t.Errorf("stdout=%q", got)
 	}
 }
 

@@ -47,6 +47,14 @@ func cmdSchema(env *Env) int {
 				Output: map[string]string{"buffer": "string (<index>-<generation>)"},
 			},
 			{
+				Name: "peaks",
+				Args: []schemaArg{
+					{Name: "path", Type: "string", Positional: true},
+					{Name: "--bins", Type: "int", Default: 256.0},
+				},
+				Output: map[string]string{"peaks": "float[] (bins 個、各ビンの max |sample|)"},
+			},
+			{
 				Name: "play",
 				Args: []schemaArg{
 					{Name: "buffer", Type: "string", Positional: true},
