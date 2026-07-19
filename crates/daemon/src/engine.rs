@@ -309,6 +309,10 @@ fn run_loop(
     // ループフラグ設定 (worker 責務のため source looping と別系統) を行う。
     let mut streaming_buffers: std::collections::HashSet<BufferId> =
         std::collections::HashSet::new();
+    // Play (clip の Custom Curve 付き) がソースに紐付けたカーブ。despawn 後に
+    // destroy_attenuation_curve で回収する (clip_effects と同じパターン)。
+    let mut clip_curves: std::collections::HashMap<EntityId, nezia_core::AttenuationCurveId> =
+        std::collections::HashMap::new();
     loop {
         match rx.recv_timeout(POLL_INTERVAL) {
             Ok(req) => {
@@ -317,6 +321,7 @@ fn run_loop(
                     master,
                     &mut mixer_state,
                     &mut clip_effects,
+                    &mut clip_curves,
                     &mut streaming_buffers,
                     req,
                 );
@@ -327,7 +332,7 @@ fn run_loop(
             // 全 Sender が drop された (daemon 終了) → ループを抜けてエンジンを破棄。
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        reap_clip_effects(engine, &mut clip_effects, &mut despawn_rx);
+        reap_clip_resources(engine, &mut clip_effects, &mut clip_curves, &mut despawn_rx);
     }
 }
 
@@ -336,27 +341,43 @@ fn run_loop(
 /// proto3 のゼロ値と実用デフォルトのずれをここで吸収する:
 /// - priority 0 はデフォルト 128 として扱う (proto コメントに明記)
 /// - min/max_distance / rolloff の 0 は core のデフォルト値に置き換える
-fn clip_spawn_params(clip: Option<&ClipParams>) -> (u8, SpawnSpatialInit) {
+fn clip_spawn_params(
+    engine: &mut SoundEngine,
+    clip: Option<&ClipParams>,
+) -> (u8, SpawnSpatialInit, Option<nezia_core::AttenuationCurveId>) {
     let Some(clip) = clip else {
-        return (PREVIEW_PRIORITY, SpawnSpatialInit::NONE);
+        return (PREVIEW_PRIORITY, SpawnSpatialInit::NONE, None);
     };
     let priority = if clip.priority == 0 {
         PREVIEW_PRIORITY
     } else {
         clip.priority.min(255) as u8
     };
-    let spatial = match &clip.spatial {
-        None => SpawnSpatialInit::NONE,
+    let (spatial, curve) = match &clip.spatial {
+        None => (SpawnSpatialInit::NONE, None),
         Some(s) => {
             use crate::proto::v1::AttenuationModel as ProtoModel;
             use nezia_core::AttenuationModel;
+            // Custom はカーブ生成に成功した場合のみ有効化する。制御点不足
+            // (2 点未満) や MAX_CURVES 枯渇時は InverseDistance へフォールバック
+            // (エラーで再生を止めるほどのことではない)。
+            let mut curve = None;
             let model = match ProtoModel::try_from(s.model) {
                 Ok(ProtoModel::None) => AttenuationModel::None,
                 Ok(ProtoModel::Linear) => AttenuationModel::Linear,
                 Ok(ProtoModel::Exponential) => AttenuationModel::Exponential,
+                Ok(ProtoModel::Custom) if s.curve_points.len() >= 2 => {
+                    match engine.create_attenuation_curve(&s.curve_points) {
+                        Some(id) => {
+                            curve = Some(id);
+                            AttenuationModel::Custom
+                        }
+                        None => AttenuationModel::InverseDistance,
+                    }
+                }
                 _ => AttenuationModel::InverseDistance,
             };
-            SpawnSpatialInit {
+            let spatial = SpawnSpatialInit {
                 enabled: true,
                 model,
                 min_distance: if s.min_distance > 0.0 { s.min_distance } else { 1.0 },
@@ -364,21 +385,24 @@ fn clip_spawn_params(clip: Option<&ClipParams>) -> (u8, SpawnSpatialInit) {
                 rolloff: if s.rolloff > 0.0 { s.rolloff } else { 1.0 },
                 doppler_level: s.doppler_level.clamp(0.0, 1.0),
                 ..SpawnSpatialInit::NONE
-            }
+            };
+            (spatial, curve)
         }
     };
-    (priority, spatial)
+    (priority, spatial, curve)
 }
 
-/// despawn したソースのクリップエフェクトを回収する。
+/// despawn したソースのクリップ資源 (エフェクト / Custom Curve) を回収する。
 ///
 /// event sink → broadcast 経由で `SourceDespawned` を受け取り、該当ソースに
-/// 生やしたエフェクトを `remove_effect` する。broadcast が Lagged した場合
+/// 生やしたエフェクトを `remove_effect`、紐付けたカーブを
+/// `destroy_attenuation_curve` する。broadcast が Lagged した場合
 /// (容量 256 超のバースト) は取りこぼす可能性があるが、preview 用途の
 /// イベントレートでは実質発生しない。
-fn reap_clip_effects(
+fn reap_clip_resources(
     engine: &mut SoundEngine,
     clip_effects: &mut std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>>,
+    clip_curves: &mut std::collections::HashMap<EntityId, nezia_core::AttenuationCurveId>,
     despawn_rx: &mut broadcast::Receiver<Event>,
 ) {
     loop {
@@ -389,6 +413,9 @@ fn reap_clip_effects(
                         let _ = engine.remove_effect(effect);
                     }
                 }
+                if let Some(curve) = clip_curves.remove(&id) {
+                    let _ = engine.destroy_attenuation_curve(curve);
+                }
             }
             Ok(_) => {}
             Err(broadcast::error::TryRecvError::Lagged(_)) => {}
@@ -397,11 +424,13 @@ fn reap_clip_effects(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle(
     engine: &mut SoundEngine,
     master: EntityId,
     mixer_state: &mut Option<MixerState>,
     clip_effects: &mut std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>>,
+    clip_curves: &mut std::collections::HashMap<EntityId, nezia_core::AttenuationCurveId>,
     streaming_buffers: &mut std::collections::HashSet<BufferId>,
     req: EngineRequest,
 ) {
@@ -456,10 +485,24 @@ fn handle(
                 engine.seek_streaming(buffer, 0);
                 engine.set_streaming_loop(buffer, looping);
             }
-            let (priority, spatial) = clip_spawn_params(clip.as_ref());
+            let (priority, spatial, curve) = clip_spawn_params(engine, clip.as_ref());
             let handle = engine.play_with_handle(
                 buffer, volume, pitch, target_bus, looping, priority, spatial,
             );
+            // Custom Attenuation Curve: spawn 成功後にソースへ紐付ける (コマンド
+            // キューは FIFO なので spawn より後に適用される)。ソース despawn 時に
+            // reaper が destroy する (MAX_CURVES=256 のリーク防止)。
+            if let Some(curve_id) = curve {
+                match handle {
+                    Some(source) if engine.set_source_attenuation_curve(source, Some(curve_id)) => {
+                        clip_curves.insert(source, curve_id);
+                    }
+                    _ => {
+                        // spawn 失敗 or 紐付け失敗: カーブだけ残さない。
+                        let _ = engine.destroy_attenuation_curve(curve_id);
+                    }
+                }
+            }
             // クリップのエフェクト / Send を spawn 済みソースへ適用する。
             if let (Some(source), Some(clip)) = (handle, clip.as_ref())
                 && !(clip.effects.is_empty() && clip.sends.is_empty())
@@ -471,7 +514,8 @@ fn handle(
                         }
                     }
                     Err(msg) => {
-                        // apply_clip がソース停止まで巻き戻し済み。
+                        // apply_clip がソース停止まで巻き戻し済み。curve は despawn
+                        // イベント経由の reaper が回収する。
                         let _ = reply.send(PlayReply::ClipInvalid(msg));
                         return;
                     }
