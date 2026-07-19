@@ -154,10 +154,105 @@ jobs:
           path: staging/
           if-no-files-found: error
 
+  # ── preview daemon + nezia-cli (Editor 試聴用ツール、デスクトップのみ) ──────
+  build-tools:
+    name: Build tools (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: tools-macos
+            runner: macos-latest
+            daemon_targets: "aarch64-apple-darwin x86_64-apple-darwin"
+            go_os: darwin
+            go_archs: "arm64 amd64"
+            exe: ""
+          - label: tools-windows
+            runner: windows-latest
+            daemon_targets: "x86_64-pc-windows-msvc"
+            go_os: windows
+            go_archs: "amd64"
+            exe: ".exe"
+          - label: tools-linux
+            runner: ubuntu-latest
+            daemon_targets: "x86_64-unknown-linux-gnu"
+            go_os: linux
+            go_archs: "amd64"
+            exe: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        # ターゲット追加はビルドループ内の rustup target add で行う
+        # (matrix.daemon_targets がスペース区切りのため)。
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc (daemon build.rs が要求)
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Linux audio deps
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Set up Go (nezia-cli)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: nezia-cli/go.mod
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: tools-${{ matrix.label }}
+
+      - name: Build nezia-daemon (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for t in ${{ matrix.daemon_targets }}; do
+            rustup target add "$t"
+            cargo build -p nezia-daemon --release --target "$t"
+          done
+
+      - name: Build nezia-cli (release)
+        shell: bash
+        working-directory: nezia-cli
+        run: |
+          set -euo pipefail
+          mkdir -p ../staging-tools
+          version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          for a in ${{ matrix.go_archs }}; do
+            GOOS=${{ matrix.go_os }} GOARCH="$a" CGO_ENABLED=0 \
+              go build -ldflags "-X jp.nezia/nezia-cli/internal/command.version=$version" \
+              -o "../staging-tools/nezia-cli-$a${{ matrix.exe }}" ./cmd/nezia-cli
+          done
+
+      - name: Stage daemon binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging-tools
+          for t in ${{ matrix.daemon_targets }}; do
+            cp "target/$t/release/nezia-daemon${{ matrix.exe }}" \
+               "staging-tools/nezia-daemon-$t${{ matrix.exe }}"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nezia-${{ matrix.label }}
+          path: staging-tools/
+          if-no-files-found: error
+
   # ── 生成物を Nezia.Unity リポジトリへ PR ─────────────────────────────────
   publish:
     name: Publish PR to Nezia.Unity
-    needs: build
+    needs: [build, build-tools]
     runs-on: macos-latest # universal binary を作るため macOS で実行
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry_run }}
 
@@ -251,12 +346,42 @@ jobs:
           mkdir -p "$pkg/Runtime/Generated"
           cp artifacts/nezia-linux-x86_64/NeziaNative.g.cs "$pkg/Runtime/Generated/NeziaNative.g.cs"
 
+          # ── preview ツール (daemon + cli) を Editor/Bin~ に配置 ──
+          # チルダフォルダは Unity のアセット DB から除外されるため、.exe が
+          # PluginImporter に誤って取り込まれない (Samples~ と同じ規約)。
+          # Editor 側は PackageInfo.resolvedPath ベースのファイルパス解決なので
+          # アセット DB 外でも見つけられる。
+          tools_root="$pkg/Editor/Bin~"
+          mkdir -p "$tools_root/macOS" "$tools_root/Windows" "$tools_root/Linux"
+
+          lipo -create \
+            artifacts/nezia-tools-macos/nezia-daemon-aarch64-apple-darwin \
+            artifacts/nezia-tools-macos/nezia-daemon-x86_64-apple-darwin \
+            -output "$tools_root/macOS/nezia-daemon"
+          lipo -create \
+            artifacts/nezia-tools-macos/nezia-cli-arm64 \
+            artifacts/nezia-tools-macos/nezia-cli-amd64 \
+            -output "$tools_root/macOS/nezia-cli"
+
+          cp artifacts/nezia-tools-windows/nezia-daemon-x86_64-pc-windows-msvc.exe \
+             "$tools_root/Windows/nezia-daemon.exe"
+          cp artifacts/nezia-tools-windows/nezia-cli-amd64.exe \
+             "$tools_root/Windows/nezia-cli.exe"
+
+          cp artifacts/nezia-tools-linux/nezia-daemon-x86_64-unknown-linux-gnu \
+             "$tools_root/Linux/nezia-daemon"
+          cp artifacts/nezia-tools-linux/nezia-cli-amd64 \
+             "$tools_root/Linux/nezia-cli"
+
+          chmod +x "$tools_root/macOS/"* "$tools_root/Linux/"*
+
           # バージョン情報を VERSION.txt に書いて差分を可視化
           {
             echo "source-repo: ${{ github.repository }}"
             echo "source-sha: ${{ github.sha }}"
             echo "source-ref: ${{ github.ref }}"
             echo "built-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "tools: nezia-daemon + nezia-cli (Editor/Bin~/{macOS,Windows,Linux})"
           } > "$pkg/VERSION.txt"
 
       - name: Commit & push (no force)
