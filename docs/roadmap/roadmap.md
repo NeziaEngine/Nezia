@@ -111,7 +111,7 @@ Wwise / FMOD / Unity はいずれも**アルゴリズムのパラメータを露
   port discovery + parent PID 監視 + `LoadBuffer`/`Play`/`Stop`) に加え、`nezia-cli`
   front door と Tier 2 (Bus/Mixer ロード・Clip-centric 反映・Random Container・
   `SubscribeEvents`) まで実装済み** (0.2.x ブランチ #50〜#57、daemon CONCEPT.md の
-  0.2.0 スコープ完了)。**M1 の backend 側は揃い、残るは Unity IP-6 (Editor 側の試聴 UI)**。
+  0.2.0 スコープ完了)。**M1 (試聴) は Unity IP-6 (#69〜#74) まで含めて完成**。残課題だった Effects/Sends 反映・減衰カーブ・波形・バイナリ同梱も #59〜#63 で解消。
   「統合の仕方」を曖昧にすると「他社もやっている」に溶けるため、上記の差分を主張の核に据える。
 
 ### 柱に含めないもの — ドロップイン互換
@@ -123,7 +123,7 @@ Wwise / FMOD / Unity はいずれも**アルゴリズムのパラメータを露
 **革新性の柱には数えない**。
 
 > **3 本柱の現状サマリ**: 柱1 は実在・稼働中、柱2 は設計方針確定 (意図マクロ)・未実装、
-> 柱3 は仕様確定・**backend 実装済み (daemon + nezia-cli, 0.2.x #50〜#57)・Unity 側 (IP-6) は実装中**。
+> 柱3 は**試聴が完成** (daemon + nezia-cli #50〜#57 + 残課題 #59〜#63、Unity IP-6 #69〜#74 完了)。可視化はこれから。
 > **「既にある」のは柱1 と柱3 の backend**であり、柱2 と柱3 のフロント (Editor 試聴/可視化) を
 > 実体化することが NEZIA を「語れるエンジン」にする本丸である。これは後続のマイルストーン
 > (M1 = 柱3 の試聴、M3 = 柱3 の可視化 + 柱2 の意図マクロ) と直接対応する。
@@ -162,8 +162,8 @@ Authoring  preview      Clip-centric  プロファイラ   B経路
 
 > **マイルストーンは順序ゲートではなく「主張できる立ち位置」である。**
 > 現在地は後述のとおり非対称で、M2 (parity) のランタイムは達成済みだが、
-> M1 の「試聴できる」は backend (daemon + cli) が揃った一方で Editor UI (IP-6) が未完という
-> 状態が併存する。順番に M1→M4 を埋めるのではなく、
+> M1「試聴できる」は完了した (IP-6 全スコープ)。M3 の可視化が次の空白として残る。
+> 順番に M1→M4 を埋めるのではなく、
 > **各マイルストーンが『揃った』と言えるために何が欠けているか**で優先度を決める。
 
 ---
@@ -192,20 +192,19 @@ Authoring  preview      Clip-centric  プロファイラ   B経路
 |---|---|---|
 | **Runtime (鳴らす力)** | **M2 相当まで到達**。M3 の一部も先取り | DSP/Send/Snapshot/PlayScheduled/Voice Virtualization まで実装済。Listener Focus 等の差別化機能も既にある |
 | **Authoring — Config 設計** | **成立** | Mixer / Snapshot / Clip-centric authoring が Inspector で組める (Unity IP-1〜4 完了) |
-| **Authoring — 試聴 (試す)** | **backend 完成 / Editor UI 実装中** | preview daemon + `nezia-cli` (Tier 2) 実装済 (0.2.x #50〜#57)。残るは Unity IP-6 (Editor 側で ▶ を出す試聴 UI) |
-| **Authoring — 可視化 (観る)** | **空白** | バスツリー/アクティブソース/dB メーターを覗くプロファイラが未実装。M3 の片輪が欠けている |
+| **Authoring — 試聴 (試す)** | **完成** | daemon + `nezia-cli` (Tier 2 + streaming/curve/peaks #59〜#63)、Unity IP-6 全スコープ (#69〜#74)。▶ 試聴・波形・Clip 音響パラメータ込みで完結 |
+| **Authoring — 可視化 (観る)** | **空白** ← 現在の最前線 | バスツリー/アクティブソース/dB メーターを覗くプロファイラが未実装。M3 の片輪が欠けている |
 | **Authoring — 本格オーサリング (B経路)** | **未着手** | M4。プロジェクトファイル方式・`.nez` 形式は構想段階 |
 
 ### この非対称から導かれる直近の最優先
 
-> ランタイムは「Unity 並み」に達し、**試聴の backend (preview daemon + `nezia-cli`) も
-> 完成した** (0.2.x #50〜#57)。残るは **Unity IP-6 Asset Preview** — Editor 側で ▶ を押して
-> daemon 経由で試聴する UI である。backend 依存が外れたため、ここは即着手できる。
+> **M1「鳴らせる・試聴できる」は両トラックで成立した。** 試聴は backend (daemon +
+> `nezia-cli` #50〜#57) と Unity IP-6 (#69〜#74) の全スコープ — 基本試聴 / streaming /
+> Clip Effects・Sends / 減衰カーブ / 波形表示 / バイナリ同梱 — が完了している。
 >
-> したがって直近の最優先は **Unity IP-6 (M1 の試聴ピースの Editor 側)** に移った。
-> Unity 統合ロードマップでも IP-6 Asset Preview が「他のどんな自動化より先に効く」と
-> 明言されており、daemon 依存が解けた今こそ最も即効性が高い。
-> IP-6 が閉じれば M1「鳴らせる・試聴できる」が両トラックで揃う。
+> したがって直近の最優先は **ランタイムプロファイラ + デバッグビジュアライザ基盤
+> (M3 可視化、Unity IP-10)** に移った。データ指向設計の利点は可視化で初めて伝わり、
+> post-unity-performance.md の「測ってから書く」の前提でもある。
 
 ---
 
@@ -323,10 +322,14 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
    **(完了 #52/#54/#55/#56)** Unity IP-6 を解除する最小スコープ (daemon CONCEPT.md の
    Tier 2) が全て完了。`SubscribeEvents` は `nezia-cli subscribe` の stdout ストリーム
    として露出。#57 で Unity Process 起動時の孤児化バグも修正済み。
-4. **Unity IP-6 Asset Preview (Editor 側試聴 UI)** (M1、最優先)
-   `nezia-cli` を `Process` 起動して Project ビューで ▶ 試聴。残課題: Effects/Sends 反映・
-   減衰カーブ・波形表示・バイナリ同梱パイプライン。**backend が揃った今の直近最優先。**
-5. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10)
+4. ~~**Unity IP-6 Asset Preview (Editor 側試聴 UI)**~~ **(全スコープ完了)**
+   `nezia-cli` を `Process` 起動して Project ビューで ▶ 試聴 (Nezia.Unity #69)。UI Toolkit/UXML・
+   非同期再生・daemon プリウォーム込み。長尺 BGM の streaming ロード (core #59 + Unity #70) で
+   初回再生を ~6.5s → ~0.5s に短縮。残課題 4 件も完了:
+   Clip Effects/Sends 反映 (core #60 + Unity #71) / バイナリ同梱 Editor/Bin~ (core #61 +
+   Unity #72) / カスタム減衰カーブ (core #62 + Unity #73) / 波形表示 (core #63 + Unity #74)。
+   **M1「鳴らせる・試聴できる」が両トラックで完成。**
+5. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10) ← **次はここ**
    差別化機能より前。可視化の共有メモリ side-channel は daemon CONCEPT.md「将来拡張」参照。
 6. **PlayScheduled Unity 露出** (M3、Unity IP-7、cheap win)
 7. **Sound Dictionary 経路の整備** (M3、Unity IP-8)
