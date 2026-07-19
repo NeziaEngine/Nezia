@@ -10,6 +10,8 @@ mod effect_api;
 mod event_dispatch;
 mod live_params;
 mod metrics_api;
+mod profiler;
+mod profiler_api;
 mod query_api;
 mod send_alloc;
 mod send_api;
@@ -51,6 +53,7 @@ pub(crate) use live_params::SourceLiveParams;
 use send_alloc::SendIdAllocator;
 use slot_allocator::SourceSlotAllocator;
 pub(crate) use source_state_cache::SourceSnapshot;
+pub use profiler::{ProfilerBus, ProfilerFrame, ProfilerSource};
 use source_state_cache::{SourceStateCache, build_source_snapshots_buffer};
 
 pub use buffer_reader::BufferReader;
@@ -145,6 +148,9 @@ pub struct SoundEngine {
     /// サウンドスレッドが publish する生存ソースのスナップショット出力側。
     /// `poll_events()` で update し、`source_state_cache` にコピーされる。
     pub(super) source_snapshots_output: triple_buffer::Output<Vec<SourceSnapshot>>,
+    /// M3 可視化: プロファイラフレームの読み口と有効フラグ。
+    pub(super) profiler_output: profiler::ProfilerFrameOut,
+    pub(super) profiler_enabled: profiler::ProfilerEnabled,
     /// メインスレッド側の最新スナップショット（SoA）。
     /// `is_source_alive()` / `source_position()` / `batch_*` 系がここを参照する。
     /// SoA レイアウトにより、batch query の hot path（`indices` だけ舐める）で
@@ -217,6 +223,11 @@ impl SoundEngine {
             build_velocity_updates_buffer(config.max_sources);
         let (source_snapshots_input, source_snapshots_output) =
             build_source_snapshots_buffer(config.max_sources);
+        let (profiler_input, profiler_output) =
+            profiler::build_profiler_buffer(config.max_sources);
+        let profiler_enabled: profiler::ProfilerEnabled =
+            Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let profiler_enabled_audio = Arc::clone(&profiler_enabled);
 
         let shared_buffers: Arc<ArcSwap<Vec<Option<Arc<AudioBuffer>>>>> =
             Arc::new(ArcSwap::from_pointee(Vec::new()));
@@ -280,6 +291,8 @@ impl SoundEngine {
             position_updates_output,
             velocity_updates_output,
             source_snapshots_input,
+            profiler_input,
+            profiler_enabled_audio,
             bus_world,
             source_world,
             spatial_world,
@@ -333,6 +346,8 @@ impl SoundEngine {
             live_params,
             callbacks: CallbackRegistry::with_capacity(config.max_sources),
             source_snapshots_output,
+            profiler_output,
+            profiler_enabled,
             source_state_cache: SourceStateCache::with_capacity(config.max_sources),
             device_channels: device_channels as u16,
             capture_shared,
