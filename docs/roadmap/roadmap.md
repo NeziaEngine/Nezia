@@ -108,8 +108,10 @@ Wwise / FMOD / Unity はいずれも**アルゴリズムのパラメータを露
     起動のみ、追加 DLL ゼロ)。これにより「1 つの core backend を 3 種のフロントが共有する」
     統合が、各フロントの実装言語・ランタイム制約に縛られずに成立する。
 - **解像度**: daemon は[仕様確定済み](../design/daemon/CONCEPT.md)。**骨格 (gRPC server +
-  port discovery + parent PID 監視 + `LoadBuffer`/`Play`/`Stop`) は実装済み**で、`nezia-cli`
-  と Tier 2 (Bus/Mixer ロード・Clip-centric 反映・Random・イベント) がこれから (M1)。
+  port discovery + parent PID 監視 + `LoadBuffer`/`Play`/`Stop`) に加え、`nezia-cli`
+  front door と Tier 2 (Bus/Mixer ロード・Clip-centric 反映・Random Container・
+  `SubscribeEvents`) まで実装済み** (0.2.x ブランチ #50〜#57、daemon CONCEPT.md の
+  0.2.0 スコープ完了)。**M1 の backend 側は揃い、残るは Unity IP-6 (Editor 側の試聴 UI)**。
   「統合の仕方」を曖昧にすると「他社もやっている」に溶けるため、上記の差分を主張の核に据える。
 
 ### 柱に含めないもの — ドロップイン互換
@@ -121,8 +123,9 @@ Wwise / FMOD / Unity はいずれも**アルゴリズムのパラメータを露
 **革新性の柱には数えない**。
 
 > **3 本柱の現状サマリ**: 柱1 は実在・稼働中、柱2 は設計方針確定 (意図マクロ)・未実装、
-> 柱3 は仕様確定・実装これから。**「既にある」のは柱1 のみ**であり、柱2・柱3 を実体化することが
-> NEZIA を「語れるエンジン」にする本丸である。これは後続のマイルストーン
+> 柱3 は仕様確定・**backend 実装済み (daemon + nezia-cli, 0.2.x #50〜#57)・Unity 側 (IP-6) は実装中**。
+> **「既にある」のは柱1 と柱3 の backend**であり、柱2 と柱3 のフロント (Editor 試聴/可視化) を
+> 実体化することが NEZIA を「語れるエンジン」にする本丸である。これは後続のマイルストーン
 > (M1 = 柱3 の試聴、M3 = 柱3 の可視化 + 柱2 の意図マクロ) と直接対応する。
 
 ---
@@ -154,12 +157,13 @@ Runtime   再生基盤    parity 完成   Cone/Container  大型差別化
 
 Authoring  preview      Clip-centric  プロファイラ   B経路
 ・Experience daemon       authoring     可視化        オーサリング
-(作る/試す/観る) [未]       [済]         [未]          .nez / hot reload
+(作る/試す/観る)[BE済/UI中]  [済]         [未]          .nez / hot reload
 ```
 
 > **マイルストーンは順序ゲートではなく「主張できる立ち位置」である。**
 > 現在地は後述のとおり非対称で、M2 (parity) のランタイムは達成済みだが、
-> M1 の「試聴できる」がまだ空白という状態が併存する。順番に M1→M4 を埋めるのではなく、
+> M1 の「試聴できる」は backend (daemon + cli) が揃った一方で Editor UI (IP-6) が未完という
+> 状態が併存する。順番に M1→M4 を埋めるのではなく、
 > **各マイルストーンが『揃った』と言えるために何が欠けているか**で優先度を決める。
 
 ---
@@ -188,19 +192,20 @@ Authoring  preview      Clip-centric  プロファイラ   B経路
 |---|---|---|
 | **Runtime (鳴らす力)** | **M2 相当まで到達**。M3 の一部も先取り | DSP/Send/Snapshot/PlayScheduled/Voice Virtualization まで実装済。Listener Focus 等の差別化機能も既にある |
 | **Authoring — Config 設計** | **成立** | Mixer / Snapshot / Clip-centric authoring が Inspector で組める (Unity IP-1〜4 完了) |
-| **Authoring — 試聴 (試す)** | **空白** ← 最大の非対称 | 編集中の音をその場で鳴らす preview daemon が未実装。**M1 の最も基本的なピースがまだ無い** |
+| **Authoring — 試聴 (試す)** | **backend 完成 / Editor UI 実装中** | preview daemon + `nezia-cli` (Tier 2) 実装済 (0.2.x #50〜#57)。残るは Unity IP-6 (Editor 側で ▶ を出す試聴 UI) |
 | **Authoring — 可視化 (観る)** | **空白** | バスツリー/アクティブソース/dB メーターを覗くプロファイラが未実装。M3 の片輪が欠けている |
 | **Authoring — 本格オーサリング (B経路)** | **未着手** | M4。プロジェクトファイル方式・`.nez` 形式は構想段階 |
 
 ### この非対称から導かれる直近の最優先
 
-> ランタイムは「Unity 並み」に達しているのに、**作ったサウンドを編集中に聴く手段が無い。**
-> これは「鳴らせる・試聴できる」という最も基本的な M1 の未達であり、機能の派手さに関係なく
-> **authoring 体験の最大のボトルネック**である。
+> ランタイムは「Unity 並み」に達し、**試聴の backend (preview daemon + `nezia-cli`) も
+> 完成した** (0.2.x #50〜#57)。残るは **Unity IP-6 Asset Preview** — Editor 側で ▶ を押して
+> daemon 経由で試聴する UI である。backend 依存が外れたため、ここは即着手できる。
 >
-> したがって直近の最優先は **preview daemon (M1 の試聴ピース)** である。
+> したがって直近の最優先は **Unity IP-6 (M1 の試聴ピースの Editor 側)** に移った。
 > Unity 統合ロードマップでも IP-6 Asset Preview が「他のどんな自動化より先に効く」と
-> 明言されつつ daemon 依存で止まっている。ここを開けることが最も即効性が高い。
+> 明言されており、daemon 依存が解けた今こそ最も即効性が高い。
+> IP-6 が閉じれば M1「鳴らせる・試聴できる」が両トラックで揃う。
 
 ---
 
@@ -218,19 +223,22 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
 | トラック | 項目 | 状態 |
 |---|---|---|
 | Runtime | ECS / バス / Source / Spatial 基本 / DSP (LPF/HPF/Reverb) / Ogg・MP3 ストリーミング | **済** |
-| Authoring・Experience | **preview daemon** — Editor / オーサリングツールから core を別プロセスで駆動し試聴 | **未 ← 最優先** |
+| Authoring・Experience | **preview daemon + `nezia-cli`** (backend) — core を別プロセスで駆動し試聴 | **済** (0.2.x #50〜#57) |
+| Authoring・Experience | **Unity IP-6 Asset Preview** (Editor UI) — Project ビューで ▶ 試聴 | **実装中 ← 最優先** |
 
 - daemon の責務・IPC 設計は [daemon CONCEPT.md](../design/daemon/CONCEPT.md) で確定済み
   (gRPC over loopback TCP / per-Editor-session spawn / parent PID 監視)。
-- core 側スコープ: `proto/nezia/v1/daemon.proto` 確定 → daemon binary 骨格 →
-  `LoadBuffer`/`Play`/`Stop` → **`nezia-cli` (daemon gRPC を叩く front door)** →
-  Bus/Mixer ロード → Clip-centric パラメータ反映 → Random Container プレビュー →
-  `SubscribeEvents`。詳細は daemon CONCEPT.md の「0.2.0 までに実装する範囲」。
-- Unity 側ペア: **IP-6 Asset Preview** — `nezia-cli` を `Process` 起動して試聴する
-  (Editor 側に gRPC / HTTP クライアントを持たない。追加 DLL ゼロ)。
+- core 側スコープ (**完了**): `proto/nezia/v1/daemon.proto` → daemon binary 骨格 →
+  `LoadBuffer`/`Play`/`Stop` (#49) → **`nezia-cli` front door** (#50/#51) →
+  Bus/Mixer ロード (#54) → Clip-centric パラメータ反映 (#55) → Random Container
+  プレビュー (#56) → `SubscribeEvents` (#52)。daemon CONCEPT.md の「0.2.0 スコープ (Tier 2)」
+  はすべて完了。
+- Unity 側ペア (**実装中**): **IP-6 Asset Preview** — `nezia-cli` を `Process` 起動して
+  試聴する (Editor 側に gRPC / HTTP クライアントを持たない。追加 DLL ゼロ)。
+  残課題: Effects/Sends の preview 反映・減衰カーブ・波形表示・バイナリ同梱パイプライン。
 
 **M1 が揃う条件**: アーティストが Project ビューで ▶ を押すと daemon 経由で
-**Clip の音響パラメータ込みの音が出る**。
+**Clip の音響パラメータ込みの音が出る**。← backend は達成済み、Editor UI (IP-6) が閉じれば成立。
 
 ### M2 — Unity から移行できる
 
@@ -305,21 +313,25 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
 
 現在地の非対称から導かれる優先順。上から着手する。
 
-1. ~~**preview daemon — `daemon.proto` 確定 + daemon binary 骨格**~~ **(完了)**
+1. ~~**preview daemon — `daemon.proto` 確定 + daemon binary 骨格**~~ **(完了 #49)**
    gRPC server + port discovery file + parent PID 監視 + `LoadBuffer`/`Play`/`Stop`。
-2. **`nezia-cli` — daemon gRPC を叩く薄いクライアント** (M1)
-   `load` / `play` / `stop` サブコマンド。Unity Editor・LLM/エージェント・authoring tool
-   共通の front door。結果は stdout に JSON で出す。これで Editor 側は `Process` 起動だけで
-   試聴でき、gRPC/HTTP クライアントを Editor に持たずに済む。
-3. **preview daemon — Bus/Mixer ロード + Clip-centric 反映 + Random + `SubscribeEvents`** (M1)
-   Unity IP-6 を解除する最小スコープ (daemon CONCEPT.md の Tier 2)。`SubscribeEvents` は
-   `nezia-cli subscribe` の stdout ストリームとして露出する。
-4. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10)
+2. ~~**`nezia-cli` — daemon gRPC を叩く薄いクライアント**~~ **(完了 #50/#51)**
+   `load` / `play` / `stop` + `daemon start/stop/status` / `batch` / `schema`。Unity Editor・
+   LLM/エージェント・authoring tool 共通の front door。結果は stdout に JSON で出す。
+   これで Editor 側は `Process` 起動だけで試聴でき、gRPC/HTTP クライアントを持たずに済む。
+3. ~~**preview daemon — Bus/Mixer ロード + Clip-centric 反映 + Random + `SubscribeEvents`**~~
+   **(完了 #52/#54/#55/#56)** Unity IP-6 を解除する最小スコープ (daemon CONCEPT.md の
+   Tier 2) が全て完了。`SubscribeEvents` は `nezia-cli subscribe` の stdout ストリーム
+   として露出。#57 で Unity Process 起動時の孤児化バグも修正済み。
+4. **Unity IP-6 Asset Preview (Editor 側試聴 UI)** (M1、最優先)
+   `nezia-cli` を `Process` 起動して Project ビューで ▶ 試聴。残課題: Effects/Sends 反映・
+   減衰カーブ・波形表示・バイナリ同梱パイプライン。**backend が揃った今の直近最優先。**
+5. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10)
    差別化機能より前。可視化の共有メモリ side-channel は daemon CONCEPT.md「将来拡張」参照。
-5. **PlayScheduled Unity 露出** (M3、Unity IP-7、cheap win)
-6. **Sound Dictionary 経路の整備** (M3、Unity IP-8)
-7. **Switch / Sequence Container** (M3)
-8. **Sound Cone (SP-11)** (M3)
+6. **PlayScheduled Unity 露出** (M3、Unity IP-7、cheap win)
+7. **Sound Dictionary 経路の整備** (M3、Unity IP-8)
+8. **Switch / Sequence Container** (M3)
+9. **Sound Cone (SP-11)** (M3)
 
 ---
 
@@ -468,7 +480,7 @@ M2 (parity) の判断根拠となる、Unity 標準との領域別ギャップ�
 
 | 機能 | Unity 標準 | NEZIA | 区分 |
 |------|-----------|-------|------|
-| 編集中の試聴 (preview) | △ (Editor 内蔵) | ✕ | **M1 最優先 (preview daemon)** |
+| 編集中の試聴 (preview) | △ (Editor 内蔵) | △ (backend 済 / IP-6 実装中) | **M1 最優先 (Unity IP-6)** |
 | ランタイムプロファイラ | △ (素朴) | ✕ | **M3 差別化機会** |
 | デバッグビジュアライザ (バス・Source 一覧) | ✕ | ✕ | **M3 差別化** |
 | プロジェクトファイル方式 (本格オーサリング) | ✕ | ✕ | **M4 (CONCEPT.md B 経路)** |
