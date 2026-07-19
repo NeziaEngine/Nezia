@@ -27,7 +27,9 @@ Usage:
 
 Commands:
   ping                       daemon の疎通確認とバージョン取得
-  load <path>                オーディオファイルをロードし buffer handle を返す
+  load <path> [flags]        オーディオファイルをロードし buffer handle を返す
+      --streaming            ストリーミングバッファとしてロード (長尺 BGM 向け、即応答)
+      --buffer-seconds <f>   ストリーミングリング容量の目安 (省略 = daemon 既定)
   play <buffer> [flags]      buffer を再生し source handle を返す
       --volume <f> --pitch <f> --loop
       --bus <name>           出力先バス (mixer load の論理名、省略 = Master)

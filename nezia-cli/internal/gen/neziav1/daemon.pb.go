@@ -134,7 +134,16 @@ type LoadBufferRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ロードするファイルの絶対パス (Editor の Asset DB 由来)。
 	// バイト列転送は 0.2.0 では非対応 (CONCEPT.md §6)。
-	Path          string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// true でストリーミングバッファとしてロードする (Phase 2-4)。
+	// フルデコードせず即座に返るため、長尺 BGM の試聴に使う。
+	// 返る BufferId は静的バッファと同じ ID 空間で、Play にそのまま渡せる。
+	// 制約: 同一ストリーミングバッファの同時多重再生は非対応 (リング単一消費)。
+	//
+	//	daemon は Play のたびにバッファを先頭へシークする。
+	Streaming bool `protobuf:"varint,2,opt,name=streaming,proto3" json:"streaming,omitempty"`
+	// ストリーミング時のリング容量目安 (秒)。0 以下 = daemon 既定 (1.0 秒)。
+	BufferSeconds float32 `protobuf:"fixed32,3,opt,name=buffer_seconds,json=bufferSeconds,proto3" json:"buffer_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,6 +183,20 @@ func (x *LoadBufferRequest) GetPath() string {
 		return x.Path
 	}
 	return ""
+}
+
+func (x *LoadBufferRequest) GetStreaming() bool {
+	if x != nil {
+		return x.Streaming
+	}
+	return false
+}
+
+func (x *LoadBufferRequest) GetBufferSeconds() float32 {
+	if x != nil {
+		return x.BufferSeconds
+	}
+	return 0
 }
 
 type LoadBufferResponse struct {
@@ -2292,9 +2315,11 @@ var File_nezia_v1_daemon_proto protoreflect.FileDescriptor
 
 const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\n" +
-	"\x15nezia/v1/daemon.proto\x12\bnezia.v1\x1a\x15nezia/v1/common.proto\"'\n" +
+	"\x15nezia/v1/daemon.proto\x12\bnezia.v1\x1a\x15nezia/v1/common.proto\"l\n" +
 	"\x11LoadBufferRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"@\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1c\n" +
+	"\tstreaming\x18\x02 \x01(\bR\tstreaming\x12%\n" +
+	"\x0ebuffer_seconds\x18\x03 \x01(\x02R\rbufferSeconds\"@\n" +
 	"\x12LoadBufferResponse\x12*\n" +
 	"\x06buffer\x18\x01 \x01(\v2\x12.nezia.v1.BufferIdR\x06buffer\"\xbd\x01\n" +
 	"\vPlayRequest\x12*\n" +

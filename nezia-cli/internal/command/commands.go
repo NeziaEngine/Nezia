@@ -50,11 +50,19 @@ func cmdPing(env *Env) int {
 }
 
 func cmdLoad(env *Env, args []string) int {
-	if len(args) != 1 {
-		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: "usage: load <path>", Exit: client.ExitAppErr})
+	fs := flag.NewFlagSet("load", flag.ContinueOnError)
+	fs.SetOutput(env.Stderr)
+	streaming := fs.Bool("streaming", false, "load as streaming buffer (no full decode; for long BGM)")
+	bufferSeconds := fs.Float64("buffer-seconds", 0, "streaming ring capacity in seconds (0 = daemon default)")
+	pos, err := parseAnywhere(fs, args)
+	if err != nil {
+		return client.ExitAppErr
+	}
+	if len(pos) != 1 {
+		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: "usage: load <path> [--streaming] [--buffer-seconds f]", Exit: client.ExitAppErr})
 	}
 	// daemon はカレントディレクトリが異なるため絶対パスで送る。
-	path, err := filepath.Abs(args[0])
+	path, err := filepath.Abs(pos[0])
 	if err != nil {
 		return env.fail(&client.CodedError{Code: "INVALID_ARGUMENT", Msg: err.Error(), Exit: client.ExitAppErr})
 	}
@@ -64,7 +72,11 @@ func cmdLoad(env *Env, args []string) int {
 	}
 	ctx, cancel := env.Opts.Context()
 	defer cancel()
-	resp, err := c.PD.LoadBuffer(ctx, &neziav1.LoadBufferRequest{Path: path})
+	resp, err := c.PD.LoadBuffer(ctx, &neziav1.LoadBufferRequest{
+		Path:          path,
+		Streaming:     *streaming,
+		BufferSeconds: float32(*bufferSeconds),
+	})
 	if err != nil {
 		return env.fail(client.MapRPCError(err))
 	}

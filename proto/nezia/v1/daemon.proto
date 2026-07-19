@@ -56,6 +56,14 @@ message LoadBufferRequest {
   // ロードするファイルの絶対パス (Editor の Asset DB 由来)。
   // バイト列転送は 0.2.0 では非対応 (CONCEPT.md §6)。
   string path = 1;
+  // true でストリーミングバッファとしてロードする (Phase 2-4)。
+  // フルデコードせず即座に返るため、長尺 BGM の試聴に使う。
+  // 返る BufferId は静的バッファと同じ ID 空間で、Play にそのまま渡せる。
+  // 制約: 同一ストリーミングバッファの同時多重再生は非対応 (リング単一消費)。
+  //       daemon は Play のたびにバッファを先頭へシークする。
+  bool streaming = 2;
+  // ストリーミング時のリング容量目安 (秒)。0 以下 = daemon 既定 (1.0 秒)。
+  float buffer_seconds = 3;
 }
 message LoadBufferResponse {
   BufferId buffer = 1;

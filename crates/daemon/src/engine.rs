@@ -34,6 +34,10 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 enum EngineRequest {
     Load {
         path: String,
+        /// true でストリーミングバッファとしてロードする (フルデコードなし)。
+        streaming: bool,
+        /// ストリーミング時のリング容量目安 (秒)。0 以下 = core 既定 (1.0)。
+        buffer_seconds: f32,
         reply: oneshot::Sender<Result<BufferId, String>>,
     },
     Play {
@@ -113,11 +117,22 @@ impl EngineHandle {
         self.events.subscribe()
     }
 
-    /// オーディオファイルをロードする。
-    pub async fn load(&self, path: String) -> Result<BufferId, EngineError> {
+    /// オーディオファイルをロードする。`streaming = true` でストリーミング
+    /// バッファ (フルデコードなし・即応答) としてロードする。
+    pub async fn load(
+        &self,
+        path: String,
+        streaming: bool,
+        buffer_seconds: f32,
+    ) -> Result<BufferId, EngineError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(EngineRequest::Load { path, reply })
+            .send(EngineRequest::Load {
+                path,
+                streaming,
+                buffer_seconds,
+                reply,
+            })
             .map_err(|_| EngineError::Disconnected)?;
         match rx.await {
             Ok(Ok(id)) => Ok(id),
@@ -290,10 +305,21 @@ fn run_loop(
     // remove_effect で回収する (core は source 対象エフェクトを自動解放しない)。
     let mut clip_effects: std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>> =
         std::collections::HashMap::new();
+    // streaming としてロードした BufferId の集合。Play 時に先頭シークと
+    // ループフラグ設定 (worker 責務のため source looping と別系統) を行う。
+    let mut streaming_buffers: std::collections::HashSet<BufferId> =
+        std::collections::HashSet::new();
     loop {
         match rx.recv_timeout(POLL_INTERVAL) {
             Ok(req) => {
-                handle(engine, master, &mut mixer_state, &mut clip_effects, req);
+                handle(
+                    engine,
+                    master,
+                    &mut mixer_state,
+                    &mut clip_effects,
+                    &mut streaming_buffers,
+                    req,
+                );
                 // 終了したソースのスロット回収 / コールバック処理。
                 engine.poll_events();
             }
@@ -376,11 +402,33 @@ fn handle(
     master: EntityId,
     mixer_state: &mut Option<MixerState>,
     clip_effects: &mut std::collections::HashMap<EntityId, Vec<nezia_core::EffectId>>,
+    streaming_buffers: &mut std::collections::HashSet<BufferId>,
     req: EngineRequest,
 ) {
     match req {
-        EngineRequest::Load { path, reply } => {
-            let result = engine.load(&path).map_err(|e| e.to_string());
+        EngineRequest::Load {
+            path,
+            streaming,
+            buffer_seconds,
+            reply,
+        } => {
+            let result = if streaming {
+                let opts = nezia_core::StreamingOpts {
+                    buffer_seconds: if buffer_seconds > 0.0 {
+                        buffer_seconds
+                    } else {
+                        nezia_core::StreamingOpts::default().buffer_seconds
+                    },
+                };
+                engine
+                    .load_streaming(&path, opts)
+                    .map_err(|e| e.to_string())
+                    .inspect(|id| {
+                        streaming_buffers.insert(*id);
+                    })
+            } else {
+                engine.load(&path).map_err(|e| e.to_string())
+            };
             let _ = reply.send(result);
         }
         EngineRequest::Play {
@@ -401,6 +449,13 @@ fn handle(
                 let _ = reply.send(PlayReply::UnknownBus);
                 return;
             };
+            // streaming バッファはリングが単一消費で前回再生の続きから読まれるため、
+            // 再生のたびに先頭へシークする。ループも worker 責務 (EOF 巻き戻し) の
+            // ため、source looping とは別にバッファ側フラグを毎回同期する。
+            if streaming_buffers.contains(&buffer) {
+                engine.seek_streaming(buffer, 0);
+                engine.set_streaming_loop(buffer, looping);
+            }
             let (priority, spatial) = clip_spawn_params(clip.as_ref());
             let handle = engine.play_with_handle(
                 buffer, volume, pitch, target_bus, looping, priority, spatial,

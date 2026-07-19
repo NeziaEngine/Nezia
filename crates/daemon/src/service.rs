@@ -106,11 +106,15 @@ impl PreviewDaemon for PreviewService {
         &self,
         request: Request<LoadBufferRequest>,
     ) -> Result<Response<LoadBufferResponse>, Status> {
-        let path = request.into_inner().path;
-        if path.is_empty() {
+        let req = request.into_inner();
+        if req.path.is_empty() {
             return Err(Status::invalid_argument("path must not be empty"));
         }
-        match self.engine.load(path).await {
+        match self
+            .engine
+            .load(req.path, req.streaming, req.buffer_seconds)
+            .await
+        {
             Ok(id) => Ok(Response::new(LoadBufferResponse {
                 buffer: Some(to_proto_buffer(id)),
             })),
