@@ -91,7 +91,8 @@ message ClipParams {
   // 3D 空間処理。省略 = 2D ソース。
   SpatialParams spatial = 2;
   // Source 対象エフェクトチェーン。Bus 専用種別 (Reverb / Compressor) は
-  // INVALID_ARGUMENT (Aux Bus + Send 経由で使う)。
+  // エラーにはならないが core が Source 対象を silently drop するため音に
+  // 影響しない (実機 FFI 経路と同挙動)。Aux Bus + Send 経由で使うこと。
   repeated EffectDef effects = 3;
   // Source 起点の Aux Send。ソース despawn 時に core 側で自動解放される。
   repeated SourceSendDef sends = 4;
