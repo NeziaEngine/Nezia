@@ -105,7 +105,11 @@ message SpatialParams {
   float rolloff = 4;
   // [0.0, 1.0]。Unity AudioSource.dopplerLevel 互換。
   float doppler_level = 5;
-  // Custom Attenuation Curve は 0.2.0 では未対応 (後続で追加検討)。
+  // model = CUSTOM のときのカーブ制御点 (正規化距離 0..1 に等間隔で並ぶ gain 値、
+  // 2 点以上)。core が 64 サンプル LUT へ線形再サンプリングする
+  // (spatial/curve.rs の AttenuationCurve::from_points)。
+  // CUSTOM 以外の model では無視される。
+  repeated float curve_points = 6;
 }
 
 enum AttenuationModel {
@@ -113,6 +117,8 @@ enum AttenuationModel {
   ATTENUATION_MODEL_NONE = 1;
   ATTENUATION_MODEL_LINEAR = 2;
   ATTENUATION_MODEL_EXPONENTIAL = 3;
+  // カスタム減衰カーブ (curve_points 必須)。
+  ATTENUATION_MODEL_CUSTOM = 4;
 }
 
 // Source 起点 Send。宛て先はバスのみ (Compressor sidechain はバス起点のみ対応)。

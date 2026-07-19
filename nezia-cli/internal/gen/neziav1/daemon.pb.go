@@ -38,6 +38,8 @@ const (
 	AttenuationModel_ATTENUATION_MODEL_NONE             AttenuationModel = 1
 	AttenuationModel_ATTENUATION_MODEL_LINEAR           AttenuationModel = 2
 	AttenuationModel_ATTENUATION_MODEL_EXPONENTIAL      AttenuationModel = 3
+	// カスタム減衰カーブ (curve_points 必須)。
+	AttenuationModel_ATTENUATION_MODEL_CUSTOM AttenuationModel = 4
 )
 
 // Enum value maps for AttenuationModel.
@@ -47,12 +49,14 @@ var (
 		1: "ATTENUATION_MODEL_NONE",
 		2: "ATTENUATION_MODEL_LINEAR",
 		3: "ATTENUATION_MODEL_EXPONENTIAL",
+		4: "ATTENUATION_MODEL_CUSTOM",
 	}
 	AttenuationModel_value = map[string]int32{
 		"ATTENUATION_MODEL_INVERSE_DISTANCE": 0,
 		"ATTENUATION_MODEL_NONE":             1,
 		"ATTENUATION_MODEL_LINEAR":           2,
 		"ATTENUATION_MODEL_EXPONENTIAL":      3,
+		"ATTENUATION_MODEL_CUSTOM":           4,
 	}
 )
 
@@ -414,7 +418,12 @@ type SpatialParams struct {
 	MaxDistance float32                `protobuf:"fixed32,3,opt,name=max_distance,json=maxDistance,proto3" json:"max_distance,omitempty"`
 	Rolloff     float32                `protobuf:"fixed32,4,opt,name=rolloff,proto3" json:"rolloff,omitempty"`
 	// [0.0, 1.0]。Unity AudioSource.dopplerLevel 互換。
-	DopplerLevel  float32 `protobuf:"fixed32,5,opt,name=doppler_level,json=dopplerLevel,proto3" json:"doppler_level,omitempty"` // Custom Attenuation Curve は 0.2.0 では未対応 (後続で追加検討)。
+	DopplerLevel float32 `protobuf:"fixed32,5,opt,name=doppler_level,json=dopplerLevel,proto3" json:"doppler_level,omitempty"`
+	// model = CUSTOM のときのカーブ制御点 (正規化距離 0..1 に等間隔で並ぶ gain 値、
+	// 2 点以上)。core が 64 サンプル LUT へ線形再サンプリングする
+	// (spatial/curve.rs の AttenuationCurve::from_points)。
+	// CUSTOM 以外の model では無視される。
+	CurvePoints   []float32 `protobuf:"fixed32,6,rep,packed,name=curve_points,json=curvePoints,proto3" json:"curve_points,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -482,6 +491,13 @@ func (x *SpatialParams) GetDopplerLevel() float32 {
 		return x.DopplerLevel
 	}
 	return 0
+}
+
+func (x *SpatialParams) GetCurvePoints() []float32 {
+	if x != nil {
+		return x.CurvePoints
+	}
+	return nil
 }
 
 // Source 起点 Send。宛て先はバスのみ (Compressor sidechain はバス起点のみ対応)。
@@ -2334,13 +2350,14 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\bpriority\x18\x01 \x01(\rR\bpriority\x121\n" +
 	"\aspatial\x18\x02 \x01(\v2\x17.nezia.v1.SpatialParamsR\aspatial\x12-\n" +
 	"\aeffects\x18\x03 \x03(\v2\x13.nezia.v1.EffectDefR\aeffects\x12-\n" +
-	"\x05sends\x18\x04 \x03(\v2\x17.nezia.v1.SourceSendDefR\x05sends\"\xc6\x01\n" +
+	"\x05sends\x18\x04 \x03(\v2\x17.nezia.v1.SourceSendDefR\x05sends\"\xe9\x01\n" +
 	"\rSpatialParams\x120\n" +
 	"\x05model\x18\x01 \x01(\x0e2\x1a.nezia.v1.AttenuationModelR\x05model\x12!\n" +
 	"\fmin_distance\x18\x02 \x01(\x02R\vminDistance\x12!\n" +
 	"\fmax_distance\x18\x03 \x01(\x02R\vmaxDistance\x12\x18\n" +
 	"\arolloff\x18\x04 \x01(\x02R\arolloff\x12#\n" +
-	"\rdoppler_level\x18\x05 \x01(\x02R\fdopplerLevel\"w\n" +
+	"\rdoppler_level\x18\x05 \x01(\x02R\fdopplerLevel\x12!\n" +
+	"\fcurve_points\x18\x06 \x03(\x02R\vcurvePoints\"w\n" +
 	"\rSourceSendDef\x12\x1d\n" +
 	"\n" +
 	"target_bus\x18\x01 \x01(\tR\ttargetBus\x123\n" +
@@ -2449,12 +2466,13 @@ const file_nezia_v1_daemon_proto_rawDesc = "" +
 	"\x17DestroyContainerRequest\x127\n" +
 	"\tcontainer\x18\x01 \x01(\v2\x19.nezia.v1.ContainerHandleR\tcontainer\"8\n" +
 	"\x18DestroyContainerResponse\x12\x1c\n" +
-	"\tdestroyed\x18\x01 \x01(\bR\tdestroyed*\x97\x01\n" +
+	"\tdestroyed\x18\x01 \x01(\bR\tdestroyed*\xb5\x01\n" +
 	"\x10AttenuationModel\x12&\n" +
 	"\"ATTENUATION_MODEL_INVERSE_DISTANCE\x10\x00\x12\x1a\n" +
 	"\x16ATTENUATION_MODEL_NONE\x10\x01\x12\x1c\n" +
 	"\x18ATTENUATION_MODEL_LINEAR\x10\x02\x12!\n" +
-	"\x1dATTENUATION_MODEL_EXPONENTIAL\x10\x03*@\n" +
+	"\x1dATTENUATION_MODEL_EXPONENTIAL\x10\x03\x12\x1c\n" +
+	"\x18ATTENUATION_MODEL_CUSTOM\x10\x04*@\n" +
 	"\rChainPosition\x12\x16\n" +
 	"\x12CHAIN_POSITION_PRE\x10\x00\x12\x17\n" +
 	"\x13CHAIN_POSITION_POST\x10\x012\xcd\x05\n" +
