@@ -33,6 +33,8 @@ pub struct NeziaProfilerSource {
     /// 出力先バスの EntityId。無効時は index = u32::MAX。
     pub bus_index: u32,
     pub bus_generation: u32,
+    /// 再生中バッファのプールスロット index (`BufferId.index`)。
+    pub buffer_index: u32,
     pub volume: f32,
     pub pitch: f32,
     /// 再生位置 (ソースフレーム、ピッチ換算前)。
@@ -205,6 +207,7 @@ pub unsafe extern "C" fn nezia_profiler_copy_sources(
                 generation: src.generation,
                 bus_index: src.bus_index,
                 bus_generation: src.bus_generation,
+                buffer_index: src.buffer_index,
                 volume: src.volume,
                 pitch: src.pitch,
                 sample_offset: src.sample_offset,

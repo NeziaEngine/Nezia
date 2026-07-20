@@ -37,6 +37,9 @@ pub struct ProfilerSource {
     /// 出力先バスの EntityId。
     pub bus_index: u32,
     pub bus_generation: u32,
+    /// 再生中バッファのプールスロット index (`BufferId.index`)。
+    /// フロント側でロード済みアセットとの対応付け (クリップ名表示) に使う。
+    pub buffer_index: u32,
     pub volume: f32,
     pub pitch: f32,
     /// 再生位置 (ソースフレーム、ピッチ換算前)。
@@ -156,6 +159,7 @@ pub(crate) fn publish_profiler_frame(
     let virtuals = source_world.is_virtuals();
     let buses = source_world.output_buses();
     let offsets = source_world.sample_offsets();
+    let buffer_indices = source_world.audio_buffer_indices();
     for dense in 0..source_world.len() {
         let Some(id) = source_world.entity_at_dense(dense) else {
             continue;
@@ -169,6 +173,7 @@ pub(crate) fn publish_profiler_frame(
             generation: id.generation,
             bus_index,
             bus_generation,
+            buffer_index: buffer_indices[dense],
             volume: vols[dense],
             pitch: pitches[dense],
             sample_offset: offsets[dense],
