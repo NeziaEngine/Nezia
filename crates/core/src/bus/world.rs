@@ -271,6 +271,19 @@ impl BusWorld {
         &self.gain
     }
 
+    /// dense 配列のミュートスライス (プロファイラ publish で使用)。
+    #[inline]
+    #[must_use]
+    pub fn muteds(&self) -> &[bool] {
+        &self.muted
+    }
+
+    /// dense index に対応する EntityId を取得する (プロファイラ publish で使用)。
+    #[must_use]
+    pub fn entity_at_dense(&self, dense_index: usize) -> Option<EntityId> {
+        self.entities.entity_at_dense(dense_index)
+    }
+
     /// dense index 直指定でゲイン書き込み (Phase 3-2 Snapshot 補間で使用)。
     #[inline]
     pub fn write_gain_by_dense(&mut self, dense: usize, value: f32) {

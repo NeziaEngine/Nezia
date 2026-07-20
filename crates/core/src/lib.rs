@@ -23,6 +23,7 @@ mod streaming;
 
 /// サウンドエンジン本体。
 pub use core::engine::SoundEngine;
+pub use core::engine::{ProfilerBus, ProfilerFrame, ProfilerSource};
 
 /// エンジン初期化時のキャパシティ設定 (`SoundEngine::with_config` に渡す)。
 pub use config::EngineConfig;

@@ -21,6 +21,7 @@ mod container;
 mod effect;
 mod engine;
 mod memory;
+mod profiler;
 mod panic;
 mod send;
 mod snapshot;
