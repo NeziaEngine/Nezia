@@ -9,11 +9,18 @@ name: Unity Release
 #
 # 必要な variable (Repository / Organization variables):
 #   NEZIA_UNITY_REPO — 対象リポジトリ (default: ${{ github.repository_owner }}/Nezia.Unity)
-#   NEZIA_UNITY_BASE_BRANCH — PR の base ブランチ (default: main)
+#   NEZIA_UNITY_BASE_BRANCH — タグ push 時の PR の base ブランチ (default: main)
+#
+# PR の base ブランチの決め方 (上から優先):
+#   1. workflow_dispatch の base_branch 入力
+#   2. ブランチ起点 (push / dispatch) なら同名ブランチ (main → main, 0.2.x → 0.2.x)
+#   3. NEZIA_UNITY_BASE_BRANCH → main
+# 開発ライン (0.N.x) ごとに Nezia.Unity 側の同名ブランチへバイナリが届くので、
+# ライン上の ffi 変更が Unity 側の同ラインで即使える。
 
 on:
   push:
-    branches: [main]
+    branches: [main, "0.*.x"]
     tags: ["v*"]
     # docs / メタファイルのみの変更ではビルドを走らせない。
     # tag push にも適用されるが、リリースタグは通常コード変更を伴うので問題なし。
@@ -30,6 +37,15 @@ on:
         description: "ビルドのみ実行し PR は出さない"
         type: boolean
         default: false
+      base_branch:
+        description: "Nezia.Unity 側の PR base ブランチ (空なら実行ブランチと同名)"
+        type: string
+        default: ""
+
+# 同じ PR ブランチへの push が競合しないよう、ref ごとに直列化する。
+concurrency:
+  group: unity-release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -260,20 +276,34 @@ jobs:
       - name: Resolve target repo settings
         id: cfg
         shell: bash
+        env:
+          INPUT_BASE_BRANCH: ${{ inputs.base_branch }}
         run: |
           target_repo="${{ vars.NEZIA_UNITY_REPO }}"
           if [ -z "$target_repo" ]; then
             target_repo="${{ github.repository_owner }}/Nezia.Unity"
           fi
-          base_branch="${{ vars.NEZIA_UNITY_BASE_BRANCH }}"
+          base_branch="$INPUT_BASE_BRANCH"
+          if [ -z "$base_branch" ] && [ "$GITHUB_REF_TYPE" = "branch" ]; then
+            base_branch="$GITHUB_REF_NAME"
+          fi
+          if [ -z "$base_branch" ]; then
+            base_branch="${{ vars.NEZIA_UNITY_BASE_BRANCH }}"
+          fi
           if [ -z "$base_branch" ]; then
             base_branch="main"
           fi
+          # PR ブランチ名は base ごとに固定。既存 PR があれば追記コミットで更新する運用。
+          # main は従来名を維持し、それ以外は base 名を suffix にして PR を分ける。
+          if [ "$base_branch" = "main" ]; then
+            pr_branch="automation/nezia-core"
+          else
+            pr_branch="automation/nezia-core-$base_branch"
+          fi
           echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
           echo "base_branch=$base_branch" >> "$GITHUB_OUTPUT"
-          # PR ブランチ名は固定。既存 PR があれば追記コミットで更新する運用。
           short_sha="${GITHUB_SHA::7}"
-          echo "pr_branch=automation/nezia-core" >> "$GITHUB_OUTPUT"
+          echo "pr_branch=$pr_branch" >> "$GITHUB_OUTPUT"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout source repo (for commit metadata)
@@ -433,7 +463,7 @@ jobs:
           - `Runtime/Generated/NeziaNative.g.cs`
           EOF
           )
-          existing=$(gh pr list --head "$branch" --state open --json number -q '.[0].number' || true)
+          existing=$(gh pr list --head "$branch" --base "$base" --state open --json number -q '.[0].number' || true)
           if [ -z "$existing" ]; then
             url=$(gh pr create --base "$base" --head "$branch" \
               --title "$title" --body "$body" \
