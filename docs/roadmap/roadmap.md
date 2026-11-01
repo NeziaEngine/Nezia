@@ -193,7 +193,7 @@ Authoring  preview      Clip-centric  プロファイラ   B経路
 | **Runtime (鳴らす力)** | **M2 相当まで到達**。M3 の一部も先取り | DSP/Send/Snapshot/PlayScheduled/Voice Virtualization まで実装済。Listener Focus 等の差別化機能も既にある |
 | **Authoring — Config 設計** | **成立** | Mixer / Snapshot / Clip-centric authoring が Inspector で組める (Unity IP-1〜4 完了) |
 | **Authoring — 試聴 (試す)** | **完成** | daemon + `nezia-cli` (Tier 2 + streaming/curve/peaks #59〜#63)、Unity IP-6 全スコープ (#69〜#74)。▶ 試聴・波形・Clip 音響パラメータ込みで完結 |
-| **Authoring — 可視化 (観る)** | **空白** ← 現在の最前線 | バスツリー/アクティブソース/dB メーターを覗くプロファイラが未実装。M3 の片輪が欠けている |
+| **Authoring — 可視化 (観る)** | **基盤済み** ← 現在の最前線 | プロファイラ FFI (core #65) + Profiler ウィンドウ (Unity #76) で master dB メーター / Snapshot 進行 / バス gain・mute / アクティブソース (Clip 名・進捗) が Play 中に見える。残: バスツリー (親子 + 名前)・ソース position / Override 表示 |
 | **Authoring — 本格オーサリング (B経路)** | **未着手** | M4。プロジェクトファイル方式・`.nez` 形式は構想段階 |
 
 ### この非対称から導かれる直近の最優先
@@ -205,6 +205,9 @@ Authoring  preview      Clip-centric  プロファイラ   B経路
 > したがって直近の最優先は **ランタイムプロファイラ + デバッグビジュアライザ基盤
 > (M3 可視化、Unity IP-10)** に移った。データ指向設計の利点は可視化で初めて伝わり、
 > post-unity-performance.md の「測ってから書く」の前提でもある。
+>
+> 基盤 (core #65 + Unity #76) は完了し、IP-10 の残スコープ (バスツリー・ソース
+> position / Override) を閉じる段階にある。
 
 ---
 
@@ -263,7 +266,7 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
 
 | トラック | 項目 | 状態 | 連動 |
 |---|---|---|---|
-| Authoring・Experience | **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (バスツリー/アクティブソース/dB メーター) | **未** | Unity IP-10 |
+| Authoring・Experience | **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (バスツリー/アクティブソース/dB メーター) | **基盤済** (core #65 + Unity #76、残: バスツリー・position/Override) | Unity IP-10 |
 | Runtime (露出) | **PlayScheduled の Unity 露出** (core 完了済) | **未** | Unity IP-7 |
 | Runtime (露出) | **論理ID / Sound Dictionary 経路** (Hash ID ↔ EntityId の二層を実プロダクトで活かす) | **未** | Unity IP-8 |
 | Runtime (差別化) | **Switch / Sequence Container** ([設計](../design/core/container.md)、Random は実装済) | **未** | Unity Container Inspector |
@@ -329,8 +332,14 @@ Authoring 側の `IP-n` は Unity 統合ロードマップ
    Clip Effects/Sends 反映 (core #60 + Unity #71) / バイナリ同梱 Editor/Bin~ (core #61 +
    Unity #72) / カスタム減衰カーブ (core #62 + Unity #73) / 波形表示 (core #63 + Unity #74)。
    **M1「鳴らせる・試聴できる」が両トラックで完成。**
-5. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10) ← **次はここ**
-   差別化機能より前。可視化の共有メモリ side-channel は daemon CONCEPT.md「将来拡張」参照。
+5. **ランタイムプロファイラ FFI + デバッグビジュアライザ基盤** (M3、Unity IP-10) ← **次はここ (基盤済み)**
+   差別化機能より前。基盤は完了: triple buffer publish + FFI (core #65、OFF 時のサウンドスレッド
+   追加コストは atomic load 1 回) と Profiler ウィンドウ (Unity #76)。0.N.x ラインの ffi 変更が
+   Unity 同名ブランチへ自動で届くよう unity-release も追従させた (#66)。
+   残スコープ: バスツリー (親子関係 publish + `NeziaMixerAsset` 名前解決) / ソース position・
+   Override 表示 (バス単位 dB メーターは任意)。共有メモリ side-channel (daemon CONCEPT.md
+   「将来拡張」) は Play 中のインプロセス FFI で足りるため、非 Play 時に daemon 状態を観る
+   必要が出る M4 まで見送る。
 6. **PlayScheduled Unity 露出** (M3、Unity IP-7、cheap win)
 7. **Sound Dictionary 経路の整備** (M3、Unity IP-8)
 8. **Switch / Sequence Container** (M3)
