@@ -277,6 +277,20 @@ impl SourceWorld {
         self.resolve(id).map(|i| self.pitch[i])
     }
 
+    /// dense 配列の再生位置スライス (プロファイラ publish で使用)。
+    #[inline]
+    #[must_use]
+    pub fn sample_offsets(&self) -> &[f32] {
+        &self.sample_offset
+    }
+
+    /// dense 配列のバッファプールスロットスライス (プロファイラ publish で使用)。
+    #[inline]
+    #[must_use]
+    pub fn audio_buffer_indices(&self) -> &[u32] {
+        &self.audio_buffer_index
+    }
+
     pub fn sample_offset(&self, id: EntityId) -> Option<f32> {
         self.resolve(id).map(|i| self.sample_offset[i])
     }

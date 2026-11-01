@@ -44,6 +44,9 @@ pub(in crate::core::engine) struct AudioThread {
     position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
     velocity_updates_output: triple_buffer::Output<Vec<SourceVelocityUpdate>>,
     source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
+    /// M3 可視化: プロファイラフレームの publish 先。`profiler_enabled` で丸ごとゲート。
+    profiler_input: crate::core::engine::profiler::ProfilerFrameIn,
+    profiler_enabled: crate::core::engine::profiler::ProfilerEnabled,
     bus_world: BusWorld,
     source_world: SourceWorld,
     spatial_world: SpatialWorld,
@@ -98,6 +101,8 @@ impl AudioThread {
         position_updates_output: triple_buffer::Output<Vec<SourcePositionUpdate>>,
         velocity_updates_output: triple_buffer::Output<Vec<SourceVelocityUpdate>>,
         source_snapshots_input: triple_buffer::Input<Vec<SourceSnapshot>>,
+        profiler_input: crate::core::engine::profiler::ProfilerFrameIn,
+        profiler_enabled: crate::core::engine::profiler::ProfilerEnabled,
         bus_world: BusWorld,
         source_world: SourceWorld,
         spatial_world: SpatialWorld,
@@ -124,6 +129,8 @@ impl AudioThread {
             position_updates_output,
             velocity_updates_output,
             source_snapshots_input,
+            profiler_input,
+            profiler_enabled,
             bus_world,
             source_world,
             spatial_world,
@@ -374,6 +381,22 @@ impl AudioThread {
 
         // 生存ソースのスナップショットを publish する（メインスレッドのクエリ用）。
         publish_source_snapshots(&mut self.source_snapshots_input, &self.source_world);
+
+        // M3 可視化: プロファイラフレームを publish する。OFF のときのコストは
+        // この atomic load 1 回のみ (最速経路のガードレール)。
+        if self
+            .profiler_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            crate::core::engine::profiler::publish_profiler_frame(
+                &mut self.profiler_input,
+                data,
+                self.device_channels,
+                &self.bus_world,
+                &self.source_world,
+                &self.active_snapshot,
+            );
+        }
 
         // ベンチマーク用カウンタを更新する。
         // - Playing 数: ベンチで「実際に鳴っているボイス本数」として読まれる。

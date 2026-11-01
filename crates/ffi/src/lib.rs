@@ -22,6 +22,7 @@ mod effect;
 mod engine;
 mod memory;
 mod panic;
+mod profiler;
 mod send;
 mod snapshot;
 mod source;
