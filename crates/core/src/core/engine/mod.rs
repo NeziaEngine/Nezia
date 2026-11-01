@@ -50,10 +50,10 @@ use audio_thread::AudioThread;
 use callback_registry::CallbackRegistry;
 use effect_alloc::EffectIdAllocator;
 pub(crate) use live_params::SourceLiveParams;
+pub use profiler::{ProfilerBus, ProfilerFrame, ProfilerSource};
 use send_alloc::SendIdAllocator;
 use slot_allocator::SourceSlotAllocator;
 pub(crate) use source_state_cache::SourceSnapshot;
-pub use profiler::{ProfilerBus, ProfilerFrame, ProfilerSource};
 use source_state_cache::{SourceStateCache, build_source_snapshots_buffer};
 
 pub use buffer_reader::BufferReader;
@@ -223,8 +223,7 @@ impl SoundEngine {
             build_velocity_updates_buffer(config.max_sources);
         let (source_snapshots_input, source_snapshots_output) =
             build_source_snapshots_buffer(config.max_sources);
-        let (profiler_input, profiler_output) =
-            profiler::build_profiler_buffer(config.max_sources);
+        let (profiler_input, profiler_output) = profiler::build_profiler_buffer(config.max_sources);
         let profiler_enabled: profiler::ProfilerEnabled =
             Arc::new(std::sync::atomic::AtomicBool::new(false));
         let profiler_enabled_audio = Arc::clone(&profiler_enabled);

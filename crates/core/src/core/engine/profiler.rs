@@ -76,7 +76,6 @@ impl ProfilerFrame {
             sources: Vec::with_capacity(max_sources),
         }
     }
-
 }
 
 pub(crate) type ProfilerFrameIn = triple_buffer::Input<ProfilerFrame>;
